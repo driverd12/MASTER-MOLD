@@ -47,6 +47,11 @@ function printHelp() {
     "  --allow-short <true|false>       Allow runtime below --hours budget (default: false)",
     "  --cycle-retry-limit <n>          Retry attempts per cycle on transient failures (default: 2)",
     "  --cycle-retry-backoff-seconds <n>Backoff between cycle retries (default: 15)",
+    "  --quorum-failure-extra-retries <n>Extra retries for success_agents shortfall (default: 4)",
+    "  --timeout-failure-extra-retries <n>Extra retries for timeout/deadline failures (default: 2)",
+    "  --bridge-failure-extra-retries <n>Extra retries for bridge/handshake/service failures (default: 3)",
+    "  --turn-settle-extra-retries <n>  Extra retries for active-turn-settle failures (default: 2)",
+    "  --max-cycle-attempts <n>         Hard cap for attempts per cycle after extensions (default: 12)",
     "  --adaptive-cycle-timeouts <bool> Adapt cycle timeout budget from live runtimes (default: true)",
     "  --thread-id <id>                 Existing/new thread id (default: trichat-soak-gate-<epoch>)",
     "  --prompt <text>                  Base user prompt for each cycle",
@@ -122,6 +127,14 @@ function compactSingleLine(value, limit = 200) {
     return compact;
   }
   return `${compact.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+class SoakCycleError extends Error {
+  constructor(message, details = null) {
+    super(message);
+    this.name = "SoakCycleError";
+    this.details = details;
+  }
 }
 
 function sleep(ms) {
@@ -215,14 +228,49 @@ function parseReportOutput(stdout) {
   }
   try {
     return JSON.parse(text);
-  } catch {
-    const start = text.lastIndexOf("\n{");
-    if (start >= 0) {
-      const candidate = text.slice(start + 1).trim();
-      return JSON.parse(candidate);
-    }
-    throw new Error(`unable to parse dogfood JSON output: ${compactSingleLine(text, 240)}`);
+  } catch {}
+  for (let index = text.lastIndexOf("{"); index >= 0; index = text.lastIndexOf("{", index - 1)) {
+    const candidate = text.slice(index).trim();
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && Object.prototype.hasOwnProperty.call(parsed, "ok")) {
+        return parsed;
+      }
+    } catch {}
   }
+  throw new Error(`unable to parse dogfood JSON output: ${compactSingleLine(text, 240)}`);
+}
+
+function buildCycleFailurePayload({
+  cycle,
+  code,
+  signal,
+  cycleTimeoutSeconds,
+  stdout,
+  stderr,
+}) {
+  const parsedReport = (() => {
+    try {
+      return parseReportOutput(stdout);
+    } catch {
+      return null;
+    }
+  })();
+  const parsedError = typeof parsedReport?.error === "string"
+    ? parsedReport.error
+    : null;
+  return {
+    cycle,
+    code: code ?? null,
+    signal: signal ?? null,
+    timeout_seconds: cycleTimeoutSeconds,
+    parsed_report: parsedReport,
+    parsed_error: parsedError,
+    stdout_chars: String(stdout ?? "").length,
+    stderr_chars: String(stderr ?? "").length,
+    stdout_tail: String(stdout ?? "").slice(-20000),
+    stderr_tail: String(stderr ?? "").slice(-20000),
+  };
 }
 
 function buildDogfoodArgs(options, cyclePrompt) {
@@ -290,14 +338,33 @@ async function runDogfoodCycle(options, cycle, cyclePrompt, cycleTimeoutSeconds)
     child.on("close", (code, signal) => {
       clearTimeout(timeout);
       if (timedOut) {
-        reject(new Error(`dogfood cycle ${cycle} exceeded ${cycleTimeoutSeconds}s`));
+        const details = buildCycleFailurePayload({
+          cycle,
+          code,
+          signal,
+          cycleTimeoutSeconds,
+          stdout,
+          stderr,
+        });
+        reject(new SoakCycleError(`dogfood cycle ${cycle} exceeded ${cycleTimeoutSeconds}s`, details));
         return;
       }
       if (code !== 0) {
+        const details = buildCycleFailurePayload({
+          cycle,
+          code,
+          signal,
+          cycleTimeoutSeconds,
+          stdout,
+          stderr,
+        });
+        const parsedError = details?.parsed_error
+          ? `: ${details.parsed_error}`
+          : `: ${compactSingleLine(stderr || stdout, 320)}`;
         reject(
-          new Error(
-            `dogfood cycle ${cycle} failed (code=${code ?? "n/a"} signal=${signal ?? "n/a"}): ` +
-              compactSingleLine(stderr || stdout, 320)
+          new SoakCycleError(
+            `dogfood cycle ${cycle} failed (code=${code ?? "n/a"} signal=${signal ?? "n/a"})${parsedError}`,
+            details
           )
         );
         return;
@@ -342,6 +409,20 @@ function isRetryableCycleError(reason) {
   );
 }
 
+function classifyGateFailureClass(reasons) {
+  if (!Array.isArray(reasons) || reasons.length === 0) {
+    return "none";
+  }
+  const normalized = reasons.map((reason) => String(reason ?? "").toLowerCase());
+  if (normalized.every((reason) => reason.includes("success_agents"))) {
+    return "quorum_shortfall";
+  }
+  if (normalized.every((reason) => reason.includes("active turn still running"))) {
+    return "turn_settle";
+  }
+  return "gate_other";
+}
+
 function isRetryableGateReasons(reasons) {
   if (!Array.isArray(reasons) || reasons.length === 0) {
     return false;
@@ -353,6 +434,55 @@ function isRetryableGateReasons(reasons) {
       normalized.includes("active turn still running")
     );
   });
+}
+
+function classifyCycleErrorClass(error) {
+  const reason = error instanceof Error ? error.message : String(error);
+  const details = error instanceof SoakCycleError ? error.details : null;
+  const normalized = String(reason ?? "").toLowerCase();
+  const parsedError = String(details?.parsed_error ?? "").toLowerCase();
+  if (isTimeoutLikeError(reason) || isTimeoutLikeError(parsedError)) {
+    return "timeout";
+  }
+  if (normalized.includes("success_agents=") || parsedError.includes("success_agents=")) {
+    return "quorum_shortfall";
+  }
+  if (
+    normalized.includes("adapter handshake failed") ||
+    parsedError.includes("adapter handshake failed")
+  ) {
+    return "adapter_handshake";
+  }
+  if (
+    normalized.includes("bridge command failed") ||
+    parsedError.includes("bridge command failed")
+  ) {
+    return "bridge_failure";
+  }
+  if (
+    normalized.includes("connection refused") ||
+    parsedError.includes("connection refused")
+  ) {
+    return "service_unavailable";
+  }
+  return "cycle_other";
+}
+
+function extendedMaxAttempts(baseMaxAttempts, options, failureClass) {
+  switch (failureClass) {
+    case "quorum_shortfall":
+      return baseMaxAttempts + options.quorumFailureExtraRetries;
+    case "timeout":
+      return baseMaxAttempts + options.timeoutFailureExtraRetries;
+    case "bridge_failure":
+    case "adapter_handshake":
+    case "service_unavailable":
+      return baseMaxAttempts + options.bridgeFailureExtraRetries;
+    case "turn_settle":
+      return baseMaxAttempts + options.turnSettleExtraRetries;
+    default:
+      return baseMaxAttempts;
+  }
 }
 
 function bumpAdaptiveCycleTimeout(currentSeconds, options, timeoutLike) {
@@ -558,6 +688,36 @@ function parseOptions(cli) {
       0,
       600
     ),
+    quorumFailureExtraRetries: parseBoundedInt(
+      cli["quorum-failure-extra-retries"] ?? process.env.TRICHAT_SOAK_QUORUM_FAILURE_EXTRA_RETRIES,
+      4,
+      0,
+      8
+    ),
+    timeoutFailureExtraRetries: parseBoundedInt(
+      cli["timeout-failure-extra-retries"] ?? process.env.TRICHAT_SOAK_TIMEOUT_FAILURE_EXTRA_RETRIES,
+      2,
+      0,
+      8
+    ),
+    bridgeFailureExtraRetries: parseBoundedInt(
+      cli["bridge-failure-extra-retries"] ?? process.env.TRICHAT_SOAK_BRIDGE_FAILURE_EXTRA_RETRIES,
+      3,
+      0,
+      8
+    ),
+    turnSettleExtraRetries: parseBoundedInt(
+      cli["turn-settle-extra-retries"] ?? process.env.TRICHAT_SOAK_TURN_SETTLE_EXTRA_RETRIES,
+      2,
+      0,
+      8
+    ),
+    maxCycleAttempts: parseBoundedInt(
+      cli["max-cycle-attempts"] ?? process.env.TRICHAT_SOAK_MAX_CYCLE_ATTEMPTS,
+      12,
+      1,
+      20
+    ),
     adaptiveCycleTimeouts: parseBool(
       cli["adaptive-cycle-timeouts"] ?? process.env.TRICHAT_SOAK_ADAPTIVE_CYCLE_TIMEOUTS,
       true
@@ -662,6 +822,11 @@ async function main() {
       max_cycles: options.maxCycles,
       cycle_retry_limit: options.cycleRetryLimit,
       cycle_retry_backoff_seconds: options.cycleRetryBackoffSeconds,
+      quorum_failure_extra_retries: options.quorumFailureExtraRetries,
+      timeout_failure_extra_retries: options.timeoutFailureExtraRetries,
+      bridge_failure_extra_retries: options.bridgeFailureExtraRetries,
+      turn_settle_extra_retries: options.turnSettleExtraRetries,
+      max_cycle_attempts: options.maxCycleAttempts,
       adaptive_cycle_timeouts: options.adaptiveCycleTimeouts,
       require_success_agents: options.requireSuccessAgents,
       bridge_timeout_seconds: options.bridgeTimeoutSeconds,
@@ -700,8 +865,10 @@ async function main() {
           : options.prompt;
       let acceptedSnapshot = null;
       let cycleFailedReason = "";
+      let cycleFailedDetails = null;
+      const baseMaxAttempts = options.cycleRetryLimit + 1;
+      let maxAttempts = Math.min(options.maxCycleAttempts, Math.max(1, baseMaxAttempts));
       let elapsedMs = 0;
-      const maxAttempts = options.cycleRetryLimit + 1;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         const attemptStartedMs = Date.now();
         const requestedBudget = options.adaptiveCycleTimeouts
@@ -798,6 +965,14 @@ async function main() {
           }
 
           const gateReason = evaluated.reasons.join("; ");
+          const gateClass = classifyGateFailureClass(evaluated.reasons);
+          const extendedAttempts = Math.min(
+            options.maxCycleAttempts,
+            extendedMaxAttempts(baseMaxAttempts, options, gateClass)
+          );
+          if (extendedAttempts > maxAttempts) {
+            maxAttempts = extendedAttempts;
+          }
           const retryableGate = isRetryableGateReasons(evaluated.reasons);
           if (attempt < maxAttempts && retryableGate) {
             if (options.adaptiveCycleTimeouts) {
@@ -812,13 +987,23 @@ async function main() {
               attempt,
               type: "gate",
               reason: gateReason,
+              failure_class: gateClass,
               timeout_budget_seconds: attemptTimeoutSeconds,
               next_timeout_budget_seconds: adaptiveCycleTimeoutSeconds,
               retry_backoff_seconds: options.cycleRetryBackoffSeconds,
+              max_attempts: maxAttempts,
+              gate_snapshot: {
+                ...evaluated.snapshot,
+                attempt,
+                retries_used: attempt - 1,
+                attempt_timeout_seconds: attemptTimeoutSeconds,
+                observed_attempt_seconds: observedAttemptSeconds,
+              },
             });
             process.stderr.write(
               `${statusLine} retry=on reason="${compactSingleLine(gateReason, 180)}" ` +
-              `next_timeout=${adaptiveCycleTimeoutSeconds}s backoff=${options.cycleRetryBackoffSeconds}s\n`
+              `class=${gateClass} max_attempts=${maxAttempts} next_timeout=${adaptiveCycleTimeoutSeconds}s ` +
+              `backoff=${options.cycleRetryBackoffSeconds}s\n`
             );
             if (options.cycleRetryBackoffSeconds > 0) {
               await sleep(options.cycleRetryBackoffSeconds * 1000);
@@ -827,6 +1012,17 @@ async function main() {
           }
 
           cycleFailedReason = gateReason;
+          cycleFailedDetails = {
+            failure_class: gateClass,
+            gate_snapshot: {
+              ...evaluated.snapshot,
+              attempt,
+              retries_used: attempt - 1,
+              attempt_timeout_seconds: attemptTimeoutSeconds,
+              observed_attempt_seconds: observedAttemptSeconds,
+              adaptive_cycle_timeout_seconds: adaptiveCycleTimeoutSeconds,
+            },
+          };
           const terminalSnapshot = {
             ...evaluated.snapshot,
             attempt,
@@ -842,6 +1038,15 @@ async function main() {
           const errorReason = error instanceof Error ? error.message : String(error);
           const timeoutLike = isTimeoutLikeError(errorReason);
           const retryableError = isRetryableCycleError(errorReason);
+          const failureClass = classifyCycleErrorClass(error);
+          const extendedAttempts = Math.min(
+            options.maxCycleAttempts,
+            extendedMaxAttempts(baseMaxAttempts, options, failureClass)
+          );
+          if (extendedAttempts > maxAttempts) {
+            maxAttempts = extendedAttempts;
+          }
+          const failurePayload = error instanceof SoakCycleError ? error.details : null;
           if (options.adaptiveCycleTimeouts) {
             adaptiveCycleTimeoutSeconds = bumpAdaptiveCycleTimeout(
               adaptiveCycleTimeoutSeconds,
@@ -855,15 +1060,18 @@ async function main() {
               attempt,
               type: "error",
               reason: compactSingleLine(errorReason, 220),
+              failure_class: failureClass,
               timeout_like: timeoutLike,
               timeout_budget_seconds: attemptTimeoutSeconds,
               next_timeout_budget_seconds: adaptiveCycleTimeoutSeconds,
               retry_backoff_seconds: options.cycleRetryBackoffSeconds,
+              max_attempts: maxAttempts,
+              failure_payload: failurePayload,
             });
             process.stderr.write(
               `[soak] cycle=${cycle} attempt=${attempt}/${maxAttempts} error="${compactSingleLine(errorReason, 180)}" ` +
-              `retry=on timeout_like=${timeoutLike} next_timeout=${adaptiveCycleTimeoutSeconds}s ` +
-              `backoff=${options.cycleRetryBackoffSeconds}s\n`
+              `retry=on class=${failureClass} timeout_like=${timeoutLike} max_attempts=${maxAttempts} ` +
+              `next_timeout=${adaptiveCycleTimeoutSeconds}s backoff=${options.cycleRetryBackoffSeconds}s\n`
             );
             if (options.cycleRetryBackoffSeconds > 0) {
               await sleep(options.cycleRetryBackoffSeconds * 1000);
@@ -871,8 +1079,14 @@ async function main() {
             continue;
           }
           cycleFailedReason = errorReason;
+          cycleFailedDetails = {
+            failure_class: failureClass,
+            timeout_like: timeoutLike,
+            failure_payload: failurePayload,
+          };
           process.stderr.write(
-            `[soak] cycle=${cycle} attempt=${attempt}/${maxAttempts} error="${compactSingleLine(errorReason, 180)}" retry=off\n`
+            `[soak] cycle=${cycle} attempt=${attempt}/${maxAttempts} error="${compactSingleLine(errorReason, 180)}" ` +
+            `retry=off class=${failureClass}\n`
           );
           break;
         }
@@ -885,6 +1099,7 @@ async function main() {
         report.failures.push({
           cycle,
           reason: cycleFailedReason || `cycle ${cycle} failed without a terminal reason`,
+          details: cycleFailedDetails,
         });
         break;
       }
@@ -905,7 +1120,7 @@ async function main() {
     }
 
     const runtimeMs = Date.now() - startedAtMs;
-    if (!options.allowShort && runtimeMs+500 < requiredDurationMs) {
+    if (report.ok && !options.allowShort && runtimeMs + 500 < requiredDurationMs) {
       report.ok = false;
       report.failures.push({
         cycle: report.cycles.length,
