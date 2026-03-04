@@ -64,6 +64,18 @@ function printHelp() {
     "  --max-adapter-error-rate <0-1>   SLO gate: adapter error rate ceiling (default: 0.35)",
     "  --max-turn-failure-rate <0-1>    SLO gate: turn failure rate ceiling (default: 0.35)",
     "  --max-running-tasks <n>          Leak gate: max running task leases allowed (default: 25)",
+    "  --dogfood-respect-circuit <bool> Dogfood fanout honors adapter circuit state (default: true)",
+    "  --dogfood-breaker-channel <val>  Dogfood breaker channel: command|model (default: model)",
+    "  --dogfood-adapter-circuit-threshold <n>Dogfood breaker threshold (default: 2)",
+    "  --dogfood-adapter-circuit-recovery-seconds <n>Dogfood breaker recovery window (default: 45)",
+    "  --forced-breaker-gate <bool>     Inject forced adapter faults and require recovery (default: false)",
+    "  --forced-fault-agent <agent_id>  Agent for forced fault injections (default: cursor)",
+    "  --forced-fault-channel <val>     Channel for forced faults: command|model (default: model)",
+    "  --forced-fault-open-seconds <n>  Open-window per forced fault (default: 20)",
+    "  --forced-fault-start-cycle <n>   First cycle eligible for forced fault (default: 2)",
+    "  --forced-fault-every-cycles <n>  Forced-fault cadence in cycles (default: 6)",
+    "  --forced-fault-max-injections <n>Maximum forced faults per gate run (default: 4)",
+    "  --forced-recovery-timeout-seconds <n>Timeout for each forced fault recovery (default: 240)",
     "  --event-limit <n>                Adapter telemetry event window (default: 400)",
     "  --slo-window-minutes <n>         SLO lookback window (default: 120)",
     "  --workboard-settle-seconds <n>   Wait for active turn finalize before leak checks (default: 12)",
@@ -120,6 +132,17 @@ function parseBoundedFloat(value, fallback, min, max) {
     return fallback;
   }
   return Math.max(min, Math.min(max, parsed));
+}
+
+function parseAdapterChannel(value, fallback = "model") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "command") {
+    return "command";
+  }
+  if (normalized === "model") {
+    return "model";
+  }
+  return fallback;
 }
 
 function compactSingleLine(value, limit = 200) {
@@ -295,6 +318,14 @@ function buildDogfoodArgs(options, cyclePrompt) {
     "false",
     "--execute",
     options.execute ? "true" : "false",
+    "--respect-circuit",
+    options.dogfoodRespectCircuit ? "true" : "false",
+    "--breaker-channel",
+    options.dogfoodBreakerChannel,
+    "--adapter-circuit-threshold",
+    String(options.dogfoodAdapterCircuitThreshold),
+    "--adapter-circuit-recovery-seconds",
+    String(options.dogfoodAdapterCircuitRecoverySeconds),
   ];
   if (options.transport === "http") {
     args.push("--url", options.url, "--origin", options.origin);
@@ -559,6 +590,136 @@ function decayAdaptiveWorkboardSettleTimeout(currentSeconds, options) {
   );
 }
 
+function normalizeAgentId(value, fallback = "cursor") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "codex" || normalized === "cursor" || normalized === "local-imprint") {
+    return normalized;
+  }
+  return fallback;
+}
+
+function shouldInjectForcedFault(cycle, options, injectedCount) {
+  if (!options.forcedBreakerGate) {
+    return false;
+  }
+  if (injectedCount >= options.forcedFaultMaxInjections) {
+    return false;
+  }
+  if (cycle < options.forcedFaultStartCycle) {
+    return false;
+  }
+  const cadence = Math.max(1, options.forcedFaultEveryCycles);
+  return (cycle - options.forcedFaultStartCycle) % cadence === 0;
+}
+
+function findCycleAgentResult(cycleResult, agentId) {
+  const results = Array.isArray(cycleResult?.agent_results) ? cycleResult.agent_results : [];
+  return (
+    results.find((entry) => String(entry?.agent_id ?? "").trim().toLowerCase() === agentId) ??
+    null
+  );
+}
+
+function updateForcedFaultTracking({
+  pendingRecoveries,
+  cycle,
+  cycleResult,
+  adapterTelemetry,
+  options,
+  nowMs,
+  report,
+}) {
+  if (!options.forcedBreakerGate) {
+    return [];
+  }
+  const reasons = [];
+  const events = Array.isArray(adapterTelemetry?.recent_events) ? adapterTelemetry.recent_events : [];
+  const states = Array.isArray(adapterTelemetry?.states) ? adapterTelemetry.states : [];
+  for (const pending of pendingRecoveries) {
+    if (pending.recovered) {
+      continue;
+    }
+    if (pending.injected_cycle === cycle && !pending.degraded_checked) {
+      pending.degraded_checked = true;
+      const agentResult = findCycleAgentResult(cycleResult, pending.agent_id);
+      const degradedObserved = Boolean(
+        agentResult?.degraded || agentResult?.circuit_open_blocked || agentResult?.fault_injected
+      );
+      pending.degraded_observed = degradedObserved;
+      if (!degradedObserved) {
+        reasons.push(
+          `forced fault cycle ${cycle} did not degrade ${pending.agent_id}/${pending.channel} live fanout`
+        );
+      }
+    }
+
+    const recoveredEvent = events.find((event) => {
+      const eventAgent = normalizeAgentId(event?.agent_id, "");
+      const eventChannel = parseAdapterChannel(event?.channel, "");
+      const eventType = String(event?.event_type ?? "").trim().toLowerCase();
+      const eventCreatedMs = parseTimestamp(event?.created_at);
+      const injectedAtMs = parseTimestamp(pending.injected_at);
+      return (
+        eventAgent === pending.agent_id &&
+        eventChannel === pending.channel &&
+        eventType === "recovered" &&
+        eventCreatedMs !== null &&
+        injectedAtMs !== null &&
+        eventCreatedMs >= injectedAtMs
+      );
+    });
+    const successEvent = events.find((event) => {
+      const eventAgent = normalizeAgentId(event?.agent_id, "");
+      const eventChannel = parseAdapterChannel(event?.channel, "");
+      const eventType = String(event?.event_type ?? "").trim().toLowerCase();
+      const eventCreatedMs = parseTimestamp(event?.created_at);
+      const injectedAtMs = parseTimestamp(pending.injected_at);
+      return (
+        eventAgent === pending.agent_id &&
+        eventChannel === pending.channel &&
+        eventType === "response_ok" &&
+        eventCreatedMs !== null &&
+        injectedAtMs !== null &&
+        eventCreatedMs >= injectedAtMs
+      );
+    });
+    const currentState = states.find((state) => {
+      const stateAgent = normalizeAgentId(state?.agent_id, "");
+      const stateChannel = parseAdapterChannel(state?.channel, "");
+      return stateAgent === pending.agent_id && stateChannel === pending.channel;
+    });
+    const recoverySignal = recoveredEvent ?? successEvent;
+    if (recoverySignal && currentState && !Boolean(currentState.open)) {
+      pending.recovered = true;
+      pending.recovered_at = String(recoverySignal.created_at ?? new Date(nowMs).toISOString());
+      pending.recovery_event = recoverySignal;
+      report.forced_breaker_gate.recoveries.push({
+        cycle,
+        injected_cycle: pending.injected_cycle,
+        agent_id: pending.agent_id,
+        channel: pending.channel,
+        recovered_at: pending.recovered_at,
+        event_type: recoveredEvent ? recoveredEvent.event_type : "response_ok",
+      });
+      continue;
+    }
+
+    const injectedAtMs = parseTimestamp(pending.injected_at);
+    if (
+      !pending.recovered &&
+      injectedAtMs !== null &&
+      nowMs - injectedAtMs > options.forcedRecoveryTimeoutSeconds * 1000 &&
+      !pending.timeout_reported
+    ) {
+      pending.timeout_reported = true;
+      reasons.push(
+        `forced fault recovery timeout for ${pending.agent_id}/${pending.channel} after ${options.forcedRecoveryTimeoutSeconds}s`
+      );
+    }
+  }
+  return reasons;
+}
+
 function isActiveTurnRunning(activeTurn) {
   if (!activeTurn || typeof activeTurn !== "object") {
     return false;
@@ -724,6 +885,18 @@ function parseOptions(cli) {
     Math.max(1, workboardSettleSeconds),
     900
   );
+  const dogfoodBreakerChannel = parseAdapterChannel(
+    cli["dogfood-breaker-channel"] ?? process.env.TRICHAT_SOAK_DOGFOOD_BREAKER_CHANNEL,
+    "model"
+  );
+  const forcedFaultAgent = normalizeAgentId(
+    cli["forced-fault-agent"] ?? process.env.TRICHAT_SOAK_FORCED_FAULT_AGENT,
+    "cursor"
+  );
+  const forcedFaultChannel = parseAdapterChannel(
+    cli["forced-fault-channel"] ?? process.env.TRICHAT_SOAK_FORCED_FAULT_CHANNEL,
+    "model"
+  );
   return {
     transport,
     url: String(cli.url ?? process.env.TRICHAT_SOAK_URL ?? "http://127.0.0.1:8787/"),
@@ -834,6 +1007,60 @@ function parseOptions(cli) {
       0,
       1000
     ),
+    dogfoodRespectCircuit: parseBool(
+      cli["dogfood-respect-circuit"] ?? process.env.TRICHAT_SOAK_DOGFOOD_RESPECT_CIRCUIT,
+      true
+    ),
+    dogfoodBreakerChannel,
+    dogfoodAdapterCircuitThreshold: parseBoundedInt(
+      cli["dogfood-adapter-circuit-threshold"] ?? process.env.TRICHAT_SOAK_DOGFOOD_ADAPTER_CIRCUIT_THRESHOLD,
+      parseBoundedInt(process.env.TRICHAT_ADAPTER_CIRCUIT_THRESHOLD, 2, 1, 10),
+      1,
+      10
+    ),
+    dogfoodAdapterCircuitRecoverySeconds: parseBoundedInt(
+      cli["dogfood-adapter-circuit-recovery-seconds"] ??
+        process.env.TRICHAT_SOAK_DOGFOOD_ADAPTER_CIRCUIT_RECOVERY_SECONDS,
+      parseBoundedInt(process.env.TRICHAT_ADAPTER_CIRCUIT_RECOVERY_SECONDS, 45, 5, 3600),
+      5,
+      3600
+    ),
+    forcedBreakerGate: parseBool(
+      cli["forced-breaker-gate"] ?? process.env.TRICHAT_SOAK_FORCED_BREAKER_GATE,
+      false
+    ),
+    forcedFaultAgent,
+    forcedFaultChannel,
+    forcedFaultOpenSeconds: parseBoundedInt(
+      cli["forced-fault-open-seconds"] ?? process.env.TRICHAT_SOAK_FORCED_FAULT_OPEN_SECONDS,
+      20,
+      5,
+      600
+    ),
+    forcedFaultStartCycle: parseBoundedInt(
+      cli["forced-fault-start-cycle"] ?? process.env.TRICHAT_SOAK_FORCED_FAULT_START_CYCLE,
+      2,
+      1,
+      20_000
+    ),
+    forcedFaultEveryCycles: parseBoundedInt(
+      cli["forced-fault-every-cycles"] ?? process.env.TRICHAT_SOAK_FORCED_FAULT_EVERY_CYCLES,
+      6,
+      1,
+      20_000
+    ),
+    forcedFaultMaxInjections: parseBoundedInt(
+      cli["forced-fault-max-injections"] ?? process.env.TRICHAT_SOAK_FORCED_FAULT_MAX_INJECTIONS,
+      4,
+      1,
+      100
+    ),
+    forcedRecoveryTimeoutSeconds: parseBoundedInt(
+      cli["forced-recovery-timeout-seconds"] ?? process.env.TRICHAT_SOAK_FORCED_RECOVERY_TIMEOUT_SECONDS,
+      240,
+      15,
+      7200
+    ),
     eventLimit: parseBoundedInt(cli["event-limit"] ?? process.env.TRICHAT_SOAK_EVENT_LIMIT, 400, 50, 20_000),
     sloWindowMinutes: parseBoundedInt(
       cli["slo-window-minutes"] ?? process.env.TRICHAT_SOAK_SLO_WINDOW_MINUTES,
@@ -855,6 +1082,9 @@ async function main() {
     process.exit(0);
   }
   const options = parseOptions(cli);
+  if (options.forcedBreakerGate && options.dogfoodBreakerChannel !== options.forcedFaultChannel) {
+    options.dogfoodBreakerChannel = options.forcedFaultChannel;
+  }
   const requiredDurationMs = options.hours * 3600 * 1000;
   const startedAtMs = Date.now();
   const deadlineMs = startedAtMs + requiredDurationMs;
@@ -892,12 +1122,36 @@ async function main() {
       max_adapter_error_rate: options.maxAdapterErrorRate,
       max_turn_failure_rate: options.maxTurnFailureRate,
       max_running_tasks: options.maxRunningTasks,
+      dogfood_respect_circuit: options.dogfoodRespectCircuit,
+      dogfood_breaker_channel: options.dogfoodBreakerChannel,
+      dogfood_adapter_circuit_threshold: options.dogfoodAdapterCircuitThreshold,
+      dogfood_adapter_circuit_recovery_seconds: options.dogfoodAdapterCircuitRecoverySeconds,
+      forced_breaker_gate: options.forcedBreakerGate,
+      forced_fault_agent: options.forcedFaultAgent,
+      forced_fault_channel: options.forcedFaultChannel,
+      forced_fault_open_seconds: options.forcedFaultOpenSeconds,
+      forced_fault_start_cycle: options.forcedFaultStartCycle,
+      forced_fault_every_cycles: options.forcedFaultEveryCycles,
+      forced_fault_max_injections: options.forcedFaultMaxInjections,
+      forced_recovery_timeout_seconds: options.forcedRecoveryTimeoutSeconds,
       event_limit: options.eventLimit,
       slo_window_minutes: options.sloWindowMinutes,
       workboard_settle_seconds: options.workboardSettleSeconds,
       workboard_settle_max_seconds: options.workboardSettleMaxSeconds,
       cycle_timeout_seconds: options.cycleTimeoutSeconds,
       cycle_timeout_max_seconds: options.cycleTimeoutMaxSeconds,
+    },
+    forced_breaker_gate: {
+      enabled: options.forcedBreakerGate,
+      agent_id: options.forcedFaultAgent,
+      channel: options.forcedFaultChannel,
+      open_seconds: options.forcedFaultOpenSeconds,
+      start_cycle: options.forcedFaultStartCycle,
+      every_cycles: options.forcedFaultEveryCycles,
+      max_injections: options.forcedFaultMaxInjections,
+      recovery_timeout_seconds: options.forcedRecoveryTimeoutSeconds,
+      injections: [],
+      recoveries: [],
     },
     cycles: [],
     retry_events: [],
@@ -909,6 +1163,8 @@ async function main() {
     let adaptiveCycleTimeoutSeconds = options.cycleTimeoutSeconds;
     let adaptiveWorkboardSettleSeconds = options.workboardSettleSeconds;
     let cycleRuntimeEwmaSeconds = 0;
+    const pendingForcedRecoveries = [];
+    let forcedFaultInjectedCount = 0;
     let cycle = 1;
     for (; cycle <= options.maxCycles; cycle += 1) {
       if (Date.now() >= deadlineMs && cycle > 1) {
@@ -925,6 +1181,44 @@ async function main() {
       let maxAttempts = Math.min(options.maxCycleAttempts, Math.max(1, options.cycleRetryLimit + 1));
       const classRetryBoosts = new Set();
       let elapsedMs = 0;
+      if (shouldInjectForcedFault(cycle, options, forcedFaultInjectedCount)) {
+        const injectedAt = new Date().toISOString();
+        const forcedReason = `soak forced breaker injection cycle=${cycle}`;
+        const injected = await callTool(client, "trichat.chaos", {
+          action: "inject_adapter_failure",
+          mutation: mutation(`trichat.chaos.inject_adapter_failure.cycle-${cycle}`),
+          agent_id: options.forcedFaultAgent,
+          channel: options.forcedFaultChannel,
+          reason: forcedReason,
+          open_for_seconds: options.forcedFaultOpenSeconds,
+        });
+        forcedFaultInjectedCount += 1;
+        const injectedRecord = {
+          cycle,
+          agent_id: options.forcedFaultAgent,
+          channel: options.forcedFaultChannel,
+          injected_at: String(injected?.event?.created_at ?? injectedAt),
+          open_until: String(injected?.event?.open_until ?? injected?.state?.open_until ?? ""),
+          reason: forcedReason,
+          event_type: String(injected?.event?.event_type ?? "trip_opened"),
+          state_open: Boolean(injected?.state?.open),
+        };
+        pendingForcedRecoveries.push({
+          ...injectedRecord,
+          injected_cycle: cycle,
+          recovered: false,
+          recovered_at: null,
+          recovery_event: null,
+          degraded_checked: false,
+          degraded_observed: false,
+          timeout_reported: false,
+        });
+        report.forced_breaker_gate.injections.push(injectedRecord);
+        process.stderr.write(
+          `[soak] cycle=${cycle} forced_fault=on agent=${options.forcedFaultAgent} ` +
+          `channel=${options.forcedFaultChannel} open_for=${options.forcedFaultOpenSeconds}s\n`
+        );
+      }
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         const attemptStartedMs = Date.now();
         const requestedBudget = options.adaptiveCycleTimeouts
@@ -979,6 +1273,15 @@ async function main() {
           const taskSummary = await callTool(client, "task.summary", {
             running_limit: Math.max(10, options.maxRunningTasks * 2),
           });
+          const pendingForcedOpenCount = options.forcedBreakerGate
+            ? pendingForcedRecoveries.filter((entry) => !entry.recovered).length
+            : 0;
+          const cycleHealthOptions = {
+            ...options,
+            maxOpenChannels: options.forcedBreakerGate
+              ? Math.max(options.maxOpenChannels, pendingForcedOpenCount)
+              : options.maxOpenChannels,
+          };
 
           let evaluated = evaluateCycleHealth({
             cycle,
@@ -988,7 +1291,7 @@ async function main() {
             slo,
             workboard,
             taskSummary,
-            options,
+            options: cycleHealthOptions,
           });
           let settleProbeSeconds = 0;
           if (
@@ -1010,8 +1313,29 @@ async function main() {
               slo,
               workboard,
               taskSummary,
-              options,
+              options: cycleHealthOptions,
             });
+          }
+          const forcedGateReasons = updateForcedFaultTracking({
+            pendingRecoveries: pendingForcedRecoveries,
+            cycle,
+            cycleResult,
+            adapterTelemetry,
+            options,
+            nowMs: Date.now(),
+            report,
+          });
+          if (forcedGateReasons.length > 0) {
+            const mergedReasons = [...evaluated.reasons, ...forcedGateReasons];
+            evaluated = {
+              ...evaluated,
+              ok: false,
+              reasons: mergedReasons,
+              snapshot: {
+                ...evaluated.snapshot,
+                gate_failures: mergedReasons,
+              },
+            };
           }
           const observedAttemptSeconds = Math.max(1, Math.round((Date.now() - attemptStartedMs) / 1000));
           const statusLine =
@@ -1238,6 +1562,36 @@ async function main() {
       const sleepMs = Math.max(0, options.intervalSeconds * 1000 - elapsedMs);
       if (sleepMs > 0) {
         await sleep(Math.min(sleepMs, remainingToDeadlineMs));
+      }
+    }
+
+    if (options.forcedBreakerGate) {
+      const unresolved = pendingForcedRecoveries.filter((entry) => !entry.recovered);
+      report.forced_breaker_gate.injected_count = report.forced_breaker_gate.injections.length;
+      report.forced_breaker_gate.recovered_count = report.forced_breaker_gate.recoveries.length;
+      report.forced_breaker_gate.pending_count = unresolved.length;
+      if (report.ok && report.forced_breaker_gate.injected_count === 0) {
+        report.ok = false;
+        report.failures.push({
+          cycle: report.cycles.length,
+          reason: "forced breaker gate enabled but no forced faults were injected",
+        });
+      }
+      if (unresolved.length > 0) {
+        report.ok = false;
+        report.failures.push({
+          cycle: report.cycles.length,
+          reason: `forced breaker recovery unresolved for ${unresolved.length} injection(s)`,
+          details: unresolved.map((entry) => ({
+            cycle: entry.injected_cycle,
+            agent_id: entry.agent_id,
+            channel: entry.channel,
+            injected_at: entry.injected_at,
+            open_until: entry.open_until,
+            degraded_observed: entry.degraded_observed,
+            timeout_reported: entry.timeout_reported,
+          })),
+        });
       }
     }
 

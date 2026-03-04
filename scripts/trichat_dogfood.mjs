@@ -60,6 +60,13 @@ function printHelp() {
     "  --agents codex,cursor,local-imprint",
     "  --require-success-agents <n>",
     "  --bridge-timeout <seconds>",
+    "  --respect-circuit <true|false>",
+    "  --breaker-channel command|model",
+    "  --adapter-circuit-threshold <n>",
+    "  --adapter-circuit-recovery-seconds <n>",
+    "  --inject-fault-agent <agent_id>",
+    "  --inject-fault-mode none|handshake|response_error|timeout",
+    "  --inject-fault-reason <text>",
     "  --retention-days <n>",
     "  --retention-apply <true|false>",
     "  --retention-limit <n>",
@@ -104,6 +111,25 @@ function parseThreadStatus(value, fallback = "active") {
   }
   if (normalized === "active") {
     return "active";
+  }
+  return fallback;
+}
+
+function parseAdapterChannel(value, fallback = "model") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "command") {
+    return "command";
+  }
+  if (normalized === "model") {
+    return "model";
+  }
+  return fallback;
+}
+
+function parseFaultMode(value, fallback = "none") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["none", "handshake", "response_error", "timeout"].includes(normalized)) {
+    return normalized;
   }
   return fallback;
 }
@@ -532,6 +558,111 @@ async function pingBridge(command, payload, timeoutSeconds) {
   };
 }
 
+function parseTimestampMs(value) {
+  const parsed = Date.parse(String(value ?? ""));
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return parsed;
+}
+
+function normalizeAdapterState(agentId, channel, rawState) {
+  const metadata = rawState?.metadata && typeof rawState.metadata === "object" ? rawState.metadata : {};
+  return {
+    agent_id: agentId,
+    channel,
+    updated_at: String(rawState?.updated_at ?? new Date().toISOString()),
+    open: Boolean(rawState?.open),
+    open_until: rawState?.open_until ? String(rawState.open_until) : undefined,
+    failure_count: parseBoundedInt(rawState?.failure_count, 0, 0, 1_000_000),
+    trip_count: parseBoundedInt(rawState?.trip_count, 0, 0, 1_000_000),
+    success_count: parseBoundedInt(rawState?.success_count, 0, 0, 1_000_000),
+    last_error: rawState?.last_error ? String(rawState.last_error) : undefined,
+    last_opened_at: rawState?.last_opened_at ? String(rawState.last_opened_at) : undefined,
+    turn_count: parseBoundedInt(rawState?.turn_count, 0, 0, 1_000_000),
+    degraded_turn_count: parseBoundedInt(rawState?.degraded_turn_count, 0, 0, 1_000_000),
+    last_result: rawState?.last_result ? String(rawState.last_result) : undefined,
+    metadata,
+  };
+}
+
+function buildAdapterStateMap(adapterTelemetryStatus, agents, channel) {
+  const byAgent = new Map();
+  const states = Array.isArray(adapterTelemetryStatus?.states) ? adapterTelemetryStatus.states : [];
+  const indexed = new Map();
+  for (const state of states) {
+    const agentId = String(state?.agent_id ?? "").trim().toLowerCase();
+    const stateChannel = parseAdapterChannel(state?.channel, "");
+    if (!agentId || !stateChannel) {
+      continue;
+    }
+    indexed.set(`${agentId}::${stateChannel}`, state);
+  }
+  for (const agentId of agents) {
+    const existing = indexed.get(`${agentId}::${channel}`);
+    byAgent.set(agentId, normalizeAdapterState(agentId, channel, existing));
+  }
+  return byAgent;
+}
+
+function isCircuitOpenNow(state, nowMs) {
+  if (!state?.open) {
+    return false;
+  }
+  const openUntilMs = parseTimestampMs(state.open_until);
+  if (openUntilMs === null) {
+    return true;
+  }
+  return openUntilMs > nowMs;
+}
+
+function buildAdapterEvent(agentId, channel, eventType, input = {}) {
+  const details = input.details && typeof input.details === "object" ? input.details : {};
+  return {
+    agent_id: agentId,
+    channel,
+    event_type: eventType,
+    open_until: input.open_until || undefined,
+    error_text: input.error_text || undefined,
+    details,
+  };
+}
+
+function applyFanoutTelemetryToStateMap(stateByAgent, fanoutResults, channel) {
+  for (const result of fanoutResults) {
+    if (!result?.telemetry_state) {
+      continue;
+    }
+    const agentId = String(result.agent_id ?? "").trim().toLowerCase();
+    if (!agentId) {
+      continue;
+    }
+    stateByAgent.set(agentId, normalizeAdapterState(agentId, channel, result.telemetry_state));
+  }
+}
+
+async function recordFanoutTelemetry(client, mutation, fanoutResults, cycle) {
+  const states = [];
+  const events = [];
+  for (const result of fanoutResults) {
+    if (result?.telemetry_state) {
+      states.push(result.telemetry_state);
+    }
+    if (Array.isArray(result?.telemetry_events)) {
+      events.push(...result.telemetry_events);
+    }
+  }
+  if (states.length === 0 && events.length === 0) {
+    return null;
+  }
+  return callTool(client, "trichat.adapter_telemetry", {
+    action: "record",
+    mutation: mutation(`trichat.adapter_telemetry.record.cycle-${cycle}`),
+    states,
+    events,
+  });
+}
+
 async function runAgentFanout({
   agents,
   bridgeCommands,
@@ -541,20 +672,190 @@ async function runAgentFanout({
   bootstrapText,
   timeoutSeconds,
   peerContext,
+  adapterStateByAgent,
+  breakerChannel,
+  respectCircuit,
+  adapterCircuitThreshold,
+  adapterCircuitRecoverySeconds,
+  faultInjection,
 }) {
   const tasks = agents.map(async (agentId) => {
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const state = normalizeAdapterState(agentId, breakerChannel, adapterStateByAgent?.get(agentId));
     const command = bridgeCommands[agentId] ?? "";
-    if (!command) {
+    const threshold = Math.max(1, adapterCircuitThreshold);
+    const recoverySeconds = Math.max(1, adapterCircuitRecoverySeconds);
+    const activeOpen = isCircuitOpenNow(state, nowMs);
+    const staleOpen = Boolean(state.open) && !activeOpen;
+    const isFaultTarget = String(faultInjection?.agent_id ?? "").trim().toLowerCase() === agentId;
+    const faultMode = isFaultTarget ? parseFaultMode(faultInjection?.mode, "none") : "none";
+    const faultReason = String(faultInjection?.reason ?? "").trim();
+
+    const buildFailureOutcome = (errorText, eventType, details = {}) => {
+      const nextFailureCount = state.failure_count + 1;
+      const shouldTrip = !activeOpen && nextFailureCount >= threshold;
+      const nextOpen = activeOpen || shouldTrip;
+      const nextOpenUntil = nextOpen ? new Date(nowMs + recoverySeconds * 1000).toISOString() : undefined;
+      const telemetryState = {
+        ...state,
+        updated_at: nowIso,
+        open: nextOpen,
+        open_until: nextOpenUntil,
+        failure_count: nextFailureCount,
+        trip_count: state.trip_count + (shouldTrip ? 1 : 0),
+        last_error: errorText,
+        last_opened_at: shouldTrip ? nowIso : state.last_opened_at,
+        turn_count: state.turn_count + 1,
+        degraded_turn_count: state.degraded_turn_count + 1,
+        last_result: shouldTrip ? "trip-opened" : "error",
+        metadata: {
+          ...(state.metadata ?? {}),
+          source: "scripts/trichat_dogfood.mjs",
+          breaker_channel: breakerChannel,
+          fault_injected: faultMode !== "none",
+          stale_open_probe: staleOpen,
+        },
+      };
+      const telemetryEvents = [
+        buildAdapterEvent(agentId, breakerChannel, eventType, {
+          error_text: errorText,
+          details: {
+            ...details,
+            source: "scripts/trichat_dogfood.mjs",
+            breaker_channel: breakerChannel,
+            threshold,
+            recovery_seconds: recoverySeconds,
+            stale_open_probe: staleOpen,
+            fault_injected: faultMode !== "none",
+          },
+        }),
+      ];
+      if (shouldTrip) {
+        telemetryEvents.push(
+          buildAdapterEvent(agentId, breakerChannel, "trip_opened", {
+            open_until: nextOpenUntil,
+            error_text: errorText,
+            details: {
+              source: "scripts/trichat_dogfood.mjs",
+              threshold,
+              recovery_seconds: recoverySeconds,
+              stale_open_probe: staleOpen,
+              fault_injected: faultMode !== "none",
+            },
+          })
+        );
+      }
+      return {
+        telemetryState,
+        telemetryEvents,
+      };
+    };
+
+    if (respectCircuit && activeOpen) {
+      const openUntilText = state.open_until || "unknown";
+      const errorText = `adapter circuit open until ${openUntilText}`;
       return {
         agent_id: agentId,
         ok: false,
+        degraded: true,
         content: "",
-        error: "missing bridge command",
-        adapter_meta: null,
+        error: errorText,
+        adapter_meta: {
+          adapter: "degraded",
+          degraded: true,
+          reason: "circuit_open",
+          open_until: openUntilText,
+          breaker_channel: breakerChannel,
+        },
+        telemetry_state: {
+          ...state,
+          updated_at: nowIso,
+          turn_count: state.turn_count + 1,
+          degraded_turn_count: state.degraded_turn_count + 1,
+          last_result: "degraded",
+          metadata: {
+            ...(state.metadata ?? {}),
+            source: "scripts/trichat_dogfood.mjs",
+            breaker_channel: breakerChannel,
+            reason: "circuit_open",
+          },
+        },
+        telemetry_events: [
+          buildAdapterEvent(agentId, breakerChannel, "degraded_turn", {
+            open_until: state.open_until,
+            details: {
+              source: "scripts/trichat_dogfood.mjs",
+              reason: "circuit_open",
+              breaker_channel: breakerChannel,
+            },
+          }),
+        ],
+        fault_injected: false,
+        circuit_open_blocked: true,
+      };
+    }
+
+    if (!command) {
+      const errorText = "missing bridge command";
+      const failed = buildFailureOutcome(errorText, "response_error", {
+        reason: "missing_bridge_command",
+      });
+      return {
+        agent_id: agentId,
+        ok: false,
+        degraded: true,
+        content: "",
+        error: errorText,
+        adapter_meta: {
+          degraded: true,
+          reason: "missing_bridge_command",
+          breaker_channel: breakerChannel,
+        },
+        telemetry_state: failed.telemetryState,
+        telemetry_events: failed.telemetryEvents,
+        fault_injected: false,
+        circuit_open_blocked: false,
       };
     }
     const collaborators = agents.filter((entry) => entry !== agentId);
     const collaborativePrompt = buildCollaborativePrompt(prompt, agentId, collaborators);
+
+    if (faultMode !== "none") {
+      const errorText =
+        faultReason ||
+        (faultMode === "handshake"
+          ? "fault injection: adapter handshake failed"
+          : faultMode === "timeout"
+            ? "fault injection: context deadline exceeded"
+            : "fault injection: bridge command failed");
+      const failed = buildFailureOutcome(
+        errorText,
+        faultMode === "handshake" ? "handshake_failed" : "response_error",
+        {
+          reason: "fault_injection",
+          fault_mode: faultMode,
+        }
+      );
+      return {
+        agent_id: agentId,
+        ok: false,
+        degraded: true,
+        content: "",
+        error: errorText,
+        adapter_meta: {
+          degraded: true,
+          reason: "fault_injection",
+          fault_mode: faultMode,
+          breaker_channel: breakerChannel,
+        },
+        telemetry_state: failed.telemetryState,
+        telemetry_events: failed.telemetryEvents,
+        fault_injected: true,
+        circuit_open_blocked: false,
+      };
+    }
+
     const handshakeKey = `${agentId}::${command}`;
     const now = Date.now();
     const cacheEntry = bridgeHandshakeCache.get(handshakeKey);
@@ -574,16 +875,27 @@ async function runAgentFanout({
           ok: false,
           checked_at_ms: Date.now(),
         });
+        const errorText = `adapter handshake failed: ${compactSingleLine(pingResult.error ?? "unknown", 220)}`;
+        const failed = buildFailureOutcome(errorText, "handshake_failed", {
+          stderr: pingResult.stderr || null,
+        });
         return {
           agent_id: agentId,
           ok: false,
+          degraded: true,
           content: "",
-          error: `adapter handshake failed: ${compactSingleLine(pingResult.error ?? "unknown", 220)}`,
+          error: errorText,
           adapter_meta: {
             bridge_command: command,
             handshake: "failed",
             stderr: pingResult.stderr || null,
+            degraded: true,
+            breaker_channel: breakerChannel,
           },
+          telemetry_state: failed.telemetryState,
+          telemetry_events: failed.telemetryEvents,
+          fault_injected: false,
+          circuit_open_blocked: false,
         };
       }
       bridgeHandshakeCache.set(handshakeKey, {
@@ -614,10 +926,77 @@ async function runAgentFanout({
       response_mode: inferResponseMode(collaborativePrompt),
       collaboration_contract: "coordinate with peers and avoid duplicate strategy",
     };
+    const startedAt = Date.now();
     const result = await runBridge(command, payload, timeoutSeconds);
+    const latencyMs = Math.max(1, Date.now() - startedAt);
+    if (!result.ok) {
+      const errorText = compactSingleLine(result.error ?? "bridge failure", 280);
+      const failed = buildFailureOutcome(errorText, "response_error", {
+        latency_ms: latencyMs,
+        stderr: result.stderr || null,
+      });
+      return {
+        agent_id: agentId,
+        ok: false,
+        degraded: true,
+        content: "",
+        error: errorText,
+        adapter_meta: {
+          bridge_command: command,
+          request_id: requestId,
+          role_hint: roleHint,
+          turn_phase: turnPhase,
+          stderr: result.stderr || null,
+          degraded: true,
+          breaker_channel: breakerChannel,
+        },
+        telemetry_state: failed.telemetryState,
+        telemetry_events: failed.telemetryEvents,
+        fault_injected: false,
+        circuit_open_blocked: false,
+      };
+    }
+    const recovered = Boolean(state.open);
+    const telemetryState = {
+      ...state,
+      updated_at: new Date().toISOString(),
+      open: false,
+      open_until: undefined,
+      failure_count: 0,
+      success_count: state.success_count + 1,
+      last_error: undefined,
+      turn_count: state.turn_count + 1,
+      last_result: "success",
+      metadata: {
+        ...(state.metadata ?? {}),
+        source: "scripts/trichat_dogfood.mjs",
+        breaker_channel: breakerChannel,
+        recovered,
+      },
+    };
+    const telemetryEvents = [
+      buildAdapterEvent(agentId, breakerChannel, "response_ok", {
+        details: {
+          source: "scripts/trichat_dogfood.mjs",
+          latency_ms: latencyMs,
+          breaker_channel: breakerChannel,
+        },
+      }),
+    ];
+    if (recovered) {
+      telemetryEvents.push(
+        buildAdapterEvent(agentId, breakerChannel, "recovered", {
+          details: {
+            source: "scripts/trichat_dogfood.mjs",
+            breaker_channel: breakerChannel,
+          },
+        })
+      );
+    }
     return {
       agent_id: agentId,
       ok: result.ok,
+      degraded: false,
       content: result.ok ? result.content : "",
       error: result.ok ? null : result.error,
       adapter_meta: result.ok
@@ -628,14 +1007,22 @@ async function runAgentFanout({
             bridge: result.bridge ?? null,
             role_hint: roleHint,
             turn_phase: turnPhase,
+            degraded: false,
+            breaker_channel: breakerChannel,
+            latency_ms: latencyMs,
+            recovered,
           }
         : {
-        bridge_command: command,
-        request_id: requestId,
-        role_hint: roleHint,
-        turn_phase: turnPhase,
-        stderr: result.stderr || null,
-      },
+            bridge_command: command,
+            request_id: requestId,
+            role_hint: roleHint,
+            turn_phase: turnPhase,
+            stderr: result.stderr || null,
+          },
+      telemetry_state: telemetryState,
+      telemetry_events: telemetryEvents,
+      fault_injected: false,
+      circuit_open_blocked: false,
     };
   });
   return Promise.all(tasks);
@@ -698,6 +1085,38 @@ async function main() {
       5,
       7200
     ),
+    respectCircuit: parseBool(
+      cli["respect-circuit"] ?? process.env.TRICHAT_DOGFOOD_RESPECT_CIRCUIT,
+      true
+    ),
+    breakerChannel: parseAdapterChannel(
+      cli["breaker-channel"] ?? process.env.TRICHAT_DOGFOOD_BREAKER_CHANNEL,
+      "model"
+    ),
+    adapterCircuitThreshold: parseBoundedInt(
+      cli["adapter-circuit-threshold"] ?? process.env.TRICHAT_ADAPTER_CIRCUIT_THRESHOLD,
+      2,
+      1,
+      10
+    ),
+    adapterCircuitRecoverySeconds: parseBoundedInt(
+      cli["adapter-circuit-recovery-seconds"] ?? process.env.TRICHAT_ADAPTER_CIRCUIT_RECOVERY_SECONDS,
+      45,
+      5,
+      3600
+    ),
+    injectFaultAgent: String(
+      cli["inject-fault-agent"] ?? process.env.TRICHAT_DOGFOOD_INJECT_FAULT_AGENT ?? ""
+    )
+      .trim()
+      .toLowerCase(),
+    injectFaultMode: parseFaultMode(
+      cli["inject-fault-mode"] ?? process.env.TRICHAT_DOGFOOD_INJECT_FAULT_MODE,
+      "none"
+    ),
+    injectFaultReason: String(
+      cli["inject-fault-reason"] ?? process.env.TRICHAT_DOGFOOD_INJECT_FAULT_REASON ?? ""
+    ).trim(),
     keepActive: parseBool(cli["keep-active"] ?? process.env.TRICHAT_DOGFOOD_KEEP_ACTIVE, true),
     threadStatus: parseThreadStatus(cli["thread-status"] ?? process.env.TRICHAT_DOGFOOD_THREAD_STATUS, "active"),
     execute: parseBool(cli.execute ?? process.env.TRICHAT_DOGFOOD_EXECUTE, false),
@@ -729,6 +1148,16 @@ async function main() {
     .map((value) => value.trim().toLowerCase())
     .filter((value) => DEFAULT_AGENTS.includes(value));
   const activeAgents = agents.length > 0 ? [...new Set(agents)] : [...DEFAULT_AGENTS];
+  const faultAgent = activeAgents.includes(options.injectFaultAgent) ? options.injectFaultAgent : "";
+  const faultMode = faultAgent ? options.injectFaultMode : "none";
+  const faultInjection =
+    faultMode === "none"
+      ? null
+      : {
+          agent_id: faultAgent,
+          mode: faultMode,
+          reason: options.injectFaultReason,
+        };
   const threadId = String(
     cli["thread-id"] ?? process.env.TRICHAT_DOGFOOD_THREAD_ID ?? `trichat-dogfood-${Math.floor(Date.now() / 1000)}`
   ).trim();
@@ -753,6 +1182,13 @@ async function main() {
     bridge_commands: bridgeCommands,
     execute: options.execute,
     thread_status: options.threadStatus,
+    circuit_policy: {
+      respect_circuit: options.respectCircuit,
+      breaker_channel: options.breakerChannel,
+      threshold: options.adapterCircuitThreshold,
+      recovery_seconds: options.adapterCircuitRecoverySeconds,
+    },
+    injected_fault: faultInjection,
   };
 
   try {
@@ -833,6 +1269,16 @@ async function main() {
         limit: 120,
       });
       const history = Array.isArray(timeline?.messages) ? timeline.messages : [];
+      const adapterTelemetryBefore = await callTool(client, "trichat.adapter_telemetry", {
+        action: "status",
+        include_events: false,
+        event_limit: 0,
+      });
+      const adapterStateByAgent = buildAdapterStateMap(
+        adapterTelemetryBefore,
+        activeAgents,
+        options.breakerChannel
+      );
       const fanout = await runAgentFanout({
         agents: activeAgents,
         bridgeCommands,
@@ -842,11 +1288,19 @@ async function main() {
         bootstrapText,
         timeoutSeconds: options.bridgeTimeoutSeconds,
         peerContext: "",
+        adapterStateByAgent,
+        breakerChannel: options.breakerChannel,
+        respectCircuit: options.respectCircuit,
+        adapterCircuitThreshold: options.adapterCircuitThreshold,
+        adapterCircuitRecoverySeconds: options.adapterCircuitRecoverySeconds,
+        faultInjection,
       });
+      await recordFanoutTelemetry(client, mutation, fanout, cycle);
+      applyFanoutTelemetryToStateMap(adapterStateByAgent, fanout, options.breakerChannel);
 
       let successAgents = 0;
       for (const result of fanout) {
-        const degraded = !result.ok;
+        const degraded = result.degraded ?? !result.ok;
         if (!degraded) {
           successAgents += 1;
         }
@@ -923,8 +1377,16 @@ async function main() {
             bootstrapText,
             timeoutSeconds: options.bridgeTimeoutSeconds,
             peerContext,
+            adapterStateByAgent,
+            breakerChannel: options.breakerChannel,
+            respectCircuit: options.respectCircuit,
+            adapterCircuitThreshold: options.adapterCircuitThreshold,
+            adapterCircuitRecoverySeconds: options.adapterCircuitRecoverySeconds,
+            faultInjection,
           }))[0];
-          const degraded = !retryResult.ok;
+          await recordFanoutTelemetry(client, mutation, [retryResult], cycle);
+          applyFanoutTelemetryToStateMap(adapterStateByAgent, [retryResult], options.breakerChannel);
+          const degraded = retryResult.degraded ?? !retryResult.ok;
           const retryContent = degraded
             ? `[degraded-mode] ${retryAgent} retry unavailable: ${compactSingleLine(retryResult.error, 180)}`
             : retryResult.content;
@@ -1071,6 +1533,20 @@ async function main() {
         thread_id: threadId,
         limit: 20,
       });
+      const fanoutAgentResults = fanout.map((result) => {
+        const telemetryEventTypes = Array.isArray(result.telemetry_events)
+          ? result.telemetry_events.map((event) => String(event?.event_type ?? "")).filter(Boolean)
+          : [];
+        return {
+          agent_id: result.agent_id,
+          ok: Boolean(result.ok),
+          degraded: Boolean(result.degraded ?? !result.ok),
+          error: result.error ? compactSingleLine(result.error, 220) : null,
+          fault_injected: Boolean(result.fault_injected),
+          circuit_open_blocked: Boolean(result.circuit_open_blocked),
+          telemetry_event_types: telemetryEventTypes,
+        };
+      });
 
       report.cycles.push({
         cycle,
@@ -1091,6 +1567,15 @@ async function main() {
         finalized_status: finalized?.turn?.status ?? null,
         consensus_latest_status: consensus?.latest_turn?.status ?? null,
         workboard_active_phase: workboard?.active_turn?.phase ?? null,
+        breaker_channel: options.breakerChannel,
+        fault_injection: faultInjection
+          ? {
+              agent_id: faultInjection.agent_id,
+              mode: faultInjection.mode,
+              injected_results: fanoutAgentResults.filter((entry) => entry.fault_injected).length,
+            }
+          : null,
+        agent_results: fanoutAgentResults,
       });
 
       if (options.retentionDays >= 0) {

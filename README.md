@@ -195,6 +195,12 @@ Strict representative gate (real bridges + execute path + class-aware retries):
 npm run trichat:soak:gate -- --hours 1 --interval-seconds 60 --bridge-dry-run false --execute true --require-success-agents 2 --workboard-settle-max-seconds 180
 ```
 
+Fault-injection breaker/recovery gate (live fanout fault + forced circuit recovery assertions):
+
+```bash
+npm run trichat:soak:gate -- --hours 1 --interval-seconds 60 --bridge-dry-run false --execute true --require-success-agents 2 --forced-breaker-gate true --forced-fault-agent cursor --forced-fault-channel model --forced-fault-open-seconds 20 --forced-fault-every-cycles 6 --forced-recovery-timeout-seconds 240
+```
+
 Fast local validation (non-release short run):
 
 ```bash
