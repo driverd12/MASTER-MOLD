@@ -91,7 +91,7 @@ async function main() {
       ? createHttpTransport(options)
       : createStdioTransport(options);
 
-  const client = new Client({ name: "anamnesis-mcp-tool-call", version: "0.1.0" }, { capabilities: {} });
+  const client = new Client({ name: "mcplayground-mcp-tool-call", version: "0.1.0" }, { capabilities: {} });
 
   try {
     await client.connect(transport);

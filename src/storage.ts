@@ -503,31 +503,6 @@ export class Storage {
         name: "add-task-orchestrator-schema",
         run: () => this.applyTaskSchemaMigration(),
       },
-      {
-        version: 5,
-        name: "add-trichat-message-bus-schema",
-        run: () => this.applyTriChatSchemaMigration(),
-      },
-      {
-        version: 6,
-        name: "add-trichat-adapter-telemetry-schema",
-        run: () => this.applyTriChatAdapterTelemetryMigration(),
-      },
-      {
-        version: 7,
-        name: "add-trichat-unix-bus-schema",
-        run: () => this.applyTriChatBusMigration(),
-      },
-      {
-        version: 8,
-        name: "add-trichat-turn-orchestration-schema",
-        run: () => this.applyTriChatTurnSchemaMigration(),
-      },
-      {
-        version: 9,
-        name: "add-trichat-reliability-schema",
-        run: () => this.applyTriChatReliabilitySchemaMigration(),
-      },
     ]);
     this.ensureRuntimeSchemaCompleteness();
   }
@@ -4623,15 +4598,6 @@ export class Storage {
       "task_events",
       "task_leases",
       "task_artifacts",
-      "trichat_threads",
-      "trichat_messages",
-      "trichat_bus_events",
-      "trichat_turns",
-      "trichat_turn_artifacts",
-      "trichat_adapter_states",
-      "trichat_adapter_events",
-      "trichat_chaos_events",
-      "trichat_slo_snapshots",
     ] as const;
     const counts: Record<string, number> = {};
     for (const table of tables) {
@@ -4705,11 +4671,6 @@ export class Storage {
     this.applyDaemonConfigMigration();
     this.applyImprintSchemaMigration();
     this.applyTaskSchemaMigration();
-    this.applyTriChatSchemaMigration();
-    this.applyTriChatAdapterTelemetryMigration();
-    this.applyTriChatBusMigration();
-    this.applyTriChatTurnSchemaMigration();
-    this.applyTriChatReliabilitySchemaMigration();
   }
 
   private applyCoreSchemaMigration(): void {

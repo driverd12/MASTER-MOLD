@@ -1,28 +1,34 @@
-# MCP Sandbox Playground Security
+# MCPlayground Core Template Security
 
 ## Scope
 
-- Local-first server with SQLite persistence in `./data/hub.sqlite`.
-- STDIO transport has no network surface.
-- HTTP transport is bound to loopback only.
+- Local-first server with SQLite persistence in `./data/hub.sqlite` by default.
+- STDIO transport has no network listening surface.
+- HTTP transport is intended for loopback/local use.
 
 ## HTTP Guardrails
 
-- Requires `Authorization: Bearer <token>` with `MCP_HTTP_BEARER_TOKEN`.
+- Requires `Authorization: Bearer <token>` when `MCP_HTTP_BEARER_TOKEN` is set.
 - Validates `Origin` against `MCP_HTTP_ALLOWED_ORIGINS`.
-- Rejects requests with invalid or missing Origin or token using HTTP 403.
-- Does not bind to `0.0.0.0`.
+- Rejects missing or invalid origin/token requests.
+- Default host is `127.0.0.1`.
 
 ## Data Handling
 
-- Uses SQLite WAL mode for durability.
-- Logs are emitted to stderr only.
-- No secrets are persisted to disk by default.
-- Mutating MCP tools are journaled with idempotency metadata (`idempotency_key` + `side_effect_fingerprint`).
-- Policy evaluations, run events, and incident timelines are persisted for auditability.
+- SQLite uses WAL mode for durability and concurrent reads.
+- Mutating tools are idempotency-journaled (`idempotency_key` + `side_effect_fingerprint`).
+- Policy checks, run events, tasks, incidents, and decision links are persisted locally.
+- Domain packs should persist only local data unless explicitly documented otherwise.
 
-## External Providers
+## Operational Controls
 
-- Provider-backed consultation is disabled in local-only mode.
-- Continuity capture and query workflows run on local SQLite data only.
-- If provider tools are re-enabled in future, treat them as explicit opt-in and document the data boundary.
+- Use `preflight.check` before risky writes.
+- Use `postflight.verify` for post-action assertions.
+- Use `lock.acquire` for shared mutable resources.
+- Use `policy.evaluate` for guardrails on sensitive/destructive operations.
+
+## Local-Only Posture
+
+- Cloud consultation providers are disabled by default.
+- Continuity and retrieval workflows run on local SQLite data only.
+- If remote providers are enabled in downstream forks, document data boundaries explicitly.

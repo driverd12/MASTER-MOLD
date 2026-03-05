@@ -31,7 +31,7 @@ test("transcript.auto_squish persists daemon state across server restarts", asyn
 
       const storageHealth = await callTool(sessionOne.client, "health.storage", {});
       assert.equal(typeof storageHealth.schema_version, "number");
-      assert.ok(storageHealth.schema_version >= 6);
+      assert.ok(storageHealth.schema_version >= 4);
       assert.equal(typeof storageHealth.table_counts.schema_migrations, "number");
       assert.equal(typeof storageHealth.table_counts.daemon_configs, "number");
     } finally {
@@ -84,7 +84,6 @@ async function openClient(dbPath) {
     cwd: REPO_ROOT,
     env: inheritedEnv({
       ANAMNESIS_HUB_DB_PATH: dbPath,
-      TRICHAT_BUS_SOCKET_PATH: path.join(path.dirname(dbPath), "trichat.bus.sock"),
     }),
     stderr: "pipe",
   });

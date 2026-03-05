@@ -55,7 +55,7 @@ const transport =
       });
 
 const client = new Client(
-  { name: "anamnesis-imprint-bootstrap", version: "0.1.0" },
+  { name: "mcplayground-imprint-bootstrap", version: "0.1.0" },
   { capabilities: {} }
 );
 

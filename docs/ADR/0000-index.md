@@ -1,6 +1,6 @@
-# MCP Sandbox ADR Index
+# MCPlayground ADR Index
 
-This file is the table of contents for MCP Sandbox Architecture Decision Records (ADRs).
+This file is the table of contents for architecture decision records (ADRs).
 
 ## Active (Accepted)
 

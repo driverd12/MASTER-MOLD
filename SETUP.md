@@ -1,43 +1,44 @@
-# Anamnesis Setup Instructions:
+# MCPlayground Core Template Setup
 
-This is the fastest path to run Anamnesis locally.
+Fastest path to run locally.
 
-## 1. Prereqs
+## 1. Prerequisites
 
-- Node.js `22.x` (recommended)
+- Node.js `20.x` to `22.x`
 - `git`
-
-Optional (recommended):
-
-- GitHub CLI `gh` for auth and cloning private repos
 
 ## 2. Clone
 
 ```bash
-git clone https://github.com/driverd12/MCP_sandbox_playground.git
-cd MCP_sandbox_playground
+git clone https://github.com/driverd12/MCPlayground---Core-Template.git
+cd MCPlayground---Core-Template
 ```
 
-## 3. Install + Build
+## 3. Install and Build
 
 ```bash
 npm ci
 npm run build
 ```
 
-## 4. Configure Local Env
+## 4. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Minimal `.env` values:
+Minimal values:
 
 ```bash
 ANAMNESIS_HUB_DB_PATH=./data/hub.sqlite
-# MCP_HUB_DB_PATH=./data/hub.sqlite
 MCP_HTTP_BEARER_TOKEN=change-me
 MCP_HTTP_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
+```
+
+Enable CFD tools (optional):
+
+```bash
+MCP_DOMAIN_PACKS=cfd
 ```
 
 ## 5. Verify
@@ -46,52 +47,56 @@ MCP_HTTP_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
 npm test
 ```
 
-Expected result: all tests pass.
-
 ## 6. Start Server
 
-STDIO (default, best for IDE MCP):
+Core STDIO:
 
 ```bash
 npm run start:stdio
 ```
 
-HTTP (optional local API mode):
+Core HTTP:
 
 ```bash
 npm run start:http
 ```
 
-## 6b. Smoke Check (HTTP)
-
-Validate the MVP loop using default STDIO mode:
+CFD STDIO:
 
 ```bash
-./scripts/mvp_smoke.sh
+npm run start:cfd
 ```
 
-Or against an already-running HTTP server:
+CFD HTTP:
+
+```bash
+npm run start:cfd:http
+```
+
+## 7. Smoke Check
+
+```bash
+npm run mvp:smoke
+```
+
+Against an already-running HTTP server:
 
 ```bash
 MCP_SMOKE_TRANSPORT=http MCP_HTTP_BEARER_TOKEN=change-me ./scripts/mvp_smoke.sh
 ```
 
-## 7. IDE MCP Command
+## 8. Connect IDE/Agent
 
-Point your MCP client to:
-
-```bash
-node /absolute/path/to/MCP_sandbox_playground/dist/server.js
-```
-
-Example (macOS path): (not limited to just cursor, just where mine lives.)
+Point MCP client STDIO command to:
 
 ```bash
-node /Users/<you>/Cursor_projects/python/MCP_sandbox_playground/dist/server.js
+node /absolute/path/to/MCPlayground---Core-Template/dist/server.js
 ```
+
+For full client examples, see [docs/IDE_AGENT_SETUP.md](./docs/IDE_AGENT_SETUP.md).
 
 ## Troubleshooting
 
-- `Cannot find module ...`: run `npm ci` again.
-- Build errors after Node upgrade: switch back to Node 22 and rerun `npm ci`.
-- Empty tools list in client: confirm client points at `dist/server.js` from this repo, then restart client.
+- Build errors: run `npm ci` and `npm run build` again.
+- Missing tools in client: restart client process and verify it points at `dist/server.js`.
+- Missing CFD tools: confirm `MCP_DOMAIN_PACKS=cfd` is set for that client/session.
