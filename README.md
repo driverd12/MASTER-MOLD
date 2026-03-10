@@ -74,8 +74,16 @@ Important variables:
 
 - `MCP_DOMAIN_PACKS=cfd` (enabled by default in this fork)
 - `ANAMNESIS_HUB_DB_PATH` SQLite path
+- `ANAMNESIS_HUB_RUN_QUICK_CHECK_ON_START` startup integrity check (`1` default)
+- `ANAMNESIS_HUB_STARTUP_BACKUP` rotating startup snapshots (`1` default)
+- `ANAMNESIS_HUB_BACKUP_DIR` backup directory (default sibling `backups/`)
+- `ANAMNESIS_HUB_BACKUP_KEEP` retained snapshot count (default `24`)
+- `ANAMNESIS_HUB_AUTO_RESTORE_FROM_BACKUP` restore latest healthy backup on corruption (`1` default)
+- `ANAMNESIS_HUB_ALLOW_FRESH_DB_ON_CORRUPTION` allow empty bootstrap if no backup is recoverable (`0` default)
 - `MCP_HTTP_BEARER_TOKEN` HTTP auth token
 - `MCP_HTTP_ALLOWED_ORIGINS` local CORS policy
+
+The storage runtime quarantines non-SQLite/corrupt DB artifacts before restore attempts and keeps startup snapshots to reduce data-loss risk.
 
 ## CFD Tool Inventory
 

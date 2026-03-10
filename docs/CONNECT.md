@@ -62,3 +62,4 @@ If CFD pack is enabled:
 - Prefer HTTP mode for many clients.
 - Keep one shared SQLite DB path.
 - Route all writes through MCP tools only.
+- Keep startup DB guardrails enabled (`ANAMNESIS_HUB_RUN_QUICK_CHECK_ON_START=1`, `ANAMNESIS_HUB_STARTUP_BACKUP=1`) so corruption is quarantined and recovered from local backups.
