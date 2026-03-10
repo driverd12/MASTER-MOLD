@@ -7,6 +7,11 @@ data/*.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal
 data/*.sqlite-journal
+data/backups/
+data/corrupt/
+data/recovery-*/
+data/hub.from_wal.*
+data/trichat.bus.sock
 data/imprint/
 coverage/
 __pycache__/
