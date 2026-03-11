@@ -141,6 +141,7 @@ Connection examples and client setup:
 
 - [IDE + Agent Setup Guide](./docs/IDE_AGENT_SETUP.md)
 - [Transport Connection Guide](./docs/CONNECT.md)
+- [Coworker Quickstart (Cursor + Codex)](./docs/COWORKER_QUICKSTART_CURSOR_CODEX.md)
 
 Fast STDIO connection example:
 
