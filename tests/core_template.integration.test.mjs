@@ -20,6 +20,9 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     const names = new Set(tools.map((tool) => tool.name));
 
     assert.equal(names.has("memory.append"), true);
+    assert.equal(names.has("goal.create"), true);
+    assert.equal(names.has("goal.get"), true);
+    assert.equal(names.has("goal.list"), true);
     assert.equal(names.has("task.create"), true);
     assert.equal(names.has("transcript.log"), true);
 
@@ -40,6 +43,35 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     });
     assert.equal(Array.isArray(memories), true);
     assert.ok(memories.length >= 1);
+
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Core template integration goal",
+      objective: "Introduce durable goal primitives",
+      status: "active",
+      priority: 7,
+      risk_tier: "medium",
+      autonomy_mode: "recommend",
+      acceptance_criteria: ["Goal persists locally", "Goal is readable via MCP tool"],
+      constraints: ["Do not change task orchestration behavior"],
+      tags: ["core", "goal"],
+    });
+    assert.equal(createdGoal.created, true);
+    assert.equal(typeof createdGoal.goal.goal_id, "string");
+    assert.equal(createdGoal.goal.status, "active");
+
+    const fetchedGoal = await callTool(client, "goal.get", {
+      goal_id: createdGoal.goal.goal_id,
+    });
+    assert.equal(fetchedGoal.found, true);
+    assert.equal(fetchedGoal.goal.goal_id, createdGoal.goal.goal_id);
+
+    const listedGoals = await callTool(client, "goal.list", {
+      status: "active",
+      limit: 10,
+    });
+    assert.ok(listedGoals.count >= 1);
+    assert.ok(listedGoals.goals.some((goal) => goal.goal_id === createdGoal.goal.goal_id));
 
     const runBegin = await callTool(client, "run.begin", {
       mutation: nextMutation(testId, "run.begin", () => mutationCounter++),

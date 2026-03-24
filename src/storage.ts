@@ -70,6 +70,66 @@ export type MemoryRecord = {
   score?: number;
 };
 
+export type GoalStatus =
+  | "draft"
+  | "active"
+  | "blocked"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "archived";
+
+export type GoalRiskTier = "low" | "medium" | "high" | "critical";
+
+export type GoalAutonomyMode =
+  | "observe"
+  | "recommend"
+  | "stage"
+  | "execute_bounded"
+  | "execute_destructive_with_approval";
+
+export type GoalRecord = {
+  goal_id: string;
+  created_at: string;
+  updated_at: string;
+  title: string;
+  objective: string;
+  status: GoalStatus;
+  priority: number;
+  risk_tier: GoalRiskTier;
+  autonomy_mode: GoalAutonomyMode;
+  target_entity_type: string | null;
+  target_entity_id: string | null;
+  acceptance_criteria: string[];
+  constraints: string[];
+  assumptions: string[];
+  budget: Record<string, unknown>;
+  owner: Record<string, unknown>;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  active_plan_id: string | null;
+  result_summary: string | null;
+  result: Record<string, unknown> | null;
+  source_client: string | null;
+  source_model: string | null;
+  source_agent: string | null;
+};
+
+export type GoalEventRecord = {
+  id: string;
+  goal_id: string;
+  created_at: string;
+  event_type: string;
+  from_status: GoalStatus | null;
+  to_status: GoalStatus | null;
+  summary: string;
+  details: Record<string, unknown>;
+  source_client: string | null;
+  source_model: string | null;
+  source_agent: string | null;
+};
+
 export type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 export type TaskRecord = {
@@ -601,6 +661,11 @@ export class Storage {
         version: 9,
         name: "add-trichat-reliability-schema",
         run: () => this.applyTriChatReliabilitySchemaMigration(),
+      },
+      {
+        version: 10,
+        name: "add-agentic-runtime-foundation-schema",
+        run: () => this.applyAgenticSchemaMigration(),
       },
     ]);
     this.ensureRuntimeSchemaCompleteness();
@@ -2157,6 +2222,251 @@ export class Storage {
           .prepare(`SELECT COUNT(*) AS count FROM imprint_snapshots`)
           .get() as Record<string, unknown>);
     return Number(row.count ?? 0);
+  }
+
+  createGoal(params: {
+    goal_id?: string;
+    title: string;
+    objective: string;
+    status?: GoalStatus;
+    priority?: number;
+    risk_tier?: GoalRiskTier;
+    autonomy_mode?: GoalAutonomyMode;
+    target_entity_type?: string;
+    target_entity_id?: string;
+    acceptance_criteria: string[];
+    constraints?: string[];
+    assumptions?: string[];
+    budget?: Record<string, unknown>;
+    owner?: Record<string, unknown>;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }): { created: boolean; goal: GoalRecord } {
+    const now = new Date().toISOString();
+    const goalId = params.goal_id?.trim() || crypto.randomUUID();
+    const existing = this.getGoalById(goalId);
+    if (existing) {
+      return {
+        created: false,
+        goal: existing,
+      };
+    }
+
+    const title = params.title.trim();
+    const objective = params.objective.trim();
+    if (!title || !objective) {
+      throw new Error("goal title and objective are required");
+    }
+
+    const targetEntityType = params.target_entity_type?.trim() || null;
+    const targetEntityId = params.target_entity_id?.trim() || null;
+    if ((targetEntityType && !targetEntityId) || (!targetEntityType && targetEntityId)) {
+      throw new Error("goal target_entity_type and target_entity_id must be provided together");
+    }
+
+    const acceptanceCriteria = dedupeNonEmpty(params.acceptance_criteria ?? []);
+    if (acceptanceCriteria.length === 0) {
+      throw new Error("goal acceptance_criteria is required");
+    }
+
+    const status = normalizeGoalStatus(params.status);
+    const priority = parseBoundedInt(params.priority, 0, 0, 100);
+    const riskTier = normalizeGoalRiskTier(params.risk_tier);
+    const autonomyMode = normalizeGoalAutonomyMode(params.autonomy_mode);
+    const constraints = dedupeNonEmpty(params.constraints ?? []);
+    const assumptions = dedupeNonEmpty(params.assumptions ?? []);
+    const tags = dedupeNonEmpty(params.tags ?? []);
+    const budget = parseLooseObject(params.budget ?? {});
+    const owner = parseLooseObject(params.owner ?? {});
+    const metadata = parseLooseObject(params.metadata ?? {});
+
+    const create = this.db.transaction(() => {
+      const inserted = this.db
+        .prepare(
+          `INSERT INTO goals (
+             goal_id, created_at, updated_at, title, objective, status, priority, risk_tier, autonomy_mode,
+             target_entity_type, target_entity_id, acceptance_criteria_json, constraints_json, assumptions_json,
+             budget_json, owner_json, tags_json, metadata_json, active_plan_id, result_summary, result_json,
+             source_client, source_model, source_agent
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)
+           ON CONFLICT(goal_id) DO NOTHING`
+        )
+        .run(
+          goalId,
+          now,
+          now,
+          title,
+          objective,
+          status,
+          priority,
+          riskTier,
+          autonomyMode,
+          targetEntityType,
+          targetEntityId,
+          stableStringify(acceptanceCriteria),
+          stableStringify(constraints),
+          stableStringify(assumptions),
+          stableStringify(budget),
+          stableStringify(owner),
+          stableStringify(tags),
+          stableStringify(metadata),
+          params.source_client ?? null,
+          params.source_model ?? null,
+          params.source_agent ?? null
+        );
+      const insertedCount = Number(inserted.changes ?? 0);
+      if (insertedCount > 0) {
+        this.appendGoalEvent({
+          goal_id: goalId,
+          event_type: "created",
+          to_status: status,
+          summary: "Goal created.",
+          details: {
+            priority,
+            risk_tier: riskTier,
+            autonomy_mode: autonomyMode,
+          },
+          source_client: params.source_client,
+          source_model: params.source_model,
+          source_agent: params.source_agent,
+        });
+      }
+      return insertedCount > 0;
+    });
+    const created = create();
+
+    const goal = this.getGoalById(goalId);
+    if (!goal) {
+      throw new Error(`Failed to read goal after create: ${goalId}`);
+    }
+    return {
+      created,
+      goal,
+    };
+  }
+
+  appendGoalEvent(params: {
+    goal_id: string;
+    event_type: string;
+    from_status?: GoalStatus | null;
+    to_status?: GoalStatus | null;
+    summary: string;
+    details?: Record<string, unknown>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }): { id: string; created_at: string } {
+    const goalId = params.goal_id.trim();
+    if (!goalId) {
+      throw new Error("goal_id is required");
+    }
+    const summary = params.summary.trim();
+    if (!summary) {
+      throw new Error("goal event summary is required");
+    }
+    const id = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO goal_events (
+           id, goal_id, created_at, event_type, from_status, to_status, summary, details_json,
+           source_client, source_model, source_agent
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        goalId,
+        createdAt,
+        params.event_type.trim() || "event",
+        params.from_status ?? null,
+        params.to_status ?? null,
+        summary,
+        stableStringify(params.details ?? {}),
+        params.source_client ?? null,
+        params.source_model ?? null,
+        params.source_agent ?? null
+      );
+    return {
+      id,
+      created_at: createdAt,
+    };
+  }
+
+  getGoalById(goalId: string): GoalRecord | null {
+    const normalized = goalId.trim();
+    if (!normalized) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT goal_id, created_at, updated_at, title, objective, status, priority, risk_tier, autonomy_mode,
+                target_entity_type, target_entity_id, acceptance_criteria_json, constraints_json, assumptions_json,
+                budget_json, owner_json, tags_json, metadata_json, active_plan_id, result_summary, result_json,
+                source_client, source_model, source_agent
+         FROM goals
+         WHERE goal_id = ?`
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+    return mapGoalRow(row);
+  }
+
+  listGoals(params: {
+    status?: GoalStatus;
+    limit: number;
+    target_entity_type?: string;
+    target_entity_id?: string;
+  }): GoalRecord[] {
+    const limit = Math.max(1, Math.min(500, params.limit));
+    const whereClauses: string[] = [];
+    const values: unknown[] = [];
+    const targetEntityType = params.target_entity_type?.trim();
+    const targetEntityId = params.target_entity_id?.trim();
+
+    if (params.status) {
+      whereClauses.push("status = ?");
+      values.push(normalizeGoalStatus(params.status));
+    }
+    if (targetEntityType) {
+      whereClauses.push("target_entity_type = ?");
+      values.push(targetEntityType);
+    }
+    if (targetEntityId) {
+      whereClauses.push("target_entity_id = ?");
+      values.push(targetEntityId);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(
+        `SELECT goal_id, created_at, updated_at, title, objective, status, priority, risk_tier, autonomy_mode,
+                target_entity_type, target_entity_id, acceptance_criteria_json, constraints_json, assumptions_json,
+                budget_json, owner_json, tags_json, metadata_json, active_plan_id, result_summary, result_json,
+                source_client, source_model, source_agent
+         FROM goals
+         ${whereSql}
+         ORDER BY
+           CASE status
+             WHEN 'active' THEN 0
+             WHEN 'blocked' THEN 1
+             WHEN 'waiting' THEN 2
+             WHEN 'draft' THEN 3
+             WHEN 'failed' THEN 4
+             WHEN 'completed' THEN 5
+             WHEN 'cancelled' THEN 6
+             ELSE 7
+           END,
+           priority DESC,
+           updated_at DESC
+         LIMIT ?`
+      )
+      .all(...values, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapGoalRow(row));
   }
 
   createTask(params: {
@@ -5069,6 +5379,7 @@ export class Storage {
     this.applyTriChatBusMigration();
     this.applyTriChatTurnSchemaMigration();
     this.applyTriChatReliabilitySchemaMigration();
+    this.applyAgenticSchemaMigration();
   }
 
   private applyCoreSchemaMigration(): void {
@@ -5341,6 +5652,185 @@ export class Storage {
     this.ensureIndex("idx_task_events_task", "task_events", "task_id, created_at ASC");
     this.ensureIndex("idx_task_leases_expiry", "task_leases", "lease_expires_at ASC");
     this.ensureIndex("idx_task_artifacts_task", "task_artifacts", "task_id, created_at ASC");
+  }
+
+  private applyAgenticSchemaMigration(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS goals (
+        goal_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        title TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        status TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 0,
+        risk_tier TEXT NOT NULL DEFAULT 'medium',
+        autonomy_mode TEXT NOT NULL DEFAULT 'recommend',
+        target_entity_type TEXT,
+        target_entity_id TEXT,
+        acceptance_criteria_json TEXT NOT NULL,
+        constraints_json TEXT NOT NULL,
+        assumptions_json TEXT NOT NULL,
+        budget_json TEXT NOT NULL,
+        owner_json TEXT NOT NULL,
+        tags_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        active_plan_id TEXT,
+        result_summary TEXT,
+        result_json TEXT,
+        source_client TEXT,
+        source_model TEXT,
+        source_agent TEXT
+      );
+      CREATE TABLE IF NOT EXISTS goal_events (
+        id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        from_status TEXT,
+        to_status TEXT,
+        summary TEXT NOT NULL,
+        details_json TEXT NOT NULL,
+        source_client TEXT,
+        source_model TEXT,
+        source_agent TEXT
+      );
+      CREATE TABLE IF NOT EXISTS plans (
+        plan_id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        status TEXT NOT NULL,
+        planner_kind TEXT NOT NULL,
+        planner_id TEXT,
+        selected INTEGER NOT NULL DEFAULT 0,
+        confidence REAL,
+        assumptions_json TEXT NOT NULL,
+        success_criteria_json TEXT NOT NULL,
+        rollback_json TEXT NOT NULL,
+        budget_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        source_client TEXT,
+        source_model TEXT,
+        source_agent TEXT
+      );
+      CREATE TABLE IF NOT EXISTS plan_steps (
+        step_id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        step_kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        executor_kind TEXT,
+        executor_ref TEXT,
+        tool_name TEXT,
+        input_json TEXT NOT NULL,
+        expected_artifact_types_json TEXT NOT NULL,
+        acceptance_checks_json TEXT NOT NULL,
+        retry_policy_json TEXT NOT NULL,
+        timeout_seconds INTEGER,
+        task_id TEXT,
+        run_id TEXT,
+        metadata_json TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS plan_step_edges (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        from_step_id TEXT NOT NULL,
+        to_step_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        condition_json TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS artifacts (
+        artifact_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        artifact_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        goal_id TEXT,
+        plan_id TEXT,
+        step_id TEXT,
+        task_id TEXT,
+        run_id TEXT,
+        thread_id TEXT,
+        turn_id TEXT,
+        pack_id TEXT,
+        producer_kind TEXT NOT NULL,
+        producer_id TEXT,
+        uri TEXT,
+        content_text TEXT,
+        content_json TEXT,
+        hash TEXT,
+        trust_tier TEXT NOT NULL DEFAULT 'raw',
+        freshness_expires_at TEXT,
+        supersedes_artifact_id TEXT,
+        metadata_json TEXT NOT NULL,
+        source_client TEXT,
+        source_model TEXT,
+        source_agent TEXT
+      );
+      CREATE TABLE IF NOT EXISTS artifact_links (
+        id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        src_artifact_id TEXT NOT NULL,
+        dst_artifact_id TEXT,
+        dst_entity_type TEXT,
+        dst_entity_id TEXT,
+        relation TEXT NOT NULL,
+        rationale TEXT,
+        metadata_json TEXT NOT NULL,
+        source_client TEXT,
+        source_model TEXT,
+        source_agent TEXT
+      );
+      CREATE TABLE IF NOT EXISTS pack_hook_runs (
+        hook_run_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        pack_id TEXT NOT NULL,
+        hook_kind TEXT NOT NULL,
+        hook_name TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        goal_id TEXT,
+        plan_id TEXT,
+        step_id TEXT,
+        status TEXT NOT NULL,
+        summary TEXT,
+        score REAL,
+        input_json TEXT NOT NULL,
+        output_json TEXT,
+        error_text TEXT,
+        source_client TEXT,
+        source_model TEXT,
+        source_agent TEXT
+      );
+    `);
+
+    this.ensureIndex("idx_goals_status_priority", "goals", "status, priority DESC, updated_at DESC");
+    this.ensureIndex("idx_goals_target", "goals", "target_entity_type, target_entity_id, updated_at DESC");
+    this.ensureIndex("idx_goal_events_goal", "goal_events", "goal_id, created_at ASC");
+    this.ensureIndex("idx_plans_goal", "plans", "goal_id, updated_at DESC");
+    this.ensureIndex("idx_plans_goal_selected", "plans", "goal_id, selected DESC, updated_at DESC");
+    this.ensureIndex("idx_plan_steps_plan_seq", "plan_steps", "plan_id, seq ASC");
+    this.ensureIndex("idx_plan_steps_status", "plan_steps", "plan_id, status, seq ASC");
+    this.ensureIndex("idx_plan_step_edges_plan", "plan_step_edges", "plan_id, from_step_id, to_step_id");
+    this.ensureIndex("idx_artifacts_goal", "artifacts", "goal_id, created_at DESC");
+    this.ensureIndex("idx_artifacts_plan", "artifacts", "plan_id, created_at DESC");
+    this.ensureIndex("idx_artifacts_step", "artifacts", "step_id, created_at DESC");
+    this.ensureIndex("idx_artifacts_run", "artifacts", "run_id, created_at DESC");
+    this.ensureIndex("idx_artifacts_type_trust", "artifacts", "artifact_type, trust_tier, created_at DESC");
+    this.ensureIndex("idx_artifact_links_src", "artifact_links", "src_artifact_id, created_at ASC");
+    this.ensureIndex("idx_artifact_links_dst_artifact", "artifact_links", "dst_artifact_id, created_at ASC");
+    this.ensureIndex("idx_artifact_links_dst_entity", "artifact_links", "dst_entity_type, dst_entity_id, created_at ASC");
+    this.ensureIndex("idx_pack_hook_runs_target", "pack_hook_runs", "target_type, target_id, created_at DESC");
+    this.ensureIndex("idx_pack_hook_runs_pack_kind", "pack_hook_runs", "pack_id, hook_kind, created_at DESC");
   }
 
   private applyTriChatSchemaMigration(): void {
@@ -5671,6 +6161,57 @@ function mapImprintSnapshotRow(row: Record<string, unknown>): ImprintSnapshotRec
   };
 }
 
+function mapGoalRow(row: Record<string, unknown>): GoalRecord {
+  return {
+    goal_id: String(row.goal_id ?? ""),
+    created_at: String(row.created_at ?? ""),
+    updated_at: String(row.updated_at ?? ""),
+    title: String(row.title ?? ""),
+    objective: String(row.objective ?? ""),
+    status: normalizeGoalStatus(row.status),
+    priority: Number(row.priority ?? 0),
+    risk_tier: normalizeGoalRiskTier(row.risk_tier),
+    autonomy_mode: normalizeGoalAutonomyMode(row.autonomy_mode),
+    target_entity_type: asNullableString(row.target_entity_type),
+    target_entity_id: asNullableString(row.target_entity_id),
+    acceptance_criteria: safeParseJsonArray(row.acceptance_criteria_json),
+    constraints: safeParseJsonArray(row.constraints_json),
+    assumptions: safeParseJsonArray(row.assumptions_json),
+    budget: parseJsonObject(row.budget_json),
+    owner: parseJsonObject(row.owner_json),
+    tags: safeParseJsonArray(row.tags_json),
+    metadata: parseJsonObject(row.metadata_json),
+    active_plan_id: asNullableString(row.active_plan_id),
+    result_summary: asNullableString(row.result_summary),
+    result: parseNullableJsonObject(row.result_json),
+    source_client: asNullableString(row.source_client),
+    source_model: asNullableString(row.source_model),
+    source_agent: asNullableString(row.source_agent),
+  };
+}
+
+function mapGoalEventRow(row: Record<string, unknown>): GoalEventRecord {
+  return {
+    id: String(row.id ?? ""),
+    goal_id: String(row.goal_id ?? ""),
+    created_at: String(row.created_at ?? ""),
+    event_type: String(row.event_type ?? ""),
+    from_status:
+      row.from_status === null || row.from_status === undefined
+        ? null
+        : normalizeGoalStatus(row.from_status),
+    to_status:
+      row.to_status === null || row.to_status === undefined
+        ? null
+        : normalizeGoalStatus(row.to_status),
+    summary: String(row.summary ?? ""),
+    details: parseJsonObject(row.details_json),
+    source_client: asNullableString(row.source_client),
+    source_model: asNullableString(row.source_model),
+    source_agent: asNullableString(row.source_agent),
+  };
+}
+
 function mapTaskRow(row: Record<string, unknown>): TaskRecord {
   const leaseOwnerId = asNullableString(row.lease_owner_id);
   const leaseExpiresAt = asNullableString(row.lease_expires_at);
@@ -5933,6 +6474,43 @@ function normalizeTrustTier(value: unknown): TrustTier {
     return normalized;
   }
   return "raw";
+}
+
+function normalizeGoalStatus(value: unknown): GoalStatus {
+  const normalized = String(value ?? "draft");
+  if (
+    normalized === "active" ||
+    normalized === "blocked" ||
+    normalized === "waiting" ||
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized === "cancelled" ||
+    normalized === "archived"
+  ) {
+    return normalized;
+  }
+  return "draft";
+}
+
+function normalizeGoalRiskTier(value: unknown): GoalRiskTier {
+  const normalized = String(value ?? "medium");
+  if (normalized === "low" || normalized === "high" || normalized === "critical") {
+    return normalized;
+  }
+  return "medium";
+}
+
+function normalizeGoalAutonomyMode(value: unknown): GoalAutonomyMode {
+  const normalized = String(value ?? "recommend");
+  if (
+    normalized === "observe" ||
+    normalized === "stage" ||
+    normalized === "execute_bounded" ||
+    normalized === "execute_destructive_with_approval"
+  ) {
+    return normalized;
+  }
+  return "recommend";
 }
 
 function normalizeTaskStatus(value: unknown): TaskStatus {

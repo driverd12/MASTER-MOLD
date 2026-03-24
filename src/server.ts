@@ -29,6 +29,7 @@ import {
   transcriptSummarizeSchema,
 } from "./tools/transcript.js";
 import { adrCreateSchema, createAdr } from "./tools/adr.js";
+import { goalCreate, goalCreateSchema, goalGet, goalGetSchema, goalList, goalListSchema } from "./tools/goal.js";
 import { whoKnows, whoKnowsSchema } from "./tools/who_knows.js";
 import { policyEvaluateSchema, evaluatePolicy } from "./tools/policy.js";
 import { runBegin, runBeginSchema, runEnd, runEndSchema, runStep, runStepSchema, runTimeline, runTimelineSchema } from "./tools/run.js";
@@ -225,6 +226,18 @@ registerTool("memory.search", "Search long-term memory using lexical matching.",
 
 registerTool("memory.get", "Fetch a memory by id for deterministic debugging.", memoryGetSchema, (input) =>
   getMemory(storage, input)
+);
+
+registerTool("goal.create", "Create a durable goal with acceptance criteria and autonomy settings.", goalCreateSchema, (input) =>
+  goalCreate(storage, input)
+);
+
+registerTool("goal.get", "Fetch a durable goal by id.", goalGetSchema, (input) =>
+  goalGet(storage, input)
+);
+
+registerTool("goal.list", "List durable goals by status or target filters.", goalListSchema, (input) =>
+  goalList(storage, input)
 );
 
 registerTool(
