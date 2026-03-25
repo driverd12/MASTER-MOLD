@@ -130,6 +130,71 @@ export type GoalEventRecord = {
   source_agent: string | null;
 };
 
+export type PlanStatus = "draft" | "candidate" | "selected" | "in_progress" | "completed" | "invalidated" | "archived";
+
+export type PlanPlannerKind = "core" | "pack" | "human" | "trichat";
+
+export type PlanStepStatus =
+  | "pending"
+  | "ready"
+  | "running"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "invalidated";
+
+export type PlanStepKind = "analysis" | "mutation" | "verification" | "decision" | "handoff";
+
+export type PlanExecutorKind = "tool" | "task" | "worker" | "human" | "trichat";
+
+export type PlanRecord = {
+  plan_id: string;
+  goal_id: string;
+  created_at: string;
+  updated_at: string;
+  title: string;
+  summary: string;
+  status: PlanStatus;
+  planner_kind: PlanPlannerKind;
+  planner_id: string | null;
+  selected: boolean;
+  confidence: number | null;
+  assumptions: string[];
+  success_criteria: string[];
+  rollback: string[];
+  budget: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  source_client: string | null;
+  source_model: string | null;
+  source_agent: string | null;
+};
+
+export type PlanStepRecord = {
+  step_id: string;
+  plan_id: string;
+  created_at: string;
+  updated_at: string;
+  seq: number;
+  title: string;
+  step_kind: PlanStepKind;
+  status: PlanStepStatus;
+  executor_kind: PlanExecutorKind | null;
+  executor_ref: string | null;
+  tool_name: string | null;
+  input: Record<string, unknown>;
+  expected_artifact_types: string[];
+  acceptance_checks: string[];
+  retry_policy: Record<string, unknown>;
+  timeout_seconds: number | null;
+  task_id: string | null;
+  run_id: string | null;
+  metadata: Record<string, unknown>;
+  started_at: string | null;
+  finished_at: string | null;
+  depends_on: string[];
+};
+
 export type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 export type TaskRecord = {
@@ -2467,6 +2532,634 @@ export class Storage {
       )
       .all(...values, limit) as Array<Record<string, unknown>>;
     return rows.map((row) => mapGoalRow(row));
+  }
+
+  createPlan(params: {
+    plan_id?: string;
+    goal_id: string;
+    title: string;
+    summary: string;
+    status?: PlanStatus;
+    planner_kind?: PlanPlannerKind;
+    planner_id?: string;
+    selected?: boolean;
+    confidence?: number;
+    assumptions?: string[];
+    success_criteria?: string[];
+    rollback?: string[];
+    budget?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    steps: Array<{
+      step_id?: string;
+      seq: number;
+      title: string;
+      step_kind?: PlanStepKind;
+      status?: PlanStepStatus;
+      executor_kind?: PlanExecutorKind;
+      executor_ref?: string;
+      tool_name?: string;
+      input?: Record<string, unknown>;
+      expected_artifact_types?: string[];
+      acceptance_checks?: string[];
+      retry_policy?: Record<string, unknown>;
+      timeout_seconds?: number;
+      metadata?: Record<string, unknown>;
+      depends_on?: string[];
+    }>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }): { created: boolean; plan: PlanRecord; steps: PlanStepRecord[] } {
+    const now = new Date().toISOString();
+    const planId = params.plan_id?.trim() || crypto.randomUUID();
+    const existing = this.getPlanById(planId);
+    if (existing) {
+      return {
+        created: false,
+        plan: existing,
+        steps: this.listPlanSteps(planId),
+      };
+    }
+
+    const goalId = params.goal_id.trim();
+    if (!goalId) {
+      throw new Error("plan goal_id is required");
+    }
+    const goal = this.getGoalById(goalId);
+    if (!goal) {
+      throw new Error(`Plan goal not found: ${goalId}`);
+    }
+
+    const title = params.title.trim();
+    const summary = params.summary.trim();
+    if (!title || !summary) {
+      throw new Error("plan title and summary are required");
+    }
+
+    const selected = parseBoolean(params.selected, false);
+    const status =
+      params.status === undefined && selected
+        ? "selected"
+        : normalizePlanStatus(params.status);
+    const plannerKind = normalizePlanPlannerKind(params.planner_kind);
+    const plannerId = params.planner_id?.trim() || null;
+    const confidence =
+      params.confidence === null || params.confidence === undefined
+        ? null
+        : parseBoundedFloat(params.confidence, 0, 0, 1);
+    const assumptions = dedupeNonEmpty(params.assumptions ?? []);
+    const successCriteria = dedupeNonEmpty(params.success_criteria ?? []);
+    const rollback = dedupeNonEmpty(params.rollback ?? []);
+    const budget = parseLooseObject(params.budget ?? {});
+    const metadata = parseLooseObject(params.metadata ?? {});
+
+    const rawSteps = params.steps ?? [];
+    if (rawSteps.length === 0) {
+      throw new Error("plan steps are required");
+    }
+
+    const stepIds = new Set<string>();
+    const stepSeqs = new Set<number>();
+    const preparedSteps = rawSteps.map((step, index) => {
+      const stepId = step.step_id?.trim() || crypto.randomUUID();
+      if (stepIds.has(stepId)) {
+        throw new Error(`Duplicate plan step_id: ${stepId}`);
+      }
+      stepIds.add(stepId);
+
+      const seq = parseBoundedInt(step.seq, index + 1, 1, 1_000_000);
+      if (stepSeqs.has(seq)) {
+        throw new Error(`Duplicate plan step seq: ${seq}`);
+      }
+      stepSeqs.add(seq);
+
+      const stepTitle = step.title.trim();
+      if (!stepTitle) {
+        throw new Error("plan step title is required");
+      }
+
+      return {
+        step_id: stepId,
+        seq,
+        title: stepTitle,
+        step_kind: normalizePlanStepKind(step.step_kind),
+        status: normalizePlanStepStatus(step.status),
+        executor_kind: normalizeOptionalPlanExecutorKind(step.executor_kind),
+        executor_ref: step.executor_ref?.trim() || null,
+        tool_name: step.tool_name?.trim() || null,
+        input: parseLooseObject(step.input ?? {}),
+        expected_artifact_types: dedupeNonEmpty(step.expected_artifact_types ?? []),
+        acceptance_checks: dedupeNonEmpty(step.acceptance_checks ?? []),
+        retry_policy: parseLooseObject(step.retry_policy ?? {}),
+        timeout_seconds:
+          step.timeout_seconds === null || step.timeout_seconds === undefined
+            ? null
+            : parseBoundedInt(step.timeout_seconds, 60, 1, 86_400),
+        metadata: parseLooseObject(step.metadata ?? {}),
+        depends_on: dedupeNonEmpty(step.depends_on ?? []),
+      };
+    });
+
+    for (const step of preparedSteps) {
+      for (const dependencyId of step.depends_on) {
+        if (dependencyId === step.step_id) {
+          throw new Error(`Plan step cannot depend on itself: ${step.step_id}`);
+        }
+        if (!stepIds.has(dependencyId)) {
+          throw new Error(`Plan step dependency not found in plan: ${dependencyId}`);
+        }
+      }
+    }
+
+    const create = this.db.transaction(() => {
+      if (selected) {
+        this.db
+          .prepare(`UPDATE plans SET selected = 0, updated_at = ? WHERE goal_id = ?`)
+          .run(now, goalId);
+      }
+
+      const inserted = this.db
+        .prepare(
+          `INSERT INTO plans (
+             plan_id, goal_id, created_at, updated_at, title, summary, status, planner_kind, planner_id,
+             selected, confidence, assumptions_json, success_criteria_json, rollback_json, budget_json,
+             metadata_json, source_client, source_model, source_agent
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(plan_id) DO NOTHING`
+        )
+        .run(
+          planId,
+          goalId,
+          now,
+          now,
+          title,
+          summary,
+          status,
+          plannerKind,
+          plannerId,
+          selected ? 1 : 0,
+          confidence,
+          stableStringify(assumptions),
+          stableStringify(successCriteria),
+          stableStringify(rollback),
+          stableStringify(budget),
+          stableStringify(metadata),
+          params.source_client ?? null,
+          params.source_model ?? null,
+          params.source_agent ?? null
+        );
+      const insertedCount = Number(inserted.changes ?? 0);
+      if (insertedCount === 0) {
+        return false;
+      }
+
+      const insertStep = this.db.prepare(
+        `INSERT INTO plan_steps (
+           step_id, plan_id, created_at, updated_at, seq, title, step_kind, status, executor_kind, executor_ref,
+           tool_name, input_json, expected_artifact_types_json, acceptance_checks_json, retry_policy_json,
+           timeout_seconds, task_id, run_id, metadata_json, started_at, finished_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL)`
+      );
+      const insertEdge = this.db.prepare(
+        `INSERT INTO plan_step_edges (
+           id, plan_id, from_step_id, to_step_id, relation, condition_json
+         ) VALUES (?, ?, ?, ?, 'depends_on', '{}')`
+      );
+
+      for (const step of preparedSteps) {
+        insertStep.run(
+          step.step_id,
+          planId,
+          now,
+          now,
+          step.seq,
+          step.title,
+          step.step_kind,
+          step.status,
+          step.executor_kind,
+          step.executor_ref,
+          step.tool_name,
+          stableStringify(step.input),
+          stableStringify(step.expected_artifact_types),
+          stableStringify(step.acceptance_checks),
+          stableStringify(step.retry_policy),
+          step.timeout_seconds,
+          stableStringify(step.metadata)
+        );
+        for (const dependencyId of step.depends_on) {
+          insertEdge.run(crypto.randomUUID(), planId, dependencyId, step.step_id);
+        }
+      }
+
+      if (selected) {
+        this.db
+          .prepare(`UPDATE goals SET updated_at = ?, active_plan_id = ? WHERE goal_id = ?`)
+          .run(now, planId, goalId);
+        this.appendGoalEvent({
+          goal_id: goalId,
+          event_type: "active_plan_updated",
+          from_status: goal.status,
+          to_status: goal.status,
+          summary: "Goal active plan updated.",
+          details: {
+            active_plan_id: planId,
+            selected: true,
+          },
+          source_client: params.source_client,
+          source_model: params.source_model,
+          source_agent: params.source_agent,
+        });
+      }
+
+      return true;
+    });
+    const created = create();
+    const plan = this.getPlanById(planId);
+    if (!plan) {
+      throw new Error(`Failed to read plan after create: ${planId}`);
+    }
+    return {
+      created,
+      plan,
+      steps: this.listPlanSteps(planId),
+    };
+  }
+
+  getPlanById(planId: string): PlanRecord | null {
+    const normalized = planId.trim();
+    if (!normalized) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT plan_id, goal_id, created_at, updated_at, title, summary, status, planner_kind, planner_id,
+                selected, confidence, assumptions_json, success_criteria_json, rollback_json, budget_json,
+                metadata_json, source_client, source_model, source_agent
+         FROM plans
+         WHERE plan_id = ?`
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+    return mapPlanRow(row);
+  }
+
+  listPlans(params: {
+    goal_id?: string;
+    status?: PlanStatus;
+    selected_only?: boolean;
+    limit: number;
+  }): PlanRecord[] {
+    const limit = Math.max(1, Math.min(500, params.limit));
+    const whereClauses: string[] = [];
+    const values: unknown[] = [];
+    const goalId = params.goal_id?.trim();
+
+    if (goalId) {
+      whereClauses.push("goal_id = ?");
+      values.push(goalId);
+    }
+    if (params.status) {
+      whereClauses.push("status = ?");
+      values.push(normalizePlanStatus(params.status));
+    }
+    if (params.selected_only) {
+      whereClauses.push("selected = 1");
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(
+        `SELECT plan_id, goal_id, created_at, updated_at, title, summary, status, planner_kind, planner_id,
+                selected, confidence, assumptions_json, success_criteria_json, rollback_json, budget_json,
+                metadata_json, source_client, source_model, source_agent
+         FROM plans
+         ${whereSql}
+         ORDER BY
+           selected DESC,
+           CASE status
+             WHEN 'selected' THEN 0
+             WHEN 'in_progress' THEN 1
+             WHEN 'candidate' THEN 2
+             WHEN 'draft' THEN 3
+             WHEN 'completed' THEN 4
+             WHEN 'invalidated' THEN 5
+             ELSE 6
+           END,
+           updated_at DESC
+         LIMIT ?`
+      )
+      .all(...values, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapPlanRow(row));
+  }
+
+  listPlanSteps(planId: string): PlanStepRecord[] {
+    const normalized = planId.trim();
+    if (!normalized) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT step_id, plan_id, created_at, updated_at, seq, title, step_kind, status, executor_kind, executor_ref,
+                tool_name, input_json, expected_artifact_types_json, acceptance_checks_json, retry_policy_json,
+                timeout_seconds, task_id, run_id, metadata_json, started_at, finished_at
+         FROM plan_steps
+         WHERE plan_id = ?
+         ORDER BY seq ASC`
+      )
+      .all(normalized) as Array<Record<string, unknown>>;
+    const edgeRows = this.db
+      .prepare(
+        `SELECT from_step_id, to_step_id
+         FROM plan_step_edges
+         WHERE plan_id = ?
+         ORDER BY from_step_id ASC`
+      )
+      .all(normalized) as Array<Record<string, unknown>>;
+    const dependsOnByStepId = new Map<string, string[]>();
+    for (const row of edgeRows) {
+      const toStepId = String(row.to_step_id ?? "");
+      const fromStepId = String(row.from_step_id ?? "");
+      if (!toStepId || !fromStepId) {
+        continue;
+      }
+      const current = dependsOnByStepId.get(toStepId) ?? [];
+      current.push(fromStepId);
+      dependsOnByStepId.set(toStepId, current);
+    }
+    return rows.map((row) =>
+      mapPlanStepRow(row, dependsOnByStepId.get(String(row.step_id ?? "")) ?? [])
+    );
+  }
+
+  updatePlan(params: {
+    plan_id: string;
+    title?: string;
+    summary?: string;
+    status?: PlanStatus;
+    selected?: boolean;
+    deselect_other_plans?: boolean;
+    planner_id?: string;
+    confidence?: number | null;
+    assumptions?: string[];
+    success_criteria?: string[];
+    rollback?: string[];
+    budget?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }): { plan: PlanRecord; steps: PlanStepRecord[] } {
+    const planId = params.plan_id.trim();
+    if (!planId) {
+      throw new Error("plan_id is required");
+    }
+    const existing = this.getPlanById(planId);
+    if (!existing) {
+      throw new Error(`Plan not found: ${planId}`);
+    }
+    const now = new Date().toISOString();
+    const selected =
+      typeof params.selected === "boolean" ? params.selected : existing.selected;
+    const title = params.title?.trim() || existing.title;
+    const summary = params.summary?.trim() || existing.summary;
+    const status = normalizeUpdatedPlanStatus(existing, params.status, params.selected);
+    const plannerId = params.planner_id === undefined ? existing.planner_id : params.planner_id?.trim() || null;
+    const confidence =
+      params.confidence === undefined
+        ? existing.confidence
+        : params.confidence === null
+          ? null
+          : parseBoundedFloat(params.confidence, 0, 0, 1);
+    const assumptions = params.assumptions ? dedupeNonEmpty(params.assumptions) : existing.assumptions;
+    const successCriteria = params.success_criteria
+      ? dedupeNonEmpty(params.success_criteria)
+      : existing.success_criteria;
+    const rollback = params.rollback ? dedupeNonEmpty(params.rollback) : existing.rollback;
+    const budget = params.budget ? parseLooseObject(params.budget) : existing.budget;
+    const metadata = params.metadata ? { ...existing.metadata, ...parseLooseObject(params.metadata) } : existing.metadata;
+    const deselectOtherPlans = params.deselect_other_plans !== false;
+
+    const update = this.db.transaction(() => {
+      if (selected && deselectOtherPlans) {
+        this.db
+          .prepare(`UPDATE plans SET selected = 0, updated_at = ? WHERE goal_id = ? AND plan_id <> ?`)
+          .run(now, existing.goal_id, planId);
+      }
+
+      this.db
+        .prepare(
+          `UPDATE plans
+           SET updated_at = ?,
+               title = ?,
+               summary = ?,
+               status = ?,
+               planner_id = ?,
+               selected = ?,
+               confidence = ?,
+               assumptions_json = ?,
+               success_criteria_json = ?,
+               rollback_json = ?,
+               budget_json = ?,
+               metadata_json = ?
+           WHERE plan_id = ?`
+        )
+        .run(
+          now,
+          title,
+          summary,
+          status,
+          plannerId,
+          selected ? 1 : 0,
+          confidence,
+          stableStringify(assumptions),
+          stableStringify(successCriteria),
+          stableStringify(rollback),
+          stableStringify(budget),
+          stableStringify(metadata),
+          planId
+        );
+
+      const previousActivePlanId = existing.goal_id ? this.getGoalById(existing.goal_id)?.active_plan_id ?? null : null;
+      let nextActivePlanId = previousActivePlanId;
+      if (selected) {
+        nextActivePlanId = planId;
+      } else if (previousActivePlanId === planId) {
+        const replacement = this.db
+          .prepare(
+            `SELECT plan_id
+             FROM plans
+             WHERE goal_id = ? AND plan_id <> ? AND selected = 1
+             ORDER BY updated_at DESC
+             LIMIT 1`
+          )
+          .get(existing.goal_id, planId) as Record<string, unknown> | undefined;
+        nextActivePlanId = replacement ? String(replacement.plan_id ?? "") || null : null;
+      }
+
+      if (nextActivePlanId !== previousActivePlanId) {
+        this.db
+          .prepare(`UPDATE goals SET updated_at = ?, active_plan_id = ? WHERE goal_id = ?`)
+          .run(now, nextActivePlanId, existing.goal_id);
+        this.appendGoalEvent({
+          goal_id: existing.goal_id,
+          event_type: "active_plan_updated",
+          from_status: null,
+          to_status: null,
+          summary: "Goal active plan updated.",
+          details: {
+            previous_active_plan_id: previousActivePlanId,
+            active_plan_id: nextActivePlanId,
+          },
+          source_client: params.source_client,
+          source_model: params.source_model,
+          source_agent: params.source_agent,
+        });
+      }
+    });
+    update();
+
+    const plan = this.getPlanById(planId);
+    if (!plan) {
+      throw new Error(`Failed to read plan after update: ${planId}`);
+    }
+    return {
+      plan,
+      steps: this.listPlanSteps(planId),
+    };
+  }
+
+  updatePlanStep(params: {
+    plan_id: string;
+    step_id: string;
+    status?: PlanStepStatus;
+    summary?: string;
+    executor_kind?: PlanExecutorKind;
+    executor_ref?: string;
+    task_id?: string;
+    run_id?: string;
+    produced_artifact_ids?: string[];
+    metadata?: Record<string, unknown>;
+  }): { plan: PlanRecord; step: PlanStepRecord } {
+    const planId = params.plan_id.trim();
+    const stepId = params.step_id.trim();
+    if (!planId || !stepId) {
+      throw new Error("plan_id and step_id are required");
+    }
+
+    const plan = this.getPlanById(planId);
+    if (!plan) {
+      throw new Error(`Plan not found: ${planId}`);
+    }
+    const existingStep = this.listPlanSteps(planId).find((step) => step.step_id === stepId);
+    if (!existingStep) {
+      throw new Error(`Plan step not found: ${stepId}`);
+    }
+
+    const nextStatus = params.status ? normalizePlanStepStatus(params.status) : existingStep.status;
+    const nextExecutorKind =
+      params.executor_kind === undefined
+        ? existingStep.executor_kind
+        : normalizeOptionalPlanExecutorKind(params.executor_kind);
+    const nextExecutorRef =
+      params.executor_ref === undefined ? existingStep.executor_ref : params.executor_ref?.trim() || null;
+    const nextTaskId = params.task_id === undefined ? existingStep.task_id : params.task_id?.trim() || null;
+    const nextRunId = params.run_id === undefined ? existingStep.run_id : params.run_id?.trim() || null;
+    const nextMetadata = {
+      ...existingStep.metadata,
+      ...parseLooseObject(params.metadata ?? {}),
+    } as Record<string, unknown>;
+    if (params.summary?.trim()) {
+      nextMetadata.last_summary = params.summary.trim();
+    }
+    if (params.produced_artifact_ids?.length) {
+      nextMetadata.produced_artifact_ids = dedupeNonEmpty(params.produced_artifact_ids);
+    }
+
+    const now = new Date().toISOString();
+    let startedAt = existingStep.started_at;
+    let finishedAt = existingStep.finished_at;
+    if (nextStatus === "running") {
+      startedAt = startedAt ?? now;
+      finishedAt = null;
+    } else if (
+      nextStatus === "completed" ||
+      nextStatus === "failed" ||
+      nextStatus === "skipped" ||
+      nextStatus === "invalidated"
+    ) {
+      startedAt = startedAt ?? now;
+      finishedAt = now;
+    } else if (nextStatus === "pending" || nextStatus === "ready" || nextStatus === "blocked") {
+      finishedAt = null;
+    }
+
+    const update = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE plan_steps
+           SET updated_at = ?,
+               status = ?,
+               executor_kind = ?,
+               executor_ref = ?,
+               task_id = ?,
+               run_id = ?,
+               metadata_json = ?,
+               started_at = ?,
+               finished_at = ?
+           WHERE plan_id = ? AND step_id = ?`
+        )
+        .run(
+          now,
+          nextStatus,
+          nextExecutorKind,
+          nextExecutorRef,
+          nextTaskId,
+          nextRunId,
+          stableStringify(nextMetadata),
+          startedAt,
+          finishedAt,
+          planId,
+          stepId
+        );
+
+      const updatedSteps = this.listPlanSteps(planId).map((step) =>
+        step.step_id === stepId
+          ? {
+              ...step,
+              updated_at: now,
+              status: nextStatus,
+              executor_kind: nextExecutorKind,
+              executor_ref: nextExecutorRef,
+              task_id: nextTaskId,
+              run_id: nextRunId,
+              metadata: nextMetadata,
+              started_at: startedAt,
+              finished_at: finishedAt,
+            }
+          : step
+      );
+      const nextPlanStatus = derivePlanProgressStatus(plan.status, updatedSteps);
+      if (nextPlanStatus !== plan.status) {
+        this.db
+          .prepare(`UPDATE plans SET updated_at = ?, status = ? WHERE plan_id = ?`)
+          .run(now, nextPlanStatus, planId);
+      } else {
+        this.db.prepare(`UPDATE plans SET updated_at = ? WHERE plan_id = ?`).run(now, planId);
+      }
+    });
+    update();
+
+    const updatedPlan = this.getPlanById(planId);
+    const updatedStep = this.listPlanSteps(planId).find((step) => step.step_id === stepId);
+    if (!updatedPlan || !updatedStep) {
+      throw new Error(`Failed to read updated plan step: ${stepId}`);
+    }
+    return {
+      plan: updatedPlan,
+      step: updatedStep,
+    };
   }
 
   createTask(params: {
@@ -6212,6 +6905,61 @@ function mapGoalEventRow(row: Record<string, unknown>): GoalEventRecord {
   };
 }
 
+function mapPlanRow(row: Record<string, unknown>): PlanRecord {
+  return {
+    plan_id: String(row.plan_id ?? ""),
+    goal_id: String(row.goal_id ?? ""),
+    created_at: String(row.created_at ?? ""),
+    updated_at: String(row.updated_at ?? ""),
+    title: String(row.title ?? ""),
+    summary: String(row.summary ?? ""),
+    status: normalizePlanStatus(row.status),
+    planner_kind: normalizePlanPlannerKind(row.planner_kind),
+    planner_id: asNullableString(row.planner_id),
+    selected: Number(row.selected ?? 0) === 1,
+    confidence:
+      row.confidence === null || row.confidence === undefined ? null : Number(row.confidence),
+    assumptions: safeParseJsonArray(row.assumptions_json),
+    success_criteria: safeParseJsonArray(row.success_criteria_json),
+    rollback: safeParseJsonArray(row.rollback_json),
+    budget: parseJsonObject(row.budget_json),
+    metadata: parseJsonObject(row.metadata_json),
+    source_client: asNullableString(row.source_client),
+    source_model: asNullableString(row.source_model),
+    source_agent: asNullableString(row.source_agent),
+  };
+}
+
+function mapPlanStepRow(row: Record<string, unknown>, dependsOn: string[]): PlanStepRecord {
+  return {
+    step_id: String(row.step_id ?? ""),
+    plan_id: String(row.plan_id ?? ""),
+    created_at: String(row.created_at ?? ""),
+    updated_at: String(row.updated_at ?? ""),
+    seq: Number(row.seq ?? 0),
+    title: String(row.title ?? ""),
+    step_kind: normalizePlanStepKind(row.step_kind),
+    status: normalizePlanStepStatus(row.status),
+    executor_kind: normalizeOptionalPlanExecutorKind(row.executor_kind),
+    executor_ref: asNullableString(row.executor_ref),
+    tool_name: asNullableString(row.tool_name),
+    input: parseJsonObject(row.input_json),
+    expected_artifact_types: safeParseJsonArray(row.expected_artifact_types_json),
+    acceptance_checks: safeParseJsonArray(row.acceptance_checks_json),
+    retry_policy: parseJsonObject(row.retry_policy_json),
+    timeout_seconds:
+      row.timeout_seconds === null || row.timeout_seconds === undefined
+        ? null
+        : Number(row.timeout_seconds),
+    task_id: asNullableString(row.task_id),
+    run_id: asNullableString(row.run_id),
+    metadata: parseJsonObject(row.metadata_json),
+    started_at: asNullableString(row.started_at),
+    finished_at: asNullableString(row.finished_at),
+    depends_on: [...dependsOn],
+  };
+}
+
 function mapTaskRow(row: Record<string, unknown>): TaskRecord {
   const leaseOwnerId = asNullableString(row.lease_owner_id);
   const leaseExpiresAt = asNullableString(row.lease_expires_at);
@@ -6511,6 +7259,118 @@ function normalizeGoalAutonomyMode(value: unknown): GoalAutonomyMode {
     return normalized;
   }
   return "recommend";
+}
+
+function normalizePlanStatus(value: unknown): PlanStatus {
+  const normalized = String(value ?? "draft");
+  if (
+    normalized === "candidate" ||
+    normalized === "selected" ||
+    normalized === "in_progress" ||
+    normalized === "completed" ||
+    normalized === "invalidated" ||
+    normalized === "archived"
+  ) {
+    return normalized;
+  }
+  return "draft";
+}
+
+function normalizePlanPlannerKind(value: unknown): PlanPlannerKind {
+  const normalized = String(value ?? "core");
+  if (normalized === "pack" || normalized === "human" || normalized === "trichat") {
+    return normalized;
+  }
+  return "core";
+}
+
+function normalizePlanStepStatus(value: unknown): PlanStepStatus {
+  const normalized = String(value ?? "pending");
+  if (
+    normalized === "ready" ||
+    normalized === "running" ||
+    normalized === "blocked" ||
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized === "skipped" ||
+    normalized === "invalidated"
+  ) {
+    return normalized;
+  }
+  return "pending";
+}
+
+function normalizePlanStepKind(value: unknown): PlanStepKind {
+  const normalized = String(value ?? "analysis");
+  if (
+    normalized === "mutation" ||
+    normalized === "verification" ||
+    normalized === "decision" ||
+    normalized === "handoff"
+  ) {
+    return normalized;
+  }
+  return "analysis";
+}
+
+function normalizeOptionalPlanExecutorKind(value: unknown): PlanExecutorKind | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const normalized = String(value);
+  if (
+    normalized === "tool" ||
+    normalized === "task" ||
+    normalized === "worker" ||
+    normalized === "human" ||
+    normalized === "trichat"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeUpdatedPlanStatus(
+  existing: PlanRecord,
+  nextStatus: PlanStatus | undefined,
+  nextSelected: boolean | undefined
+): PlanStatus {
+  if (nextStatus !== undefined) {
+    return normalizePlanStatus(nextStatus);
+  }
+  if (nextSelected === true && existing.status !== "selected" && existing.status !== "in_progress") {
+    return "selected";
+  }
+  if (nextSelected === false && existing.status === "selected") {
+    return "candidate";
+  }
+  return existing.status;
+}
+
+function derivePlanProgressStatus(existing: PlanStatus, steps: PlanStepRecord[]): PlanStatus {
+  if (existing === "invalidated" || existing === "archived") {
+    return existing;
+  }
+  if (steps.length === 0) {
+    return existing;
+  }
+  const statuses = steps.map((step) => step.status);
+  if (statuses.every((status) => status === "completed" || status === "skipped")) {
+    return "completed";
+  }
+  if (
+    statuses.some(
+      (status) =>
+        status === "running" ||
+        status === "completed" ||
+        status === "failed" ||
+        status === "skipped" ||
+        status === "invalidated"
+    )
+  ) {
+    return "in_progress";
+  }
+  return existing;
 }
 
 function normalizeTaskStatus(value: unknown): TaskStatus {

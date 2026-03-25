@@ -30,6 +30,7 @@ import {
 } from "./tools/transcript.js";
 import { adrCreateSchema, createAdr } from "./tools/adr.js";
 import { goalCreate, goalCreateSchema, goalGet, goalGetSchema, goalList, goalListSchema } from "./tools/goal.js";
+import { planCreate, planCreateSchema, planGet, planGetSchema, planList, planListSchema, planUpdate, planUpdateSchema } from "./tools/plan.js";
 import { whoKnows, whoKnowsSchema } from "./tools/who_knows.js";
 import { policyEvaluateSchema, evaluatePolicy } from "./tools/policy.js";
 import { runBegin, runBeginSchema, runEnd, runEndSchema, runStep, runStepSchema, runTimeline, runTimelineSchema } from "./tools/run.js";
@@ -228,6 +229,22 @@ registerTool("goal.get", "Fetch a durable goal by id.", goalGetSchema, (input) =
 
 registerTool("goal.list", "List durable goals by status or target filters.", goalListSchema, (input) =>
   goalList(storage, input)
+);
+
+registerTool("plan.create", "Create a durable candidate plan with structured steps for a goal.", planCreateSchema, (input) =>
+  planCreate(storage, input)
+);
+
+registerTool("plan.get", "Fetch a durable plan and its steps by id.", planGetSchema, (input) =>
+  planGet(storage, input)
+);
+
+registerTool("plan.list", "List durable plans by goal, status, or selection state.", planListSchema, (input) =>
+  planList(storage, input)
+);
+
+registerTool("plan.update", "Update durable plan metadata, status, and selection state.", planUpdateSchema, (input) =>
+  planUpdate(storage, input)
 );
 
 registerTool(

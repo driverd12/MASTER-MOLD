@@ -23,6 +23,10 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     assert.equal(names.has("goal.create"), true);
     assert.equal(names.has("goal.get"), true);
     assert.equal(names.has("goal.list"), true);
+    assert.equal(names.has("plan.create"), true);
+    assert.equal(names.has("plan.get"), true);
+    assert.equal(names.has("plan.list"), true);
+    assert.equal(names.has("plan.update"), true);
     assert.equal(names.has("task.create"), true);
     assert.equal(names.has("transcript.log"), true);
 
@@ -71,6 +75,75 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     });
     assert.equal(fetchedGoal.found, true);
     assert.equal(fetchedGoal.goal.goal_id, createdGoal.goal.goal_id);
+
+    const createdPlan = await callTool(client, "plan.create", {
+      mutation: nextMutation(testId, "plan.create", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      title: "Initial goal execution plan",
+      summary: "Break the goal into inspectable planning and implementation steps",
+      selected: true,
+      confidence: 0.82,
+      success_criteria: ["Plan is persisted", "Goal points at the selected active plan"],
+      steps: [
+        {
+          step_id: "inspect-goal",
+          seq: 1,
+          title: "Inspect the linked goal",
+          step_kind: "analysis",
+          executor_kind: "tool",
+          tool_name: "goal.get",
+        },
+        {
+          step_id: "wire-runtime",
+          seq: 2,
+          title: "Wire the durable runtime path",
+          step_kind: "mutation",
+          executor_kind: "worker",
+          depends_on: ["inspect-goal"],
+          acceptance_checks: ["Goal remains linked to the selected plan"],
+        },
+      ],
+    });
+    assert.equal(createdPlan.created, true);
+    assert.equal(typeof createdPlan.plan.plan_id, "string");
+    assert.equal(createdPlan.plan.goal_id, createdGoal.goal.goal_id);
+    assert.equal(createdPlan.plan.selected, true);
+    assert.equal(createdPlan.steps.length, 2);
+
+    const planFetch = await callTool(client, "plan.get", {
+      plan_id: createdPlan.plan.plan_id,
+    });
+    assert.equal(planFetch.found, true);
+    assert.equal(planFetch.plan.plan_id, createdPlan.plan.plan_id);
+    assert.equal(planFetch.step_count, 2);
+    assert.deepEqual(planFetch.steps[1].depends_on, ["inspect-goal"]);
+
+    const planList = await callTool(client, "plan.list", {
+      goal_id: createdGoal.goal.goal_id,
+      selected_only: true,
+      limit: 10,
+    });
+    assert.ok(planList.count >= 1);
+    assert.ok(planList.plans.some((plan) => plan.plan_id === createdPlan.plan.plan_id));
+
+    const goalWithActivePlan = await callTool(client, "goal.get", {
+      goal_id: createdGoal.goal.goal_id,
+    });
+    assert.equal(goalWithActivePlan.found, true);
+    assert.equal(goalWithActivePlan.goal.active_plan_id, createdPlan.plan.plan_id);
+
+    const updatedPlan = await callTool(client, "plan.update", {
+      mutation: nextMutation(testId, "plan.update", () => mutationCounter++),
+      plan_id: createdPlan.plan.plan_id,
+      status: "in_progress",
+      confidence: 0.9,
+      metadata: {
+        execution_mode: "bounded",
+      },
+    });
+    assert.equal(updatedPlan.plan.status, "in_progress");
+    assert.equal(updatedPlan.plan.confidence, 0.9);
+    assert.equal(updatedPlan.plan.metadata.execution_mode, "bounded");
 
     const listedGoals = await callTool(client, "goal.list", {
       status: "active",
