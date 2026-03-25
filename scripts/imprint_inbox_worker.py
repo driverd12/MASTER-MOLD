@@ -55,7 +55,25 @@ class InboxWorker:
         self.failed_dir = self.inbox_root / "failed"
 
         self.agent_loop_path = self.repo_root / "agent_loop.py"
+        self.helper_path = self.repo_root / "scripts" / "mcp_tool_call.mjs"
+        self.helper_command = str(os.environ.get("ANAMNESIS_INBOX_HELPER_COMMAND") or "node").strip()
         self.db_path = resolve_db_path(self.repo_root)
+
+        self.kernel_mode = str(os.environ.get("ANAMNESIS_INBOX_KERNEL_MODE") or "mcp").strip().lower()
+        if self.kernel_mode not in {"mcp", "auto", "sqlite"}:
+            self.kernel_mode = "mcp"
+        self.session_id = f"imprint-worker-{sanitize_task_id(worker_id)}"
+        self.agent_id = str(os.environ.get("ANAMNESIS_INBOX_AGENT_ID") or "imprint-worker").strip() or "imprint-worker"
+        self.client_kind = str(os.environ.get("ANAMNESIS_INBOX_CLIENT_KIND") or "imprint-worker").strip() or "imprint-worker"
+        self.transport_kind = str(os.environ.get("ANAMNESIS_INBOX_TRANSPORT_KIND") or "local-daemon").strip() or "local-daemon"
+        self.mcp_transport = str(os.environ.get("ANAMNESIS_INBOX_MCP_TRANSPORT") or "stdio").strip().lower()
+        if self.mcp_transport not in {"stdio", "http"}:
+            self.mcp_transport = "stdio"
+        self.mcp_url = str(os.environ.get("ANAMNESIS_INBOX_MCP_URL") or "http://127.0.0.1:8787/").strip()
+        self.mcp_origin = str(os.environ.get("ANAMNESIS_INBOX_MCP_ORIGIN") or "http://127.0.0.1").strip()
+        self.mcp_stdio_command = str(os.environ.get("ANAMNESIS_INBOX_MCP_STDIO_COMMAND") or "node").strip()
+        self.mcp_stdio_args = str(os.environ.get("ANAMNESIS_INBOX_MCP_STDIO_ARGS") or "dist/server.js").strip()
+        self.kernel_session_open = False
 
     def run(self) -> int:
         if not self.agent_loop_path.exists():
@@ -70,8 +88,18 @@ class InboxWorker:
             f"started worker_id={self.worker_id} repo_root={self.repo_root} "
             f"db_path={self.db_path} poll_interval={self.poll_interval}s "
             f"batch_size={self.batch_size} lease_seconds={self.lease_seconds}s "
-            f"heartbeat_interval={self.heartbeat_interval}s once={self.once}"
+            f"heartbeat_interval={self.heartbeat_interval}s once={self.once} "
+            f"kernel_mode={self.kernel_mode} mcp_transport={self.mcp_transport}"
         )
+
+        if self.kernel_mode != "sqlite":
+            try:
+                self._ensure_kernel_session()
+            except Exception as error:  # noqa: BLE001
+                if self.kernel_mode == "mcp":
+                    self._log(f"warn: failed to open MCP kernel session: {type(error).__name__}: {error}")
+                else:
+                    self._log(f"warn: MCP kernel session unavailable; auto mode will fall back as needed: {type(error).__name__}: {error}")
 
         while True:
             processed = self._process_batch()
@@ -243,7 +271,122 @@ class InboxWorker:
 
         return True
 
+    def _mutation(self, scope: str) -> Dict[str, str]:
+        token = make_uuid()
+        return {
+            "idempotency_key": f"{scope}-{token}",
+            "side_effect_fingerprint": f"{scope}-{token}",
+        }
+
+    def _mcp_tool_call(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        command = [
+            self.helper_command,
+            str(self.helper_path),
+            "--tool",
+            tool,
+            "--args",
+            stable_json(args),
+            "--transport",
+            self.mcp_transport,
+            "--url",
+            self.mcp_url,
+            "--origin",
+            self.mcp_origin,
+            "--stdio-command",
+            self.mcp_stdio_command,
+            "--stdio-args",
+            self.mcp_stdio_args,
+            "--cwd",
+            str(self.repo_root),
+        ]
+        proc = subprocess.run(
+            command,
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=os.environ.copy(),
+        )
+        if proc.returncode != 0:
+            stderr = (proc.stderr or "").strip()
+            stdout = (proc.stdout or "").strip()
+            preview = stderr or stdout or f"exit={proc.returncode}"
+            raise RuntimeError(f"MCP tool {tool} failed: {preview}")
+        text = (proc.stdout or "").strip()
+        if not text:
+            return {}
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"MCP tool {tool} returned non-object response")
+        return parsed
+
+    def _ensure_kernel_session(self) -> None:
+        if self.kernel_session_open:
+            return
+        response = self._mcp_tool_call(
+            "agent.session_open",
+            {
+                "mutation": self._mutation("imprint-inbox.session-open"),
+                "session_id": self.session_id,
+                "agent_id": self.agent_id,
+                "client_kind": self.client_kind,
+                "transport_kind": self.transport_kind,
+                "workspace_root": str(self.repo_root),
+                "lease_seconds": self.lease_seconds,
+                "status": "active",
+                "capabilities": {
+                    "worker": True,
+                    "automation": True,
+                    "background": True,
+                },
+                "metadata": {
+                    "worker_id": self.worker_id,
+                    "kernel_mode": self.kernel_mode,
+                },
+                "source_client": self.client_kind,
+                "source_agent": self.agent_id,
+            },
+        )
+        if not isinstance(response.get("session"), dict):
+            raise RuntimeError("agent.session_open did not return a session")
+        self.kernel_session_open = True
+
+    def _claim_next_task_mcp(self) -> Optional[Dict[str, Any]]:
+        self._ensure_kernel_session()
+        response = self._mcp_tool_call(
+            "agent.claim_next",
+            {
+                "mutation": self._mutation("imprint-inbox.claim-next"),
+                "session_id": self.session_id,
+                "lease_seconds": self.lease_seconds,
+                "metadata": {
+                    "worker_id": self.worker_id,
+                },
+                "source_client": self.client_kind,
+                "source_agent": self.agent_id,
+            },
+        )
+        if response.get("claimed") is True and isinstance(response.get("task"), dict):
+            return response["task"]
+        if response.get("reason") == "session-already-holds-task" and isinstance(response.get("task"), dict):
+            return response["task"]
+        return None
+
     def _claim_next_task(self) -> Optional[Dict[str, Any]]:
+        if self.kernel_mode != "sqlite":
+            try:
+                claimed = self._claim_next_task_mcp()
+                if claimed is not None:
+                    return claimed
+                return None
+            except Exception as error:  # noqa: BLE001
+                if self.kernel_mode == "mcp":
+                    self._log(f"warn: MCP claim failed: {type(error).__name__}: {error}")
+                    return None
+                self._log(f"warn: MCP claim failed; falling back to SQLite: {type(error).__name__}: {error}")
+        return self._claim_next_task_sqlite()
+
+    def _claim_next_task_sqlite(self) -> Optional[Dict[str, Any]]:
         now = utc_now_iso()
         lease_expires_at = iso_after_seconds(self.lease_seconds)
         with self._open_db() as conn:
@@ -333,6 +476,32 @@ class InboxWorker:
                 raise
 
     def _heartbeat_task(self, task_id: str) -> bool:
+        if self.kernel_mode != "sqlite":
+            try:
+                self._ensure_kernel_session()
+                response = self._mcp_tool_call(
+                    "agent.heartbeat_task",
+                    {
+                        "mutation": self._mutation("imprint-inbox.heartbeat-task"),
+                        "session_id": self.session_id,
+                        "task_id": task_id,
+                        "lease_seconds": self.lease_seconds,
+                        "metadata": {
+                            "worker_id": self.worker_id,
+                        },
+                        "source_client": self.client_kind,
+                        "source_agent": self.agent_id,
+                    },
+                )
+                return bool(response.get("ok") is True)
+            except Exception as error:  # noqa: BLE001
+                if self.kernel_mode == "mcp":
+                    self._log(f"warn: MCP heartbeat failed for task={task_id}: {type(error).__name__}: {error}")
+                    return False
+                self._log(f"warn: MCP heartbeat failed; falling back to SQLite for task={task_id}: {type(error).__name__}: {error}")
+        return self._heartbeat_task_sqlite(task_id)
+
+    def _heartbeat_task_sqlite(self, task_id: str) -> bool:
         now = utc_now_iso()
         lease_expires_at = iso_after_seconds(self.lease_seconds)
         with self._open_db() as conn:
@@ -369,6 +538,36 @@ class InboxWorker:
                 raise
 
     def _complete_task(self, task_id: str, result: Dict[str, Any]) -> Tuple[bool, str]:
+        if self.kernel_mode != "sqlite":
+            try:
+                self._ensure_kernel_session()
+                response = self._mcp_tool_call(
+                    "agent.report_result",
+                    {
+                        "mutation": self._mutation("imprint-inbox.report-complete"),
+                        "session_id": self.session_id,
+                        "task_id": task_id,
+                        "outcome": "completed",
+                        "summary": "Task completed successfully.",
+                        "result": result,
+                        "next_session_status": "idle",
+                        "metadata": {
+                            "worker_id": self.worker_id,
+                        },
+                        "source_client": self.client_kind,
+                        "source_agent": self.agent_id,
+                    },
+                )
+                if response.get("reported") is True:
+                    return True, str(response.get("reason") or "completed")
+                return False, str(response.get("reason") or "report-failed")
+            except Exception as error:  # noqa: BLE001
+                if self.kernel_mode == "mcp":
+                    return False, f"mcp-error:{type(error).__name__}:{error}"
+                self._log(f"warn: MCP completion failed; falling back to SQLite for task={task_id}: {type(error).__name__}: {error}")
+        return self._complete_task_sqlite(task_id, result)
+
+    def _complete_task_sqlite(self, task_id: str, result: Dict[str, Any]) -> Tuple[bool, str]:
         now = utc_now_iso()
         with self._open_db() as conn:
             try:
@@ -420,6 +619,37 @@ class InboxWorker:
                 raise
 
     def _fail_task(self, task_id: str, error_text: str, result: Dict[str, Any]) -> Tuple[bool, str]:
+        if self.kernel_mode != "sqlite":
+            try:
+                self._ensure_kernel_session()
+                response = self._mcp_tool_call(
+                    "agent.report_result",
+                    {
+                        "mutation": self._mutation("imprint-inbox.report-fail"),
+                        "session_id": self.session_id,
+                        "task_id": task_id,
+                        "outcome": "failed",
+                        "summary": "Task failed during execution.",
+                        "error": error_text,
+                        "result": result,
+                        "next_session_status": "idle",
+                        "metadata": {
+                            "worker_id": self.worker_id,
+                        },
+                        "source_client": self.client_kind,
+                        "source_agent": self.agent_id,
+                    },
+                )
+                if response.get("reported") is True:
+                    return True, str(response.get("reason") or "failed")
+                return False, str(response.get("reason") or "report-failed")
+            except Exception as error:  # noqa: BLE001
+                if self.kernel_mode == "mcp":
+                    return False, f"mcp-error:{type(error).__name__}:{error}"
+                self._log(f"warn: MCP failure report failed; falling back to SQLite for task={task_id}: {type(error).__name__}: {error}")
+        return self._fail_task_sqlite(task_id, error_text, result)
+
+    def _fail_task_sqlite(self, task_id: str, error_text: str, result: Dict[str, Any]) -> Tuple[bool, str]:
         now = utc_now_iso()
         with self._open_db() as conn:
             try:
