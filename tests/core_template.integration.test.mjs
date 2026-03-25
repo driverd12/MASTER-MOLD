@@ -9,7 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 const REPO_ROOT = process.cwd();
 
-test("server starts without domain packs and exposes core + TriChat tools", async () => {
+test("server starts with default agentic workflow hooks and exposes core + TriChat tools", async () => {
   const testId = `${Date.now()}`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-test-"));
   const dbPath = path.join(tempDir, "hub.sqlite");
@@ -78,8 +78,11 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     assert.equal(Array.isArray(roster.agents), true);
     assert.ok(roster.agents.some((agent) => agent.agent_id === "codex" && agent.active === true));
 
-    const emptyPackHooks = await callTool(client, "pack.hooks.list", {});
-    assert.equal(emptyPackHooks.count, 0);
+    const packHooks = await callTool(client, "pack.hooks.list", {});
+    assert.equal(packHooks.count, 3);
+    assert.ok(packHooks.hooks.some((hook) => hook.hook_id === "agentic.delivery_path"));
+    assert.ok(packHooks.hooks.some((hook) => hook.hook_id === "agentic.optimization_loop"));
+    assert.ok(packHooks.hooks.some((hook) => hook.hook_id === "agentic.execution_readiness"));
 
     await callTool(client, "memory.append", {
       mutation: nextMutation(testId, "memory.append", () => mutationCounter++),

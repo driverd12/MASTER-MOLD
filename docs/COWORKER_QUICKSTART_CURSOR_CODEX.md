@@ -19,15 +19,6 @@ npm ci
 npm run build
 ```
 
-Optional CFD branch setup:
-
-```bash
-git fetch origin
-git checkout codex/cfd-analysis-fork
-npm ci
-npm run build
-```
-
 ## 3) Resolve Local Paths
 
 Use absolute paths for all MCP config values.
@@ -36,13 +27,11 @@ Example placeholders:
 
 - `CORE_SERVER_JS=/absolute/path/to/MCPlayground---Core-Template/dist/server.js`
 - `CORE_DB=/absolute/path/to/MCPlayground---Core-Template/data/hub.sqlite`
-- `CFD_SERVER_JS=/absolute/path/to/MCPlayground---Core-Template/dist/server.js`
-- `CFD_DB=/absolute/path/to/MCPlayground---Core-Template/data/hub-cfd.sqlite`
 - `NODE_BIN=$(which node)`
 
 ## 4) Cursor Setup
 
-In Cursor MCP settings, add two STDIO servers.
+In Cursor MCP settings, add one shared STDIO server.
 
 Server 1: `mcplayground-core-template`
 
@@ -51,31 +40,18 @@ Server 1: `mcplayground-core-template`
 - `env`:
   - `ANAMNESIS_HUB_DB_PATH=<CORE_DB>`
 
-Server 2: `mcplayground-cfd`
-
-- `command`: `<NODE_BIN>`
-- `args`: `[<CFD_SERVER_JS>]`
-- `env`:
-  - `ANAMNESIS_HUB_DB_PATH=<CFD_DB>`
-  - `MCP_DOMAIN_PACKS=cfd`
-
 If your Cursor build uses file-based MCP config, edit:
 
 - `~/.cursor/mcp.json`
 
 ## 5) Codex Setup
 
-Add the same two servers via CLI:
+Add the same shared server via CLI:
 
 ```bash
 codex mcp add mcplayground-core-template \
   --env ANAMNESIS_HUB_DB_PATH=<CORE_DB> \
   -- <NODE_BIN> <CORE_SERVER_JS>
-
-codex mcp add mcplayground-cfd \
-  --env ANAMNESIS_HUB_DB_PATH=<CFD_DB> \
-  --env MCP_DOMAIN_PACKS=cfd \
-  -- <NODE_BIN> <CFD_SERVER_JS>
 
 codex mcp list
 ```
@@ -94,7 +70,7 @@ Run these tools:
 4. `trichat.summary`
 5. `trichat.autopilot` with `{"action":"status"}`
 6. `trichat.tmux_controller` with `{"action":"status"}`
-7. `cfd.schema.status` (CFD server only)
+7. `pack.hooks.list`
 
 ## 7) First Runtime Smoke Checks
 
@@ -102,15 +78,16 @@ From the repo root:
 
 ```bash
 npm test
+npm run trichat:doctor
 npm run trichat:smoke
 npm run trichat:dogfood -- --cycles 1 --execute false
 ```
 
 ## 8) Common Issues
 
-`Unknown tool cfd.*`
+`pack.hooks.list` returns zero hooks unexpectedly
 
-- `MCP_DOMAIN_PACKS=cfd` is missing on that server.
+- `MCP_DOMAIN_PACKS=none` may be set on that server.
 - Restart and reconnect the MCP client.
 
 GUI app cannot find `node`

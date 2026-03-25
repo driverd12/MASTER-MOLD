@@ -233,7 +233,7 @@ Acceptance criteria:
 - a pack hook can generate a plan for a target entity
 - a pack hook can run verification and persist summary plus artifacts
 
-### Slice 7: Reference CFD Verifier Hook
+### Slice 7: Reference Agentic Verifier Hook
 
 Goal:
 
@@ -241,17 +241,17 @@ Goal:
 
 Files:
 
-- `src/domain-packs/cfd.ts`
-- `tests/cfd_pack.integration.test.mjs`
+- `src/domain-packs/agentic.ts`
+- `tests/agentic_pack.integration.test.mjs`
 
 Suggested first hook:
 
-- `cfd.verify.case_readiness`
+- `agentic.execution_readiness`
 
 Suggested target types:
 
-- `cfd.case`
-- optionally `cfd.run`
+- `goal`
+- optionally `plan`
 
 Suggested behavior:
 
@@ -261,7 +261,7 @@ Suggested behavior:
 Why verifier first:
 
 - minimal blast radius
-- naturally aligned with current CFD metrics and validation records
+- naturally aligned with current goal, plan, session, and artifact state
 
 ### Slice 8: Goal And Plan Execution Bridges
 
@@ -346,7 +346,7 @@ Suggested metrics:
 4. artifact CRUD
 5. pack hook registry
 6. planner and verifier dispatch
-7. CFD reference verifier
+7. agentic reference verifier
 8. plan-to-task bridges
 9. TriChat and autopilot integration
 10. evals and scorecards
@@ -387,7 +387,7 @@ Regression areas to rerun:
 - existing `npm test`
 - current TriChat persistence tests
 - core template integration test
-- CFD pack integration test
+- agentic pack integration test
 
 ## Risks And Mitigations
 

@@ -8,12 +8,13 @@ Domain packs let you extend the core runtime with domain-specific tools while pr
 
 Enable packs with either:
 
-- environment variable: `MCP_DOMAIN_PACKS=cfd`
-- CLI flag: `node dist/server.js --domain-packs cfd`
+- default behavior: `agentic` workflow pack loads automatically when `MCP_DOMAIN_PACKS` is unset
+- environment variable: `MCP_DOMAIN_PACKS=agentic`
+- CLI flag: `node dist/server.js --domain-packs agentic`
 
 Multiple packs:
 
-- `MCP_DOMAIN_PACKS=cfd,another-pack`
+- `MCP_DOMAIN_PACKS=agentic,another-pack`
 
 Disable all packs explicitly:
 
@@ -23,7 +24,7 @@ Disable all packs explicitly:
 
 - `src/domain-packs/types.ts`: pack interfaces and registration context.
 - `src/domain-packs/index.ts`: built-in registry, parser, and loader.
-- `src/domain-packs/cfd.ts`: reference implementation.
+- `src/domain-packs/agentic.ts`: workflow-oriented reference implementation.
 
 ## Pack Contract
 
@@ -32,22 +33,28 @@ A pack must export a `DomainPack` object:
 - `id`: stable lowercase pack id.
 - `title`: display name.
 - `description`: short purpose statement.
-- `register(context)`: function that registers namespaced tools.
+- `register(context)`: function that registers namespaced tools or workflow hooks.
 
 `context` includes:
 
 - `storage`: core storage adapter
 - `repo_root`, `server_name`, `server_version`
 - `register_tool(name, description, schema, handler)`
+- `register_planner_hook(hook)` and `register_verifier_hook(hook)`
 - `run_idempotent_mutation(...)`
 
 ## Tool Naming Rules
 
 Use namespaced tool ids:
 
-- good: `cfd.solve.start`
 - good: `pharma.batch.validate`
+- good: `manufacturing.report.bundle`
 - avoid: `solve.start` or `validate` (too generic)
+
+Hook ids follow the same namespacing rule:
+
+- good: `agentic.delivery_path`
+- good: `manufacturing.readiness_gate`
 
 ## Recommended Pack Design
 
@@ -67,7 +74,7 @@ Use namespaced tool ids:
 
 ## Minimal Pack Checklist
 
-- At least one read tool and one mutating tool.
+- At least one planner hook, verifier hook, tool, or other pack capability that materially extends the runtime.
 - Mutating tools require `mutation.idempotency_key` and `mutation.side_effect_fingerprint`.
 - Pack data persists locally in SQLite.
 - Pack emits enough metadata for reconstruction/reporting.

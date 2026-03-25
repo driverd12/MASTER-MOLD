@@ -121,7 +121,7 @@ Deliverables:
 - planner hook registry
 - verifier hook registry
 - hook dispatch tools
-- one reference verifier or planner in the CFD pack
+- one reference verifier or planner in the agentic workflow pack
 
 Success criteria:
 
@@ -980,11 +980,10 @@ register_verifier_hook(hook: DomainPackVerifierHook): void;
 
 ## Recommended First Reference Usage
 
-Use the CFD pack as the reference implementation for verifier hooks first, planner hooks second.
+Use the built-in agentic workflow pack as the reference implementation for verifier hooks first, planner hooks second.
 
 Why:
 
 - verifier behavior is easier to constrain and test
-- CFD already has domain metrics, validations, and reports
-- a `cfd` verifier hook can emit artifacts without forcing full goal-driven execution on day one
-
+- the agentic runtime already has goals, plans, sessions, artifacts, and experiments
+- an `agentic` verifier hook can emit evidence without depending on a separate domain model

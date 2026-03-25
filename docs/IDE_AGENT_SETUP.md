@@ -20,10 +20,10 @@ Command:
 node /absolute/path/to/repo/dist/server.js
 ```
 
-With CFD pack:
+Pure core without workflow hooks:
 
 ```bash
-MCP_DOMAIN_PACKS=cfd node /absolute/path/to/repo/dist/server.js
+MCP_DOMAIN_PACKS=none node /absolute/path/to/repo/dist/server.js
 ```
 
 ### HTTP (multi-client, shared local server)
@@ -59,17 +59,17 @@ Many clients accept a config object like this:
 }
 ```
 
-Enable CFD pack:
+Disable workflow hooks explicitly:
 
 ```json
 {
   "mcpServers": {
-    "mcplayground-cfd": {
+    "mcplayground-core-only": {
       "command": "node",
       "args": ["/absolute/path/to/repo/dist/server.js"],
       "env": {
         "ANAMNESIS_HUB_DB_PATH": "/absolute/path/to/repo/data/hub.sqlite",
-        "MCP_DOMAIN_PACKS": "cfd"
+        "MCP_DOMAIN_PACKS": "none"
       }
     }
   }
@@ -100,7 +100,7 @@ For IDE clients that expose MCP settings UI:
 2. Choose STDIO or HTTP.
 3. Paste the command/URL templates above.
 4. Verify by listing tools and confirming `health.tools` appears.
-5. If using CFD mode, confirm `cfd.case.create` appears.
+5. Verify `pack.hooks.list` returns the default `agentic.*` planner and verifier hooks.
 
 ## Claude Desktop-Style Config Notes
 
@@ -125,12 +125,12 @@ Run these checks from your client:
 2. `health.storage`
 3. `memory.append`
 4. `memory.search`
-5. Optional pack check: `cfd.schema.status` when `MCP_DOMAIN_PACKS=cfd`
+5. `pack.hooks.list`
 
 ## Common Troubleshooting
 
 - `Unknown tool`:
-  - Confirm pack enabled (`MCP_DOMAIN_PACKS`), then reconnect client.
+  - Confirm `MCP_DOMAIN_PACKS` is not set to `none` unless you want the pure core runtime, then reconnect client.
 - HTTP 401:
   - Validate bearer token matches server env.
 - DB lock/busy errors:

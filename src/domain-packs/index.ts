@@ -1,4 +1,4 @@
-import { cfdDomainPack } from "./cfd.js";
+import { agenticDomainPack } from "./agentic.js";
 import {
   DomainPack,
   DomainPackContext,
@@ -7,8 +7,10 @@ import {
 } from "./types.js";
 
 const BUILTIN_DOMAIN_PACKS: Record<string, DomainPack> = {
-  [cfdDomainPack.id]: cfdDomainPack,
+  [agenticDomainPack.id]: agenticDomainPack,
 };
+
+const DEFAULT_DOMAIN_PACK_IDS = [agenticDomainPack.id];
 
 export function listBuiltinDomainPacks(): DomainPack[] {
   return Object.values(BUILTIN_DOMAIN_PACKS)
@@ -19,7 +21,7 @@ export function listBuiltinDomainPacks(): DomainPack[] {
 export function parseEnabledDomainPackIds(rawValue: string | undefined): string[] {
   const raw = String(rawValue ?? "").trim();
   if (!raw) {
-    return [];
+    return [...DEFAULT_DOMAIN_PACK_IDS];
   }
 
   const ids = raw

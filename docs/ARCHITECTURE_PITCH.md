@@ -47,7 +47,7 @@ This template solves those once, then allows domain packs to focus on actual bus
 
 ## Domain Pack Model
 
-Domain packs register tools into the same server process and DB while keeping clear namespace boundaries (`cfd.*`, `manufacturing.*`, etc.).
+Domain packs register tools or workflow hooks into the same server process and DB while keeping clear namespace boundaries (`agentic.*`, `manufacturing.*`, etc.).
 
 Each pack should:
 
@@ -79,4 +79,4 @@ Use this in meetings:
 2. Domain packs let teams move fast without rebuilding reliability and governance.
 3. Local-first architecture keeps data controlled on client machines.
 4. Multi-client continuity is deterministic because all clients share one local state authority.
-5. This lowers time-to-value for future MCP servers beyond the initial CFD scope.
+5. This lowers time-to-value for future MCP servers beyond the initial agentic workflow pack.

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { z } from "zod";
 import { Storage } from "../storage.js";
 import {
@@ -199,21 +200,32 @@ function slugifyToken(value: string) {
 }
 
 function normalizePlannerSteps(result: PackPlannerHookResult) {
-  return result.steps.map((step, index) => ({
-    step_id: step.step_id?.trim() || `${slugifyToken(step.title) || "step"}-${index + 1}`,
-    seq: index + 1,
-    title: step.title,
-    step_kind: step.step_kind,
-    executor_kind: step.executor_kind,
-    executor_ref: step.executor_ref,
-    tool_name: step.tool_name,
-    input: step.input ?? {},
-    depends_on: step.depends_on ?? [],
-    expected_artifact_types: step.expected_artifact_types ?? [],
-    acceptance_checks: step.acceptance_checks ?? [],
-    timeout_seconds: step.timeout_seconds,
-    metadata: step.metadata ?? {},
-  }));
+  const namespace = crypto.randomUUID().slice(0, 8);
+  const localIds = result.steps.map(
+    (step, index) => step.step_id?.trim() || `${slugifyToken(step.title) || "step"}-${index + 1}`
+  );
+  const scopedIdByLocalId = new Map(localIds.map((localId) => [localId, `${namespace}-${localId}`]));
+
+  return result.steps.map((step, index) => {
+    const localId = localIds[index];
+    return {
+      step_id: scopedIdByLocalId.get(localId) ?? `${namespace}-${localId}`,
+      seq: index + 1,
+      title: step.title,
+      step_kind: step.step_kind,
+      executor_kind: step.executor_kind,
+      executor_ref: step.executor_ref,
+      tool_name: step.tool_name,
+      input: step.input ?? {},
+      depends_on: (step.depends_on ?? []).map(
+        (dependencyId) => scopedIdByLocalId.get(dependencyId.trim()) ?? dependencyId.trim()
+      ),
+      expected_artifact_types: step.expected_artifact_types ?? [],
+      acceptance_checks: step.acceptance_checks ?? [],
+      timeout_seconds: step.timeout_seconds,
+      metadata: step.metadata ?? {},
+    };
+  });
 }
 
 function recordVerifierArtifact(

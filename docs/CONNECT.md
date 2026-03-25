@@ -8,16 +8,16 @@ Start server:
 npm run start:stdio
 ```
 
-Start with CFD pack:
+Start pure core server with workflow hooks disabled:
 
 ```bash
-npm run start:cfd
+npm run start:core
 ```
 
 Equivalent direct command:
 
 ```bash
-node dist/server.js --domain-packs cfd
+MCP_DOMAIN_PACKS=none node dist/server.js
 ```
 
 ## HTTP Transport
@@ -28,10 +28,17 @@ Start core runtime over HTTP:
 MCP_HTTP=1 MCP_HTTP_BEARER_TOKEN=change-me node dist/server.js --http --http-port 8787
 ```
 
-Start HTTP with CFD pack:
+Start HTTP with workflow hooks disabled:
 
 ```bash
-MCP_HTTP=1 MCP_HTTP_BEARER_TOKEN=change-me MCP_DOMAIN_PACKS=cfd node dist/server.js --http --http-port 8787
+MCP_HTTP=1 MCP_HTTP_BEARER_TOKEN=change-me MCP_DOMAIN_PACKS=none node dist/server.js --http --http-port 8787
+```
+
+Recommended local teammate path on macOS:
+
+```bash
+npm run launchd:install
+npm run it:http:validate
 ```
 
 ## Health Checks
@@ -42,12 +49,14 @@ Use any MCP client and call:
 - `health.storage`
 - `migration.status`
 
-If CFD pack is enabled:
+With the default workflow pack enabled:
 
-- `cfd.schema.status`
+- `pack.hooks.list`
+- `goal.plan_generate`
 
 TriChat runtime checks:
 
+- `npm run trichat:doctor`
 - `trichat.summary`
 - `trichat.autopilot` with `{"action":"status"}`
 - `trichat.tmux_controller` with `{"action":"status"}`

@@ -7,9 +7,9 @@ The repository is intentionally split into two layers:
 1. Core runtime: durable memory, transcripts, tasks, run ledgers, governance, ADRs, and safety checks.
 2. Domain packs: optional modules that register domain-specific MCP tools without modifying core infrastructure.
 
-This repository ships with one reference pack:
+This repository ships with one workflow pack by default:
 
-- `cfd` Computational Fluid Dynamics lifecycle tooling.
+- `agentic` GSD/autoresearch-inspired planner and verifier hooks for local development workflows.
 
 The runtime also includes first-class TriChat orchestration tools (`trichat.*`) for multi-agent turns, autonomous loops, and tmux-backed nested execution control.
 
@@ -40,8 +40,8 @@ flowchart LR
   C["Automation Worker"] --> D
 
   D --> E["Core: memory, transcript, tasks, runs, governance"]
-  D --> F["Domain Pack API"]
-  F --> G["CFD Pack (example)"]
+  D --> F["Workflow Pack API"]
+  F --> G["Agentic Workflow Pack (default)"]
 
   E --> H[("SQLite: ./data/hub.sqlite")]
   G --> I["Domain artifacts + reports"]
@@ -84,12 +84,60 @@ Start HTTP transport:
 npm run start:http
 ```
 
-Start with CFD pack enabled:
+Start pure core runtime with workflow hooks disabled:
 
 ```bash
-npm run start:cfd
+npm run start:core
 # or
-npm run start:cfd:http
+npm run start:core:http
+```
+
+## TriChat TUI
+
+Launch the BubbleTea TUI from the terminal:
+
+```bash
+npm run trichat:tui
+```
+
+Plain chat now uses direct council replies by default. Use `/plan <message>` inside the TUI when you explicitly want the structured planning/orchestration path.
+
+Default roster:
+
+```bash
+codex,cursor,local-imprint
+```
+
+Switch the active council roster without editing code:
+
+```bash
+TRICHAT_AGENT_IDS=gemini,claude,local-imprint npm run trichat:tui
+```
+
+Launch the TUI against the local HTTP runtime:
+
+```bash
+npm run trichat:tui:http
+```
+
+Install or refresh the macOS app wrapper:
+
+```bash
+npm run trichat:app:install
+```
+
+Run launcher and bridge diagnostics before a demo:
+
+```bash
+npm run trichat:doctor
+```
+
+Inspect the effective roster:
+
+```bash
+npm run trichat:roster
+node ./scripts/trichat_roster.mjs
+node ./scripts/mcp_tool_call.mjs --tool trichat.roster --args '{}' --transport stdio --stdio-command node --stdio-args dist/server.js --cwd .
 ```
 
 ## Configuration
@@ -111,7 +159,19 @@ Key variables:
 - `ANAMNESIS_HUB_ALLOW_FRESH_DB_ON_CORRUPTION` allow empty DB bootstrap if no backup exists (`0` by default)
 - `MCP_HTTP_BEARER_TOKEN` auth token for HTTP transport
 - `MCP_HTTP_ALLOWED_ORIGINS` comma-separated local origins
-- `MCP_DOMAIN_PACKS` comma-separated pack ids (`cfd`, etc.)
+- `MCP_DOMAIN_PACKS` comma-separated pack ids (`agentic`, etc.); defaults to `agentic`, set `none` to disable all packs
+- `TRICHAT_AGENT_IDS` comma-separated active TriChat roster
+- `TRICHAT_GEMINI_CMD` override full Gemini bridge command
+- `TRICHAT_CLAUDE_CMD` override full Claude bridge command
+- `TRICHAT_GEMINI_EXECUTABLE` / `TRICHAT_GEMINI_ARGS` provider CLI override
+- `TRICHAT_CLAUDE_EXECUTABLE` / `TRICHAT_CLAUDE_ARGS` provider CLI override
+- `TRICHAT_CODEX_EXECUTABLE` / `TRICHAT_CURSOR_EXECUTABLE` override the provider binary inside the wrapper
+- `TRICHAT_GEMINI_MODE` select `auto`, `cli`, or `api`
+- `TRICHAT_GEMINI_MODEL` override Gemini API model (`gemini-2.0-flash` default)
+- `TRICHAT_IMPRINT_MODEL` / `TRICHAT_OLLAMA_URL` control the local imprint lane
+- `TRICHAT_BRIDGE_TIMEOUT_SECONDS` bound per-bridge request time
+- `TRICHAT_BRIDGE_MAX_RETRIES` / `TRICHAT_BRIDGE_RETRY_BASE_MS` control wrapper-level transient retry behavior
+- `GEMINI_API_KEY` or `GOOGLE_API_KEY` enable direct Gemini API fallback
 
 The runtime now quarantines non-SQLite/corrupted artifacts into `corrupt/` before recovery attempts so startup failures do not silently overwrite evidence.
 
@@ -122,16 +182,18 @@ Core runtime tools include:
 - Memory and continuity: `memory.*`, `transcript.*`, `who_knows`, `knowledge.query`, `retrieval.hybrid`
 - Governance and safety: `policy.evaluate`, `preflight.check`, `postflight.verify`, `mutation.check`
 - Durable execution: `run.*`, `task.*`, `lock.*`
+- Agentic kernel: `goal.*`, `plan.*`, `artifact.*`, `experiment.*`, `event.*`, `agent.session.*`, `dispatch.autorun`
+- Workflow methodology: `playbook.*`, `pack.hooks.list`, `pack.plan.generate`, `pack.verify.run`
 - Decision and incident logging: `adr.create`, `decision.link`, `incident.*`
 - Runtime ops: `health.*`, `migration.status`, `imprint.*`, `imprint.inbox.*`
-- TriChat orchestration: `trichat.*` (`thread/message/turn`, `autopilot`, `tmux_controller`, `bus`, `adapter_telemetry`, `chaos`, `slo`)
+- TriChat orchestration: `trichat.*` (`roster`, `thread/message/turn`, `autopilot`, `tmux_controller`, `bus`, `adapter_telemetry`, `chaos`, `slo`)
 
 ## Domain Pack Framework
 
-Domain packs are loaded at startup from `MCP_DOMAIN_PACKS` or `--domain-packs`.
+Workflow/domain packs are loaded at startup from `MCP_DOMAIN_PACKS` or `--domain-packs`.
 
 - Framework: `src/domain-packs/types.ts`, `src/domain-packs/index.ts`
-- Reference pack: `src/domain-packs/cfd.ts`
+- Default workflow pack: `src/domain-packs/agentic.ts`
 
 Pack authoring guide: [Domain Packs](./docs/DOMAIN_PACKS.md)
 
@@ -142,6 +204,8 @@ Connection examples and client setup:
 - [IDE + Agent Setup Guide](./docs/IDE_AGENT_SETUP.md)
 - [Transport Connection Guide](./docs/CONNECT.md)
 - [Coworker Quickstart (Cursor + Codex)](./docs/COWORKER_QUICKSTART_CURSOR_CODEX.md)
+- [TriChat Multi-Agent Setup](./docs/TRICHAT_MULTI_AGENT_SETUP.md)
+- [Agent Adoption Guide](./docs/AGENT_ADOPTION.md)
 
 Fast STDIO connection example:
 
@@ -159,28 +223,28 @@ Fast STDIO connection example:
 }
 ```
 
-Fast CFD-enabled connection example:
+Pure core / no-pack connection example:
 
 ```json
 {
   "mcpServers": {
-    "mcplayground-cfd": {
+    "mcplayground-core-only": {
       "command": "node",
       "args": ["/absolute/path/to/MCPlayground---Core-Template/dist/server.js"],
       "env": {
         "ANAMNESIS_HUB_DB_PATH": "/absolute/path/to/MCPlayground---Core-Template/data/hub.sqlite",
-        "MCP_DOMAIN_PACKS": "cfd"
+        "MCP_DOMAIN_PACKS": "none"
       }
     }
   }
 }
 ```
 
-## CFD Fork Path
+## Agentic Fork Path
 
-How to publish a CFD-focused fork from this template:
+How to publish an agentic-development-focused fork from this template:
 
-- [CFD Fork Guide](./docs/CFD_FORK_GUIDE.md)
+- [Agentic Fork Guide](./docs/AGENTIC_FORK_GUIDE.md)
 
 ## Validation
 
@@ -189,12 +253,27 @@ npm test
 npm run mvp:smoke
 ```
 
+Local HTTP teammate validation:
+
+```bash
+npm run launchd:install
+npm run it:http:validate
+```
+
 TriChat reliability checks:
 
 ```bash
+npm run trichat:bridges:test
+npm run trichat:doctor
 npm run trichat:smoke
 npm run trichat:dogfood
 npm run trichat:soak:gate -- --hours 1 --interval-seconds 60
+```
+
+Alternate roster validation example:
+
+```bash
+TRICHAT_AGENT_IDS=gemini,claude,local-imprint npm run trichat:doctor
 ```
 
 TriChat tmux controller dry-run example:
