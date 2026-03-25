@@ -45,6 +45,14 @@ import {
 import { adrCreateSchema, createAdr } from "./tools/adr.js";
 import { goalCreate, goalCreateSchema, goalGet, goalGetSchema, goalList, goalListSchema } from "./tools/goal.js";
 import {
+  playbookGet,
+  playbookGetSchema,
+  playbookInstantiate,
+  playbookInstantiateSchema,
+  playbookList,
+  playbookListSchema,
+} from "./tools/playbook.js";
+import {
   planCreate,
   planCreateSchema,
   planApprove,
@@ -1084,6 +1092,18 @@ registerTool("goal.get", "Fetch a durable goal by id.", goalGetSchema, (input) =
 
 registerTool("goal.list", "List durable goals by status or target filters.", goalListSchema, (input) =>
   goalList(storage, input)
+);
+
+registerTool("playbook.list", "List built-in workflow playbooks inspired by external agent methodologies.", playbookListSchema, (input) =>
+  playbookList(storage, input)
+);
+
+registerTool("playbook.get", "Fetch a built-in workflow playbook by id.", playbookGetSchema, (input) =>
+  playbookGet(storage, input)
+);
+
+registerTool("playbook.instantiate", "Instantiate a built-in workflow playbook into a durable goal and plan.", playbookInstantiateSchema, (input) =>
+  playbookInstantiate(storage, input)
 );
 
 registerTool("plan.create", "Create a durable candidate plan with structured steps for a goal.", planCreateSchema, (input) =>

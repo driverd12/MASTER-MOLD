@@ -24,6 +24,9 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     assert.equal(names.has("goal.create"), true);
     assert.equal(names.has("goal.get"), true);
     assert.equal(names.has("goal.list"), true);
+    assert.equal(names.has("playbook.list"), true);
+    assert.equal(names.has("playbook.get"), true);
+    assert.equal(names.has("playbook.instantiate"), true);
     assert.equal(names.has("plan.create"), true);
     assert.equal(names.has("plan.get"), true);
     assert.equal(names.has("plan.list"), true);
@@ -272,6 +275,74 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     const storageHealth = await callTool(client, "health.storage", {});
     assert.equal(storageHealth.ok, true);
     assert.ok(storageHealth.schema_version >= 4);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("playbook tools expose GSD and autoresearch workflow profiles and instantiate durable plans", async () => {
+  const testId = `${Date.now()}-playbooks`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-playbook-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const playbooks = await callTool(client, "playbook.list", {
+      limit: 20,
+    });
+    assert.ok(playbooks.count >= 4);
+    assert.ok(playbooks.playbooks.some((playbook) => playbook.playbook_id === "gsd.phase_delivery"));
+    assert.ok(playbooks.playbooks.some((playbook) => playbook.playbook_id === "autoresearch.optimize_loop"));
+
+    const gsdPlaybook = await callTool(client, "playbook.get", {
+      playbook_id: "gsd.phase_delivery",
+    });
+    assert.equal(gsdPlaybook.found, true);
+    assert.equal(gsdPlaybook.playbook.source_repo, "gsd-build/get-shit-done");
+
+    const instantiatedPhase = await callTool(client, "playbook.instantiate", {
+      mutation: nextMutation(testId, "playbook.instantiate.gsd", () => mutationCounter++),
+      playbook_id: "gsd.phase_delivery",
+      title: "Kernel Delivery Slice",
+      objective: "Deliver a structured phase using the MCP kernel",
+      acceptance_criteria: ["A selected durable plan is created from the playbook"],
+      tags: ["external-methods"],
+    });
+    assert.equal(instantiatedPhase.created, true);
+    assert.equal(instantiatedPhase.playbook.playbook_id, "gsd.phase_delivery");
+    assert.equal(instantiatedPhase.goal.title, "Kernel Delivery Slice");
+    assert.equal(instantiatedPhase.plan.selected, true);
+    assert.ok(instantiatedPhase.steps.some((step) => step.step_id === "discuss-gray-areas"));
+    assert.ok(instantiatedPhase.steps.some((step) => step.step_id === "approve-scope"));
+    assert.ok(instantiatedPhase.goal.tags.includes("external-methods"));
+    assert.ok(instantiatedPhase.goal.tags.includes("gsd"));
+
+    const instantiatedOptimize = await callTool(client, "playbook.instantiate", {
+      mutation: nextMutation(testId, "playbook.instantiate.autoresearch", () => mutationCounter++),
+      playbook_id: "autoresearch.optimize_loop",
+      title: "Optimize Local Agent Loop",
+      objective: "Improve the local agentic workflow using measurable evidence",
+    });
+    assert.equal(instantiatedOptimize.created, true);
+    assert.equal(instantiatedOptimize.playbook.source_repo, "karpathy/autoresearch");
+    assert.ok(instantiatedOptimize.steps.some((step) => step.step_id === "establish-baseline"));
+    assert.ok(instantiatedOptimize.steps.some((step) => step.step_id === "accept-or-reject"));
+
+    const fetchedPlan = await callTool(client, "plan.get", {
+      plan_id: instantiatedOptimize.plan.plan_id,
+    });
+    assert.equal(fetchedPlan.found, true);
+    assert.equal(fetchedPlan.plan.metadata.playbook_id, "autoresearch.optimize_loop");
+    assert.equal(
+      fetchedPlan.steps.find((step) => step.step_id === "generate-hypotheses").executor_kind,
+      "trichat"
+    );
+    assert.equal(
+      fetchedPlan.steps.find((step) => step.step_id === "accept-or-reject").executor_kind,
+      "human"
+    );
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
