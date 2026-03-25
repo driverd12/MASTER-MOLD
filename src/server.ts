@@ -43,6 +43,30 @@ import {
   transcriptSummarizeSchema,
 } from "./tools/transcript.js";
 import { adrCreateSchema, createAdr } from "./tools/adr.js";
+import {
+  artifactBundle,
+  artifactBundleSchema,
+  artifactGet,
+  artifactGetSchema,
+  artifactLink,
+  artifactLinkSchema,
+  artifactList,
+  artifactListSchema,
+  artifactRecord,
+  artifactRecordSchema,
+} from "./tools/artifact.js";
+import {
+  experimentCreate,
+  experimentCreateSchema,
+  experimentGet,
+  experimentGetSchema,
+  experimentJudge,
+  experimentJudgeSchema,
+  experimentList,
+  experimentListSchema,
+  experimentRun,
+  experimentRunSchema,
+} from "./tools/experiment.js";
 import { goalCreate, goalCreateSchema, goalGet, goalGetSchema, goalList, goalListSchema } from "./tools/goal.js";
 import {
   playbookGet,
@@ -1092,6 +1116,46 @@ registerTool("goal.get", "Fetch a durable goal by id.", goalGetSchema, (input) =
 
 registerTool("goal.list", "List durable goals by status or target filters.", goalListSchema, (input) =>
   goalList(storage, input)
+);
+
+registerTool("artifact.record", "Persist a durable artifact and optionally link it to goals, plans, tasks, runs, or other entities.", artifactRecordSchema, (input) =>
+  artifactRecord(storage, input)
+);
+
+registerTool("artifact.get", "Fetch a durable artifact and its immediate provenance links.", artifactGetSchema, (input) =>
+  artifactGet(storage, input)
+);
+
+registerTool("artifact.list", "List durable artifacts by scope, type, trust tier, or linked entity.", artifactListSchema, (input) =>
+  artifactList(storage, input)
+);
+
+registerTool("artifact.link", "Create a durable provenance link between artifacts or between an artifact and another entity.", artifactLinkSchema, (input) =>
+  artifactLink(storage, input)
+);
+
+registerTool("artifact.bundle", "Bundle artifacts and provenance for a single artifact or linked entity.", artifactBundleSchema, (input) =>
+  artifactBundle(storage, input)
+);
+
+registerTool("experiment.create", "Create a durable benchmark or optimization experiment record.", experimentCreateSchema, (input) =>
+  experimentCreate(storage, input)
+);
+
+registerTool("experiment.get", "Fetch a durable experiment record and its candidate runs.", experimentGetSchema, (input) =>
+  experimentGet(storage, input)
+);
+
+registerTool("experiment.list", "List durable experiments by status or goal/plan/step filters.", experimentListSchema, (input) =>
+  experimentList(storage, input)
+);
+
+registerTool("experiment.run", "Create a durable experiment candidate run and optionally dispatch it as a task.", experimentRunSchema, (input) =>
+  experimentRun(storage, input)
+);
+
+registerTool("experiment.judge", "Judge a durable experiment run, compute improvement, and optionally promote the best candidate.", experimentJudgeSchema, (input) =>
+  experimentJudge(storage, input)
 );
 
 registerTool("playbook.list", "List built-in workflow playbooks inspired by external agent methodologies.", playbookListSchema, (input) =>

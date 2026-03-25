@@ -24,6 +24,16 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     assert.equal(names.has("goal.create"), true);
     assert.equal(names.has("goal.get"), true);
     assert.equal(names.has("goal.list"), true);
+    assert.equal(names.has("artifact.record"), true);
+    assert.equal(names.has("artifact.get"), true);
+    assert.equal(names.has("artifact.list"), true);
+    assert.equal(names.has("artifact.link"), true);
+    assert.equal(names.has("artifact.bundle"), true);
+    assert.equal(names.has("experiment.create"), true);
+    assert.equal(names.has("experiment.get"), true);
+    assert.equal(names.has("experiment.list"), true);
+    assert.equal(names.has("experiment.run"), true);
+    assert.equal(names.has("experiment.judge"), true);
     assert.equal(names.has("playbook.list"), true);
     assert.equal(names.has("playbook.get"), true);
     assert.equal(names.has("playbook.instantiate"), true);
@@ -447,6 +457,238 @@ test("agent session lifecycle persists across open, heartbeat, list, and close",
       limit: 10,
     });
     assert.equal(activeAfterClose.sessions.some((session) => session.session_id === "session-integration-1"), false);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("artifact and experiment tools persist evidence and judge candidate runs", async () => {
+  const testId = `${Date.now()}-artifact-experiment`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-artifact-experiment-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Artifact experiment integration goal",
+      objective: "Exercise artifact and experiment runtime primitives",
+      status: "active",
+      acceptance_criteria: ["Evidence is durable", "Candidate runs can be judged"],
+    });
+
+    const baselineArtifact = await callTool(client, "artifact.record", {
+      mutation: nextMutation(testId, "artifact.record.baseline", () => mutationCounter++),
+      artifact_type: "benchmark.baseline",
+      producer_kind: "tool",
+      goal_id: createdGoal.goal.goal_id,
+      trust_tier: "verified",
+      content_json: {
+        latency_ms: 100,
+        sample_size: 20,
+      },
+      related_entities: [
+        {
+          entity_type: "goal",
+          entity_id: createdGoal.goal.goal_id,
+        },
+      ],
+    });
+    assert.equal(baselineArtifact.created, true);
+
+    const fetchedBaselineArtifact = await callTool(client, "artifact.get", {
+      artifact_id: baselineArtifact.artifact.artifact_id,
+    });
+    assert.equal(fetchedBaselineArtifact.found, true);
+    assert.equal(fetchedBaselineArtifact.artifact.artifact_id, baselineArtifact.artifact.artifact_id);
+    assert.ok(
+      fetchedBaselineArtifact.links.some(
+        (link) => link.dst_entity_type === "goal" && link.dst_entity_id === createdGoal.goal.goal_id
+      )
+    );
+
+    const goalArtifacts = await callTool(client, "artifact.list", {
+      goal_id: createdGoal.goal.goal_id,
+      limit: 20,
+    });
+    assert.ok(goalArtifacts.count >= 1);
+    assert.ok(goalArtifacts.artifacts.some((artifact) => artifact.artifact_id === baselineArtifact.artifact.artifact_id));
+
+    const goalBundle = await callTool(client, "artifact.bundle", {
+      entity: {
+        entity_type: "goal",
+        entity_id: createdGoal.goal.goal_id,
+      },
+      limit: 20,
+    });
+    assert.equal(goalBundle.found, true);
+    assert.ok(goalBundle.artifacts.some((artifact) => artifact.artifact_id === baselineArtifact.artifact.artifact_id));
+
+    const createdExperiment = await callTool(client, "experiment.create", {
+      mutation: nextMutation(testId, "experiment.create", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      title: "Latency improvement experiment",
+      objective: "Find a candidate that improves latency over the current baseline",
+      hypothesis: "A tighter execution path reduces latency",
+      status: "draft",
+      metric_name: "latency_ms",
+      metric_direction: "minimize",
+      baseline_metric: 100,
+      acceptance_delta: 5,
+      parse_strategy: {
+        metric_path: "latency_ms",
+      },
+      rollback_strategy: {
+        strategy: "restore-baseline",
+      },
+      candidate_scope: {
+        path: "src/",
+      },
+      tags: ["experiment", "latency"],
+    });
+    assert.equal(createdExperiment.created, true);
+    assert.equal(createdExperiment.experiment.metric_name, "latency_ms");
+    assert.equal(createdExperiment.experiment.current_best_metric, 100);
+
+    const startedRun = await callTool(client, "experiment.run", {
+      mutation: nextMutation(testId, "experiment.run", () => mutationCounter++),
+      experiment_id: createdExperiment.experiment.experiment_id,
+      candidate_label: "candidate-a",
+      dispatch_mode: "task",
+      objective: "Benchmark candidate A for latency improvement",
+      project_dir: REPO_ROOT,
+      priority: 4,
+      task_tags: ["experiment", "candidate-a"],
+      payload: {
+        candidate: "a",
+      },
+      artifact_ids: [baselineArtifact.artifact.artifact_id],
+    });
+    assert.equal(startedRun.experiment_run.status, "running");
+    assert.equal(typeof startedRun.task.task_id, "string");
+    assert.equal(startedRun.experiment.status, "active");
+
+    const pendingTasks = await callTool(client, "task.list", {
+      status: "pending",
+      limit: 20,
+    });
+    assert.ok(pendingTasks.tasks.some((task) => task.task_id === startedRun.task.task_id));
+
+    const resultArtifact = await callTool(client, "artifact.record", {
+      mutation: nextMutation(testId, "artifact.record.result", () => mutationCounter++),
+      artifact_type: "benchmark.result",
+      producer_kind: "worker",
+      task_id: startedRun.task.task_id,
+      trust_tier: "raw",
+      content_json: {
+        latency_ms: 90,
+        sample_size: 20,
+      },
+      related_entities: [
+        {
+          entity_type: "task",
+          entity_id: startedRun.task.task_id,
+        },
+      ],
+    });
+    assert.equal(resultArtifact.created, true);
+
+    const explicitArtifactLink = await callTool(client, "artifact.link", {
+      mutation: nextMutation(testId, "artifact.link", () => mutationCounter++),
+      src_artifact_id: resultArtifact.artifact.artifact_id,
+      dst_artifact_id: baselineArtifact.artifact.artifact_id,
+      relation: "derived_from",
+    });
+    assert.equal(explicitArtifactLink.created, true);
+    assert.equal(explicitArtifactLink.link.src_artifact_id, resultArtifact.artifact.artifact_id);
+    assert.equal(explicitArtifactLink.link.dst_artifact_id, baselineArtifact.artifact.artifact_id);
+
+    const judgedRun = await callTool(client, "experiment.judge", {
+      mutation: nextMutation(testId, "experiment.judge", () => mutationCounter++),
+      experiment_id: createdExperiment.experiment.experiment_id,
+      experiment_run_id: startedRun.experiment_run.experiment_run_id,
+      observed_metric: 90,
+      observed_metrics: {
+        latency_ms: 90,
+      },
+      artifact_ids: [resultArtifact.artifact.artifact_id],
+      summary: "Candidate A improved latency by ten milliseconds",
+    });
+    assert.equal(judgedRun.ok, true);
+    assert.equal(judgedRun.verdict, "accepted");
+    assert.equal(judgedRun.accepted, true);
+    assert.equal(judgedRun.delta, 10);
+    assert.equal(judgedRun.experiment.current_best_metric, 90);
+    assert.equal(judgedRun.experiment.selected_run_id, startedRun.experiment_run.experiment_run_id);
+
+    const fetchedExperiment = await callTool(client, "experiment.get", {
+      experiment_id: createdExperiment.experiment.experiment_id,
+      run_limit: 10,
+    });
+    assert.equal(fetchedExperiment.found, true);
+    assert.equal(fetchedExperiment.run_count, 1);
+    assert.equal(fetchedExperiment.selected_run.experiment_run_id, startedRun.experiment_run.experiment_run_id);
+    assert.equal(fetchedExperiment.runs[0].verdict, "accepted");
+
+    const listedExperiments = await callTool(client, "experiment.list", {
+      goal_id: createdGoal.goal.goal_id,
+      limit: 10,
+    });
+    assert.ok(listedExperiments.count >= 1);
+    assert.ok(
+      listedExperiments.experiments.some(
+        (experiment) => experiment.experiment_id === createdExperiment.experiment.experiment_id
+      )
+    );
+
+    const experimentArtifacts = await callTool(client, "artifact.list", {
+      linked_entity: {
+        entity_type: "experiment",
+        entity_id: createdExperiment.experiment.experiment_id,
+      },
+      limit: 20,
+    });
+    assert.ok(
+      experimentArtifacts.artifacts.some((artifact) => artifact.artifact_id === baselineArtifact.artifact.artifact_id)
+    );
+    assert.ok(
+      experimentArtifacts.artifacts.some((artifact) => artifact.artifact_id === resultArtifact.artifact.artifact_id)
+    );
+
+    const experimentBundle = await callTool(client, "artifact.bundle", {
+      entity: {
+        entity_type: "experiment",
+        entity_id: createdExperiment.experiment.experiment_id,
+      },
+      limit: 20,
+    });
+    assert.equal(experimentBundle.found, true);
+    assert.ok(
+      experimentBundle.artifacts.some((artifact) => artifact.artifact_id === resultArtifact.artifact.artifact_id)
+    );
+    assert.ok(
+      experimentBundle.links.some(
+        (link) =>
+          link.dst_entity_type === "experiment" &&
+          link.dst_entity_id === createdExperiment.experiment.experiment_id &&
+          link.src_artifact_id === resultArtifact.artifact.artifact_id
+      )
+    );
+
+    const resultArtifactGraph = await callTool(client, "artifact.get", {
+      artifact_id: resultArtifact.artifact.artifact_id,
+    });
+    assert.equal(resultArtifactGraph.found, true);
+    assert.ok(
+      resultArtifactGraph.links.some(
+        (link) =>
+          link.src_artifact_id === resultArtifact.artifact.artifact_id &&
+          link.dst_artifact_id === baselineArtifact.artifact.artifact_id &&
+          link.relation === "derived_from"
+      )
+    );
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

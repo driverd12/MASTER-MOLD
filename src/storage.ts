@@ -220,6 +220,114 @@ export type AgentSessionRecord = {
   source_agent: string | null;
 };
 
+export type ArtifactStatus = "active" | "superseded" | "invalid" | "archived";
+
+export type ArtifactTrustTier = "raw" | "derived" | "verified" | "policy-backed" | "deprecated";
+
+export type ArtifactRecord = {
+  artifact_id: string;
+  created_at: string;
+  updated_at: string;
+  artifact_type: string;
+  status: ArtifactStatus;
+  goal_id: string | null;
+  plan_id: string | null;
+  step_id: string | null;
+  task_id: string | null;
+  run_id: string | null;
+  thread_id: string | null;
+  turn_id: string | null;
+  pack_id: string | null;
+  producer_kind: string;
+  producer_id: string | null;
+  uri: string | null;
+  content_text: string | null;
+  content_json: Record<string, unknown> | null;
+  hash: string | null;
+  trust_tier: ArtifactTrustTier;
+  freshness_expires_at: string | null;
+  supersedes_artifact_id: string | null;
+  metadata: Record<string, unknown>;
+  source_client: string | null;
+  source_model: string | null;
+  source_agent: string | null;
+};
+
+export type ArtifactLinkRecord = {
+  id: string;
+  created_at: string;
+  src_artifact_id: string;
+  dst_artifact_id: string | null;
+  dst_entity_type: string | null;
+  dst_entity_id: string | null;
+  relation: string;
+  rationale: string | null;
+  metadata: Record<string, unknown>;
+  source_client: string | null;
+  source_model: string | null;
+  source_agent: string | null;
+};
+
+export type ExperimentStatus = "draft" | "active" | "paused" | "completed" | "archived";
+
+export type ExperimentMetricDirection = "minimize" | "maximize";
+
+export type ExperimentRunStatus = "proposed" | "running" | "completed" | "crash" | "discarded";
+
+export type ExperimentVerdict = "accepted" | "rejected" | "inconclusive" | "crash";
+
+export type ExperimentRecord = {
+  experiment_id: string;
+  created_at: string;
+  updated_at: string;
+  goal_id: string | null;
+  plan_id: string | null;
+  step_id: string | null;
+  title: string;
+  objective: string;
+  hypothesis: string | null;
+  status: ExperimentStatus;
+  metric_name: string;
+  metric_direction: ExperimentMetricDirection;
+  baseline_metric: number | null;
+  current_best_metric: number | null;
+  acceptance_delta: number;
+  budget_seconds: number | null;
+  run_command: string | null;
+  parse_strategy: Record<string, unknown>;
+  rollback_strategy: Record<string, unknown>;
+  candidate_scope: Record<string, unknown>;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  selected_run_id: string | null;
+  source_client: string | null;
+  source_model: string | null;
+  source_agent: string | null;
+};
+
+export type ExperimentRunRecord = {
+  experiment_run_id: string;
+  experiment_id: string;
+  created_at: string;
+  updated_at: string;
+  candidate_label: string;
+  status: ExperimentRunStatus;
+  verdict: ExperimentVerdict | null;
+  task_id: string | null;
+  run_id: string | null;
+  artifact_ids: string[];
+  observed_metric: number | null;
+  observed_metrics: Record<string, unknown>;
+  delta: number | null;
+  summary: string | null;
+  log_excerpt: string | null;
+  error_text: string | null;
+  metadata: Record<string, unknown>;
+  source_client: string | null;
+  source_model: string | null;
+  source_agent: string | null;
+};
+
 export type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 export type TaskRecord = {
@@ -761,6 +869,11 @@ export class Storage {
         version: 11,
         name: "add-agent-session-kernel-schema",
         run: () => this.applyAgentSessionsSchemaMigration(),
+      },
+      {
+        version: 12,
+        name: "add-experiment-kernel-schema",
+        run: () => this.applyExperimentSchemaMigration(),
       },
     ]);
     this.ensureRuntimeSchemaCompleteness();
@@ -3470,6 +3583,746 @@ export class Storage {
       closed: Boolean(session),
       reason: session ? "closed" : "not-found",
       session: session ?? undefined,
+    };
+  }
+
+  recordArtifact(params: {
+    artifact_id?: string;
+    artifact_type: string;
+    status?: ArtifactStatus;
+    goal_id?: string;
+    plan_id?: string;
+    step_id?: string;
+    task_id?: string;
+    run_id?: string;
+    thread_id?: string;
+    turn_id?: string;
+    pack_id?: string;
+    producer_kind: string;
+    producer_id?: string;
+    uri?: string;
+    content_text?: string;
+    content_json?: Record<string, unknown>;
+    hash?: string;
+    trust_tier?: ArtifactTrustTier;
+    freshness_expires_at?: string;
+    supersedes_artifact_id?: string;
+    metadata?: Record<string, unknown>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }): { created: boolean; artifact: ArtifactRecord } {
+    const now = new Date().toISOString();
+    const artifactId = params.artifact_id?.trim() || crypto.randomUUID();
+    const existing = this.getArtifactById(artifactId);
+    if (existing) {
+      return {
+        created: false,
+        artifact: existing,
+      };
+    }
+    const artifactType = params.artifact_type.trim();
+    if (!artifactType) {
+      throw new Error("artifact_type is required");
+    }
+    const producerKind = params.producer_kind.trim();
+    if (!producerKind) {
+      throw new Error("producer_kind is required");
+    }
+    if (!params.uri && !params.content_text && !params.content_json) {
+      throw new Error("artifact requires uri, content_text, or content_json");
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO artifacts (
+           artifact_id, created_at, updated_at, artifact_type, status, goal_id, plan_id, step_id, task_id, run_id,
+           thread_id, turn_id, pack_id, producer_kind, producer_id, uri, content_text, content_json, hash, trust_tier,
+           freshness_expires_at, supersedes_artifact_id, metadata_json, source_client, source_model, source_agent
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        artifactId,
+        now,
+        now,
+        artifactType,
+        normalizeArtifactStatus(params.status),
+        params.goal_id?.trim() || null,
+        params.plan_id?.trim() || null,
+        params.step_id?.trim() || null,
+        params.task_id?.trim() || null,
+        params.run_id?.trim() || null,
+        params.thread_id?.trim() || null,
+        params.turn_id?.trim() || null,
+        params.pack_id?.trim() || null,
+        producerKind,
+        params.producer_id?.trim() || null,
+        params.uri?.trim() || null,
+        params.content_text ?? null,
+        params.content_json ? stableStringify(parseLooseObject(params.content_json)) : null,
+        params.hash?.trim() || null,
+        normalizeArtifactTrustTier(params.trust_tier),
+        normalizeOptionalIsoTimestamp(params.freshness_expires_at),
+        params.supersedes_artifact_id?.trim() || null,
+        stableStringify(parseLooseObject(params.metadata ?? {})),
+        params.source_client ?? null,
+        params.source_model ?? null,
+        params.source_agent ?? null
+      );
+
+    const artifact = this.getArtifactById(artifactId);
+    if (!artifact) {
+      throw new Error(`Failed to read artifact after record: ${artifactId}`);
+    }
+    return {
+      created: true,
+      artifact,
+    };
+  }
+
+  getArtifactById(artifactId: string): ArtifactRecord | null {
+    const normalized = artifactId.trim();
+    if (!normalized) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT artifact_id, created_at, updated_at, artifact_type, status, goal_id, plan_id, step_id, task_id, run_id,
+                thread_id, turn_id, pack_id, producer_kind, producer_id, uri, content_text, content_json, hash, trust_tier,
+                freshness_expires_at, supersedes_artifact_id, metadata_json, source_client, source_model, source_agent
+         FROM artifacts
+         WHERE artifact_id = ?`
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+    return mapArtifactRow(row);
+  }
+
+  listArtifacts(params: {
+    artifact_type?: string;
+    trust_tier?: ArtifactTrustTier;
+    goal_id?: string;
+    plan_id?: string;
+    step_id?: string;
+    task_id?: string;
+    run_id?: string;
+    thread_id?: string;
+    turn_id?: string;
+    pack_id?: string;
+    linked_entity_type?: string;
+    linked_entity_id?: string;
+    limit: number;
+  }): ArtifactRecord[] {
+    const limit = Math.max(1, Math.min(500, params.limit));
+    const whereClauses: string[] = [];
+    const values: unknown[] = [];
+    const artifactType = params.artifact_type?.trim();
+    if (artifactType) {
+      whereClauses.push("a.artifact_type = ?");
+      values.push(artifactType);
+    }
+    if (params.trust_tier) {
+      whereClauses.push("a.trust_tier = ?");
+      values.push(normalizeArtifactTrustTier(params.trust_tier));
+    }
+    for (const [field, value] of [
+      ["goal_id", params.goal_id],
+      ["plan_id", params.plan_id],
+      ["step_id", params.step_id],
+      ["task_id", params.task_id],
+      ["run_id", params.run_id],
+      ["thread_id", params.thread_id],
+      ["turn_id", params.turn_id],
+      ["pack_id", params.pack_id],
+    ] as Array<[string, string | undefined]>) {
+      const normalized = value?.trim();
+      if (normalized) {
+        whereClauses.push(`a.${field} = ?`);
+        values.push(normalized);
+      }
+    }
+    const linkedEntityType = params.linked_entity_type?.trim();
+    const linkedEntityId = params.linked_entity_id?.trim();
+    if (linkedEntityType && linkedEntityId) {
+      whereClauses.push(
+        `EXISTS (
+           SELECT 1
+           FROM artifact_links links
+           WHERE links.src_artifact_id = a.artifact_id
+             AND links.dst_entity_type = ?
+             AND links.dst_entity_id = ?
+         )`
+      );
+      values.push(linkedEntityType, linkedEntityId);
+    }
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(
+        `SELECT a.artifact_id, a.created_at, a.updated_at, a.artifact_type, a.status, a.goal_id, a.plan_id, a.step_id, a.task_id, a.run_id,
+                a.thread_id, a.turn_id, a.pack_id, a.producer_kind, a.producer_id, a.uri, a.content_text, a.content_json, a.hash, a.trust_tier,
+                a.freshness_expires_at, a.supersedes_artifact_id, a.metadata_json, a.source_client, a.source_model, a.source_agent
+         FROM artifacts a
+         ${whereSql}
+         ORDER BY a.created_at DESC
+         LIMIT ?`
+      )
+      .all(...values, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapArtifactRow(row));
+  }
+
+  linkArtifact(params: {
+    src_artifact_id: string;
+    dst_artifact_id?: string;
+    dst_entity_type?: string;
+    dst_entity_id?: string;
+    relation: string;
+    rationale?: string;
+    metadata?: Record<string, unknown>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }): { created: boolean; link: ArtifactLinkRecord } {
+    const now = new Date().toISOString();
+    const srcArtifactId = params.src_artifact_id.trim();
+    if (!srcArtifactId) {
+      throw new Error("src_artifact_id is required");
+    }
+    const relation = params.relation.trim();
+    if (!relation) {
+      throw new Error("relation is required");
+    }
+    const dstArtifactId = params.dst_artifact_id?.trim() || null;
+    const dstEntityType = params.dst_entity_type?.trim() || null;
+    const dstEntityId = params.dst_entity_id?.trim() || null;
+    if (!dstArtifactId && !(dstEntityType && dstEntityId)) {
+      throw new Error("dst_artifact_id or dst_entity_type/dst_entity_id is required");
+    }
+
+    const existing = this.db
+      .prepare(
+        `SELECT id, created_at, src_artifact_id, dst_artifact_id, dst_entity_type, dst_entity_id, relation, rationale,
+                metadata_json, source_client, source_model, source_agent
+         FROM artifact_links
+         WHERE src_artifact_id = ?
+           AND COALESCE(dst_artifact_id, '') = COALESCE(?, '')
+           AND COALESCE(dst_entity_type, '') = COALESCE(?, '')
+           AND COALESCE(dst_entity_id, '') = COALESCE(?, '')
+           AND relation = ?
+         LIMIT 1`
+      )
+      .get(srcArtifactId, dstArtifactId, dstEntityType, dstEntityId, relation) as Record<string, unknown> | undefined;
+    if (existing) {
+      return {
+        created: false,
+        link: mapArtifactLinkRow(existing),
+      };
+    }
+
+    const linkId = crypto.randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO artifact_links (
+           id, created_at, src_artifact_id, dst_artifact_id, dst_entity_type, dst_entity_id, relation, rationale,
+           metadata_json, source_client, source_model, source_agent
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        linkId,
+        now,
+        srcArtifactId,
+        dstArtifactId,
+        dstEntityType,
+        dstEntityId,
+        relation,
+        params.rationale?.trim() || null,
+        stableStringify(parseLooseObject(params.metadata ?? {})),
+        params.source_client ?? null,
+        params.source_model ?? null,
+        params.source_agent ?? null
+      );
+
+    const link = this.getArtifactLinkById(linkId);
+    if (!link) {
+      throw new Error(`Failed to read artifact link after create: ${linkId}`);
+    }
+    return {
+      created: true,
+      link,
+    };
+  }
+
+  getArtifactLinkById(linkId: string): ArtifactLinkRecord | null {
+    const normalized = linkId.trim();
+    if (!normalized) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT id, created_at, src_artifact_id, dst_artifact_id, dst_entity_type, dst_entity_id, relation, rationale,
+                metadata_json, source_client, source_model, source_agent
+         FROM artifact_links
+         WHERE id = ?`
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+    return mapArtifactLinkRow(row);
+  }
+
+  listArtifactLinks(params: {
+    artifact_id?: string;
+    entity_type?: string;
+    entity_id?: string;
+    limit: number;
+  }): ArtifactLinkRecord[] {
+    const limit = Math.max(1, Math.min(1000, params.limit));
+    const whereClauses: string[] = [];
+    const values: unknown[] = [];
+    const artifactId = params.artifact_id?.trim();
+    if (artifactId) {
+      whereClauses.push("(src_artifact_id = ? OR dst_artifact_id = ?)");
+      values.push(artifactId, artifactId);
+    }
+    const entityType = params.entity_type?.trim();
+    const entityId = params.entity_id?.trim();
+    if (entityType && entityId) {
+      whereClauses.push("dst_entity_type = ? AND dst_entity_id = ?");
+      values.push(entityType, entityId);
+    }
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(
+        `SELECT id, created_at, src_artifact_id, dst_artifact_id, dst_entity_type, dst_entity_id, relation, rationale,
+                metadata_json, source_client, source_model, source_agent
+         FROM artifact_links
+         ${whereSql}
+         ORDER BY created_at ASC
+         LIMIT ?`
+      )
+      .all(...values, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapArtifactLinkRow(row));
+  }
+
+  createExperiment(params: {
+    experiment_id?: string;
+    goal_id?: string;
+    plan_id?: string;
+    step_id?: string;
+    title: string;
+    objective: string;
+    hypothesis?: string;
+    status?: ExperimentStatus;
+    metric_name: string;
+    metric_direction?: ExperimentMetricDirection;
+    baseline_metric?: number;
+    current_best_metric?: number;
+    acceptance_delta?: number;
+    budget_seconds?: number;
+    run_command?: string;
+    parse_strategy?: Record<string, unknown>;
+    rollback_strategy?: Record<string, unknown>;
+    candidate_scope?: Record<string, unknown>;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }): { created: boolean; experiment: ExperimentRecord } {
+    const now = new Date().toISOString();
+    const experimentId = params.experiment_id?.trim() || crypto.randomUUID();
+    const existing = this.getExperimentById(experimentId);
+    if (existing) {
+      return {
+        created: false,
+        experiment: existing,
+      };
+    }
+    const title = params.title.trim();
+    const objective = params.objective.trim();
+    const metricName = params.metric_name.trim();
+    if (!title || !objective || !metricName) {
+      throw new Error("experiment title, objective, and metric_name are required");
+    }
+    const baselineMetric =
+      params.baseline_metric === undefined || params.baseline_metric === null ? null : Number(params.baseline_metric);
+    const currentBestMetric =
+      params.current_best_metric === undefined
+        ? baselineMetric
+        : params.current_best_metric === null
+          ? null
+          : Number(params.current_best_metric);
+
+    this.db
+      .prepare(
+        `INSERT INTO experiments (
+           experiment_id, created_at, updated_at, goal_id, plan_id, step_id, title, objective, hypothesis, status,
+           metric_name, metric_direction, baseline_metric, current_best_metric, acceptance_delta, budget_seconds, run_command,
+           parse_strategy_json, rollback_strategy_json, candidate_scope_json, tags_json, metadata_json, selected_run_id,
+           source_client, source_model, source_agent
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        experimentId,
+        now,
+        now,
+        params.goal_id?.trim() || null,
+        params.plan_id?.trim() || null,
+        params.step_id?.trim() || null,
+        title,
+        objective,
+        params.hypothesis?.trim() || null,
+        normalizeExperimentStatus(params.status),
+        metricName,
+        normalizeExperimentMetricDirection(params.metric_direction),
+        baselineMetric,
+        currentBestMetric,
+        parseBoundedFloat(params.acceptance_delta, 0, 0, Number.MAX_SAFE_INTEGER),
+        params.budget_seconds === undefined ? null : parseBoundedInt(params.budget_seconds, 0, 1, 86400),
+        params.run_command?.trim() || null,
+        stableStringify(parseLooseObject(params.parse_strategy ?? {})),
+        stableStringify(parseLooseObject(params.rollback_strategy ?? {})),
+        stableStringify(parseLooseObject(params.candidate_scope ?? {})),
+        stableStringify(dedupeNonEmpty(params.tags ?? [])),
+        stableStringify(parseLooseObject(params.metadata ?? {})),
+        null,
+        params.source_client ?? null,
+        params.source_model ?? null,
+        params.source_agent ?? null
+      );
+
+    const experiment = this.getExperimentById(experimentId);
+    if (!experiment) {
+      throw new Error(`Failed to read experiment after create: ${experimentId}`);
+    }
+    return {
+      created: true,
+      experiment,
+    };
+  }
+
+  getExperimentById(experimentId: string): ExperimentRecord | null {
+    const normalized = experimentId.trim();
+    if (!normalized) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT experiment_id, created_at, updated_at, goal_id, plan_id, step_id, title, objective, hypothesis, status,
+                metric_name, metric_direction, baseline_metric, current_best_metric, acceptance_delta, budget_seconds, run_command,
+                parse_strategy_json, rollback_strategy_json, candidate_scope_json, tags_json, metadata_json, selected_run_id,
+                source_client, source_model, source_agent
+         FROM experiments
+         WHERE experiment_id = ?`
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+    return mapExperimentRow(row);
+  }
+
+  listExperiments(params: {
+    status?: ExperimentStatus;
+    goal_id?: string;
+    plan_id?: string;
+    step_id?: string;
+    limit: number;
+  }): ExperimentRecord[] {
+    const limit = Math.max(1, Math.min(500, params.limit));
+    const whereClauses: string[] = [];
+    const values: unknown[] = [];
+    if (params.status) {
+      whereClauses.push("status = ?");
+      values.push(normalizeExperimentStatus(params.status));
+    }
+    for (const [field, value] of [
+      ["goal_id", params.goal_id],
+      ["plan_id", params.plan_id],
+      ["step_id", params.step_id],
+    ] as Array<[string, string | undefined]>) {
+      const normalized = value?.trim();
+      if (normalized) {
+        whereClauses.push(`${field} = ?`);
+        values.push(normalized);
+      }
+    }
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(
+        `SELECT experiment_id, created_at, updated_at, goal_id, plan_id, step_id, title, objective, hypothesis, status,
+                metric_name, metric_direction, baseline_metric, current_best_metric, acceptance_delta, budget_seconds, run_command,
+                parse_strategy_json, rollback_strategy_json, candidate_scope_json, tags_json, metadata_json, selected_run_id,
+                source_client, source_model, source_agent
+         FROM experiments
+         ${whereSql}
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(...values, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapExperimentRow(row));
+  }
+
+  updateExperiment(params: {
+    experiment_id: string;
+    status?: ExperimentStatus;
+    current_best_metric?: number | null;
+    selected_run_id?: string | null;
+    metadata?: Record<string, unknown>;
+  }): { experiment: ExperimentRecord } {
+    const experimentId = params.experiment_id.trim();
+    if (!experimentId) {
+      throw new Error("experiment_id is required");
+    }
+    const existing = this.getExperimentById(experimentId);
+    if (!existing) {
+      throw new Error(`Experiment not found: ${experimentId}`);
+    }
+    const now = new Date().toISOString();
+    const status = params.status ? normalizeExperimentStatus(params.status) : existing.status;
+    const currentBestMetric =
+      params.current_best_metric === undefined ? existing.current_best_metric : params.current_best_metric;
+    const selectedRunId =
+      params.selected_run_id === undefined ? existing.selected_run_id : params.selected_run_id?.trim() || null;
+    const metadata =
+      params.metadata === undefined
+        ? existing.metadata
+        : {
+            ...existing.metadata,
+            ...parseLooseObject(params.metadata),
+          };
+
+    this.db
+      .prepare(
+        `UPDATE experiments
+         SET updated_at = ?, status = ?, current_best_metric = ?, selected_run_id = ?, metadata_json = ?
+         WHERE experiment_id = ?`
+      )
+      .run(now, status, currentBestMetric, selectedRunId, stableStringify(metadata), experimentId);
+
+    const experiment = this.getExperimentById(experimentId);
+    if (!experiment) {
+      throw new Error(`Failed to read experiment after update: ${experimentId}`);
+    }
+    return {
+      experiment,
+    };
+  }
+
+  createExperimentRun(params: {
+    experiment_run_id?: string;
+    experiment_id: string;
+    candidate_label: string;
+    status?: ExperimentRunStatus;
+    verdict?: ExperimentVerdict | null;
+    task_id?: string;
+    run_id?: string;
+    artifact_ids?: string[];
+    observed_metric?: number;
+    observed_metrics?: Record<string, unknown>;
+    delta?: number | null;
+    summary?: string;
+    log_excerpt?: string;
+    error_text?: string;
+    metadata?: Record<string, unknown>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }): { created: boolean; experiment_run: ExperimentRunRecord } {
+    const now = new Date().toISOString();
+    const experimentRunId = params.experiment_run_id?.trim() || crypto.randomUUID();
+    const existing = this.getExperimentRunById(experimentRunId);
+    if (existing) {
+      return {
+        created: false,
+        experiment_run: existing,
+      };
+    }
+    const experimentId = params.experiment_id.trim();
+    if (!experimentId) {
+      throw new Error("experiment_id is required");
+    }
+    const candidateLabel = params.candidate_label.trim();
+    if (!candidateLabel) {
+      throw new Error("candidate_label is required");
+    }
+    if (!this.getExperimentById(experimentId)) {
+      throw new Error(`Experiment not found: ${experimentId}`);
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO experiment_runs (
+           experiment_run_id, experiment_id, created_at, updated_at, candidate_label, status, verdict, task_id, run_id,
+           artifact_ids_json, observed_metric, observed_metrics_json, delta, summary, log_excerpt, error_text, metadata_json,
+           source_client, source_model, source_agent
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        experimentRunId,
+        experimentId,
+        now,
+        now,
+        candidateLabel,
+        normalizeExperimentRunStatus(params.status),
+        normalizeOptionalExperimentVerdict(params.verdict),
+        params.task_id?.trim() || null,
+        params.run_id?.trim() || null,
+        stableStringify(dedupeNonEmpty(params.artifact_ids ?? [])),
+        params.observed_metric === undefined ? null : Number(params.observed_metric),
+        stableStringify(parseLooseObject(params.observed_metrics ?? {})),
+        params.delta === undefined ? null : params.delta,
+        params.summary?.trim() || null,
+        params.log_excerpt ?? null,
+        params.error_text ?? null,
+        stableStringify(parseLooseObject(params.metadata ?? {})),
+        params.source_client ?? null,
+        params.source_model ?? null,
+        params.source_agent ?? null
+      );
+
+    const experimentRun = this.getExperimentRunById(experimentRunId);
+    if (!experimentRun) {
+      throw new Error(`Failed to read experiment run after create: ${experimentRunId}`);
+    }
+    return {
+      created: true,
+      experiment_run: experimentRun,
+    };
+  }
+
+  getExperimentRunById(experimentRunId: string): ExperimentRunRecord | null {
+    const normalized = experimentRunId.trim();
+    if (!normalized) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT experiment_run_id, experiment_id, created_at, updated_at, candidate_label, status, verdict, task_id, run_id,
+                artifact_ids_json, observed_metric, observed_metrics_json, delta, summary, log_excerpt, error_text, metadata_json,
+                source_client, source_model, source_agent
+         FROM experiment_runs
+         WHERE experiment_run_id = ?`
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+    return mapExperimentRunRow(row);
+  }
+
+  listExperimentRuns(params: {
+    experiment_id: string;
+    status?: ExperimentRunStatus;
+    limit: number;
+  }): ExperimentRunRecord[] {
+    const experimentId = params.experiment_id.trim();
+    if (!experimentId) {
+      throw new Error("experiment_id is required");
+    }
+    const limit = Math.max(1, Math.min(500, params.limit));
+    const whereClauses = ["experiment_id = ?"];
+    const values: unknown[] = [experimentId];
+    if (params.status) {
+      whereClauses.push("status = ?");
+      values.push(normalizeExperimentRunStatus(params.status));
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT experiment_run_id, experiment_id, created_at, updated_at, candidate_label, status, verdict, task_id, run_id,
+                artifact_ids_json, observed_metric, observed_metrics_json, delta, summary, log_excerpt, error_text, metadata_json,
+                source_client, source_model, source_agent
+         FROM experiment_runs
+         WHERE ${whereClauses.join(" AND ")}
+         ORDER BY created_at DESC
+         LIMIT ?`
+      )
+      .all(...values, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapExperimentRunRow(row));
+  }
+
+  updateExperimentRun(params: {
+    experiment_run_id: string;
+    status?: ExperimentRunStatus;
+    verdict?: ExperimentVerdict | null;
+    task_id?: string | null;
+    run_id?: string | null;
+    artifact_ids?: string[];
+    observed_metric?: number | null;
+    observed_metrics?: Record<string, unknown>;
+    delta?: number | null;
+    summary?: string | null;
+    log_excerpt?: string | null;
+    error_text?: string | null;
+    metadata?: Record<string, unknown>;
+  }): { experiment_run: ExperimentRunRecord } {
+    const experimentRunId = params.experiment_run_id.trim();
+    if (!experimentRunId) {
+      throw new Error("experiment_run_id is required");
+    }
+    const existing = this.getExperimentRunById(experimentRunId);
+    if (!existing) {
+      throw new Error(`Experiment run not found: ${experimentRunId}`);
+    }
+    const now = new Date().toISOString();
+    const status = params.status ? normalizeExperimentRunStatus(params.status) : existing.status;
+    const verdict =
+      params.verdict === undefined ? existing.verdict : normalizeOptionalExperimentVerdict(params.verdict);
+    const taskId = params.task_id === undefined ? existing.task_id : params.task_id?.trim() || null;
+    const runId = params.run_id === undefined ? existing.run_id : params.run_id?.trim() || null;
+    const artifactIds = params.artifact_ids === undefined ? existing.artifact_ids : dedupeNonEmpty(params.artifact_ids);
+    const observedMetric = params.observed_metric === undefined ? existing.observed_metric : params.observed_metric;
+    const observedMetrics =
+      params.observed_metrics === undefined
+        ? existing.observed_metrics
+        : {
+            ...existing.observed_metrics,
+            ...parseLooseObject(params.observed_metrics),
+          };
+    const delta = params.delta === undefined ? existing.delta : params.delta;
+    const summary = params.summary === undefined ? existing.summary : params.summary;
+    const logExcerpt = params.log_excerpt === undefined ? existing.log_excerpt : params.log_excerpt;
+    const errorText = params.error_text === undefined ? existing.error_text : params.error_text;
+    const metadata =
+      params.metadata === undefined
+        ? existing.metadata
+        : {
+            ...existing.metadata,
+            ...parseLooseObject(params.metadata),
+          };
+
+    this.db
+      .prepare(
+        `UPDATE experiment_runs
+         SET updated_at = ?, status = ?, verdict = ?, task_id = ?, run_id = ?, artifact_ids_json = ?, observed_metric = ?,
+             observed_metrics_json = ?, delta = ?, summary = ?, log_excerpt = ?, error_text = ?, metadata_json = ?
+         WHERE experiment_run_id = ?`
+      )
+      .run(
+        now,
+        status,
+        verdict,
+        taskId,
+        runId,
+        stableStringify(artifactIds),
+        observedMetric,
+        stableStringify(observedMetrics),
+        delta,
+        summary,
+        logExcerpt,
+        errorText,
+        stableStringify(metadata),
+        experimentRunId
+      );
+
+    const experimentRun = this.getExperimentRunById(experimentRunId);
+    if (!experimentRun) {
+      throw new Error(`Failed to read experiment run after update: ${experimentRunId}`);
+    }
+    return {
+      experiment_run: experimentRun,
     };
   }
 
@@ -6296,6 +7149,11 @@ export class Storage {
       "task_events",
       "task_leases",
       "task_artifacts",
+      "artifacts",
+      "artifact_links",
+      "pack_hook_runs",
+      "experiments",
+      "experiment_runs",
       "agent_sessions",
       "trichat_threads",
       "trichat_messages",
@@ -6386,6 +7244,7 @@ export class Storage {
     this.applyTriChatReliabilitySchemaMigration();
     this.applyAgenticSchemaMigration();
     this.applyAgentSessionsSchemaMigration();
+    this.applyExperimentSchemaMigration();
   }
 
   private applyCoreSchemaMigration(): void {
@@ -6870,6 +7729,67 @@ export class Storage {
     this.ensureIndex("idx_agent_sessions_lease", "agent_sessions", "lease_expires_at ASC");
   }
 
+  private applyExperimentSchemaMigration(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS experiments (
+        experiment_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        goal_id TEXT,
+        plan_id TEXT,
+        step_id TEXT,
+        title TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        hypothesis TEXT,
+        status TEXT NOT NULL,
+        metric_name TEXT NOT NULL,
+        metric_direction TEXT NOT NULL,
+        baseline_metric REAL,
+        current_best_metric REAL,
+        acceptance_delta REAL NOT NULL DEFAULT 0,
+        budget_seconds INTEGER,
+        run_command TEXT,
+        parse_strategy_json TEXT NOT NULL,
+        rollback_strategy_json TEXT NOT NULL,
+        candidate_scope_json TEXT NOT NULL,
+        tags_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        selected_run_id TEXT,
+        source_client TEXT,
+        source_model TEXT,
+        source_agent TEXT
+      );
+      CREATE TABLE IF NOT EXISTS experiment_runs (
+        experiment_run_id TEXT PRIMARY KEY,
+        experiment_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        candidate_label TEXT NOT NULL,
+        status TEXT NOT NULL,
+        verdict TEXT,
+        task_id TEXT,
+        run_id TEXT,
+        artifact_ids_json TEXT NOT NULL,
+        observed_metric REAL,
+        observed_metrics_json TEXT NOT NULL,
+        delta REAL,
+        summary TEXT,
+        log_excerpt TEXT,
+        error_text TEXT,
+        metadata_json TEXT NOT NULL,
+        source_client TEXT,
+        source_model TEXT,
+        source_agent TEXT
+      );
+    `);
+
+    this.ensureIndex("idx_experiments_status_updated", "experiments", "status, updated_at DESC");
+    this.ensureIndex("idx_experiments_goal", "experiments", "goal_id, updated_at DESC");
+    this.ensureIndex("idx_experiments_plan", "experiments", "plan_id, updated_at DESC");
+    this.ensureIndex("idx_experiment_runs_experiment", "experiment_runs", "experiment_id, created_at DESC");
+    this.ensureIndex("idx_experiment_runs_status", "experiment_runs", "status, created_at DESC");
+  }
+
   private applyTriChatSchemaMigration(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS trichat_threads (
@@ -7329,6 +8249,110 @@ function mapAgentSessionRow(row: Record<string, unknown>): AgentSessionRecord {
   };
 }
 
+function mapArtifactRow(row: Record<string, unknown>): ArtifactRecord {
+  return {
+    artifact_id: String(row.artifact_id ?? ""),
+    created_at: String(row.created_at ?? ""),
+    updated_at: String(row.updated_at ?? ""),
+    artifact_type: String(row.artifact_type ?? ""),
+    status: normalizeArtifactStatus(row.status),
+    goal_id: asNullableString(row.goal_id),
+    plan_id: asNullableString(row.plan_id),
+    step_id: asNullableString(row.step_id),
+    task_id: asNullableString(row.task_id),
+    run_id: asNullableString(row.run_id),
+    thread_id: asNullableString(row.thread_id),
+    turn_id: asNullableString(row.turn_id),
+    pack_id: asNullableString(row.pack_id),
+    producer_kind: String(row.producer_kind ?? ""),
+    producer_id: asNullableString(row.producer_id),
+    uri: asNullableString(row.uri),
+    content_text: asNullableString(row.content_text),
+    content_json: parseNullableJsonObject(row.content_json),
+    hash: asNullableString(row.hash),
+    trust_tier: normalizeArtifactTrustTier(row.trust_tier),
+    freshness_expires_at: asNullableString(row.freshness_expires_at),
+    supersedes_artifact_id: asNullableString(row.supersedes_artifact_id),
+    metadata: parseJsonObject(row.metadata_json),
+    source_client: asNullableString(row.source_client),
+    source_model: asNullableString(row.source_model),
+    source_agent: asNullableString(row.source_agent),
+  };
+}
+
+function mapArtifactLinkRow(row: Record<string, unknown>): ArtifactLinkRecord {
+  return {
+    id: String(row.id ?? ""),
+    created_at: String(row.created_at ?? ""),
+    src_artifact_id: String(row.src_artifact_id ?? ""),
+    dst_artifact_id: asNullableString(row.dst_artifact_id),
+    dst_entity_type: asNullableString(row.dst_entity_type),
+    dst_entity_id: asNullableString(row.dst_entity_id),
+    relation: String(row.relation ?? ""),
+    rationale: asNullableString(row.rationale),
+    metadata: parseJsonObject(row.metadata_json),
+    source_client: asNullableString(row.source_client),
+    source_model: asNullableString(row.source_model),
+    source_agent: asNullableString(row.source_agent),
+  };
+}
+
+function mapExperimentRow(row: Record<string, unknown>): ExperimentRecord {
+  return {
+    experiment_id: String(row.experiment_id ?? ""),
+    created_at: String(row.created_at ?? ""),
+    updated_at: String(row.updated_at ?? ""),
+    goal_id: asNullableString(row.goal_id),
+    plan_id: asNullableString(row.plan_id),
+    step_id: asNullableString(row.step_id),
+    title: String(row.title ?? ""),
+    objective: String(row.objective ?? ""),
+    hypothesis: asNullableString(row.hypothesis),
+    status: normalizeExperimentStatus(row.status),
+    metric_name: String(row.metric_name ?? ""),
+    metric_direction: normalizeExperimentMetricDirection(row.metric_direction),
+    baseline_metric: asNullableNumber(row.baseline_metric),
+    current_best_metric: asNullableNumber(row.current_best_metric),
+    acceptance_delta: Number(row.acceptance_delta ?? 0),
+    budget_seconds: row.budget_seconds === null || row.budget_seconds === undefined ? null : Number(row.budget_seconds),
+    run_command: asNullableString(row.run_command),
+    parse_strategy: parseJsonObject(row.parse_strategy_json),
+    rollback_strategy: parseJsonObject(row.rollback_strategy_json),
+    candidate_scope: parseJsonObject(row.candidate_scope_json),
+    tags: safeParseJsonArray(row.tags_json),
+    metadata: parseJsonObject(row.metadata_json),
+    selected_run_id: asNullableString(row.selected_run_id),
+    source_client: asNullableString(row.source_client),
+    source_model: asNullableString(row.source_model),
+    source_agent: asNullableString(row.source_agent),
+  };
+}
+
+function mapExperimentRunRow(row: Record<string, unknown>): ExperimentRunRecord {
+  return {
+    experiment_run_id: String(row.experiment_run_id ?? ""),
+    experiment_id: String(row.experiment_id ?? ""),
+    created_at: String(row.created_at ?? ""),
+    updated_at: String(row.updated_at ?? ""),
+    candidate_label: String(row.candidate_label ?? ""),
+    status: normalizeExperimentRunStatus(row.status),
+    verdict: normalizeOptionalExperimentVerdict(row.verdict),
+    task_id: asNullableString(row.task_id),
+    run_id: asNullableString(row.run_id),
+    artifact_ids: safeParseJsonArray(row.artifact_ids_json),
+    observed_metric: asNullableNumber(row.observed_metric),
+    observed_metrics: parseJsonObject(row.observed_metrics_json),
+    delta: asNullableNumber(row.delta),
+    summary: asNullableString(row.summary),
+    log_excerpt: asNullableString(row.log_excerpt),
+    error_text: asNullableString(row.error_text),
+    metadata: parseJsonObject(row.metadata_json),
+    source_client: asNullableString(row.source_client),
+    source_model: asNullableString(row.source_model),
+    source_agent: asNullableString(row.source_agent),
+  };
+}
+
 function mapTaskRow(row: Record<string, unknown>): TaskRecord {
   const leaseOwnerId = asNullableString(row.lease_owner_id);
   const leaseExpiresAt = asNullableString(row.lease_expires_at);
@@ -7765,6 +8789,58 @@ function normalizeAgentSessionStatus(value: unknown): AgentSessionStatus {
   return "active";
 }
 
+function normalizeArtifactStatus(value: unknown): ArtifactStatus {
+  const normalized = String(value ?? "active");
+  if (normalized === "superseded" || normalized === "invalid" || normalized === "archived") {
+    return normalized;
+  }
+  return "active";
+}
+
+function normalizeArtifactTrustTier(value: unknown): ArtifactTrustTier {
+  const normalized = String(value ?? "raw");
+  if (
+    normalized === "derived" ||
+    normalized === "verified" ||
+    normalized === "policy-backed" ||
+    normalized === "deprecated"
+  ) {
+    return normalized;
+  }
+  return "raw";
+}
+
+function normalizeExperimentStatus(value: unknown): ExperimentStatus {
+  const normalized = String(value ?? "active");
+  if (normalized === "draft" || normalized === "paused" || normalized === "completed" || normalized === "archived") {
+    return normalized;
+  }
+  return "active";
+}
+
+function normalizeExperimentMetricDirection(value: unknown): ExperimentMetricDirection {
+  return String(value ?? "minimize") === "maximize" ? "maximize" : "minimize";
+}
+
+function normalizeExperimentRunStatus(value: unknown): ExperimentRunStatus {
+  const normalized = String(value ?? "proposed");
+  if (normalized === "running" || normalized === "completed" || normalized === "crash" || normalized === "discarded") {
+    return normalized;
+  }
+  return "proposed";
+}
+
+function normalizeOptionalExperimentVerdict(value: unknown): ExperimentVerdict | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const normalized = String(value);
+  if (normalized === "accepted" || normalized === "rejected" || normalized === "inconclusive" || normalized === "crash") {
+    return normalized;
+  }
+  return null;
+}
+
 function normalizeTriChatThreadStatus(value: unknown): TriChatThreadStatus {
   return String(value ?? "active") === "archived" ? "archived" : "active";
 }
@@ -7810,6 +8886,14 @@ function asNullableString(value: unknown): string | null {
   }
   const text = String(value);
   return text.length > 0 ? text : null;
+}
+
+function asNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function normalizeKeywords(keywords: string[] | undefined): string[] {
