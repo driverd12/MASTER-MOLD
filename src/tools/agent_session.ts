@@ -67,6 +67,19 @@ export const agentClaimNextSchema = z.object({
   ...sourceSchema.shape,
 });
 
+export const agentCurrentTaskSchema = z.object({
+  session_id: z.string().min(1),
+});
+
+export const agentHeartbeatTaskSchema = z.object({
+  mutation: mutationSchema,
+  session_id: z.string().min(1),
+  task_id: z.string().min(1).optional(),
+  lease_seconds: z.number().int().min(15).max(86400).optional(),
+  metadata: recordSchema.optional(),
+  ...sourceSchema.shape,
+});
+
 export const agentReportResultSchema = z
   .object({
     mutation: mutationSchema,
@@ -363,6 +376,81 @@ export async function agentClaimNext(storage: Storage, input: z.infer<typeof age
       return {
         ...claimed,
         session: renewedSession.session ?? session,
+      };
+    },
+  });
+}
+
+export function agentCurrentTask(storage: Storage, input: z.infer<typeof agentCurrentTaskSchema>) {
+  const session = storage.getAgentSessionById(input.session_id);
+  if (!session) {
+    return {
+      found: false,
+      reason: "session-not-found",
+      session_id: input.session_id,
+    };
+  }
+  const task = storage.getRunningTaskByWorkerId(session.session_id);
+  if (!task) {
+    return {
+      found: false,
+      reason: "no-active-task",
+      session,
+    };
+  }
+  return {
+    found: true,
+    session,
+    task,
+  };
+}
+
+export async function agentHeartbeatTask(storage: Storage, input: z.infer<typeof agentHeartbeatTaskSchema>) {
+  return runIdempotentMutation({
+    storage,
+    tool_name: "agent.heartbeat_task",
+    mutation: input.mutation,
+    payload: input,
+    execute: () => {
+      const session = storage.getAgentSessionById(input.session_id);
+      if (!session) {
+        return {
+          ok: false,
+          reason: "session-not-found",
+          session_id: input.session_id,
+        };
+      }
+      const activeTask = storage.getRunningTaskByWorkerId(session.session_id);
+      const taskId = input.task_id?.trim() || activeTask?.task_id || "";
+      if (!taskId) {
+        return {
+          ok: false,
+          reason: "no-active-task",
+          session,
+        };
+      }
+      const heartbeat = storage.heartbeatTaskLease({
+        task_id: taskId,
+        worker_id: session.session_id,
+        lease_seconds: input.lease_seconds ?? 300,
+      });
+      const renewedSession =
+        heartbeat.ok
+          ? storage.heartbeatAgentSession({
+              session_id: session.session_id,
+              lease_seconds: input.lease_seconds ?? 300,
+              status: "busy",
+              metadata: {
+                current_task_id: taskId,
+                last_task_heartbeat_at: new Date().toISOString(),
+                ...(input.metadata ?? {}),
+              },
+            })
+          : { session };
+      return {
+        ...heartbeat,
+        session: renewedSession.session ?? session,
+        task: heartbeat.ok ? storage.getTaskById(taskId) : activeTask ?? storage.getTaskById(taskId),
       };
     },
   });

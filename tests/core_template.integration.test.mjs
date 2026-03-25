@@ -54,6 +54,8 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     assert.equal(names.has("agent.session_heartbeat"), true);
     assert.equal(names.has("agent.session_close"), true);
     assert.equal(names.has("agent.claim_next"), true);
+    assert.equal(names.has("agent.current_task"), true);
+    assert.equal(names.has("agent.heartbeat_task"), true);
     assert.equal(names.has("agent.report_result"), true);
     assert.equal(names.has("task.create"), true);
     assert.equal(names.has("transcript.log"), true);
@@ -539,6 +541,21 @@ test("agent.claim_next and agent.report_result close the worker loop back into p
     assert.equal(claimedTask.claimed, true);
     assert.equal(claimedTask.task.task_id, dispatchedTaskId);
     assert.equal(claimedTask.session.status, "busy");
+
+    const currentTask = await callTool(client, "agent.current_task", {
+      session_id: "agent-worker-loop-session",
+    });
+    assert.equal(currentTask.found, true);
+    assert.equal(currentTask.task.task_id, claimedTask.task.task_id);
+
+    const heartbeat = await callTool(client, "agent.heartbeat_task", {
+      mutation: nextMutation(testId, "agent.heartbeat_task", () => mutationCounter++),
+      session_id: "agent-worker-loop-session",
+      lease_seconds: 180,
+    });
+    assert.equal(heartbeat.ok, true);
+    assert.equal(heartbeat.task.task_id, claimedTask.task.task_id);
+    assert.equal(heartbeat.session.status, "busy");
 
     const producedArtifact = await callTool(client, "artifact.record", {
       mutation: nextMutation(testId, "artifact.record.worker-loop", () => mutationCounter++),

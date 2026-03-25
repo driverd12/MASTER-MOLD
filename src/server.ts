@@ -12,6 +12,10 @@ import { Storage } from "./storage.js";
 import {
   agentClaimNext,
   agentClaimNextSchema,
+  agentCurrentTask,
+  agentCurrentTaskSchema,
+  agentHeartbeatTask,
+  agentHeartbeatTaskSchema,
   agentReportResult,
   agentReportResultSchema,
   agentSessionCloseSchema,
@@ -1112,6 +1116,14 @@ registerTool("agent.session_close", "Close a durable agent session and release i
 
 registerTool("agent.claim_next", "Claim the next runnable task through a durable agent session lease.", agentClaimNextSchema, (input) =>
   agentClaimNext(storage, input)
+);
+
+registerTool("agent.current_task", "Fetch the currently claimed running task for a durable agent session.", agentCurrentTaskSchema, (input) =>
+  agentCurrentTask(storage, input)
+);
+
+registerTool("agent.heartbeat_task", "Renew the currently claimed task lease through a durable agent session.", agentHeartbeatTaskSchema, (input) =>
+  agentHeartbeatTask(storage, input)
 );
 
 registerTool("agent.report_result", "Report task completion or failure through a durable agent session and sync plan context.", agentReportResultSchema, (input) =>
