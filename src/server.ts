@@ -18,6 +18,8 @@ import {
   agentHeartbeatTaskSchema,
   agentReportResult,
   agentReportResultSchema,
+  agentWorklist,
+  agentWorklistSchema,
   agentSessionCloseSchema,
   agentSessionGetSchema,
   agentSessionHeartbeatSchema,
@@ -670,6 +672,15 @@ async function planDispatch(input: z.infer<typeof planDispatchSchema>) {
           if (executorKind === "task" || executorKind === "worker") {
             const rawInput = isRecord(step.input) ? step.input : {};
             const payload = isRecord(rawInput.payload) ? rawInput.payload : {};
+            const rawMetadata = isRecord(rawInput.metadata) ? rawInput.metadata : {};
+            const routing =
+              isRecord(rawInput.routing)
+                ? rawInput.routing
+                : isRecord(rawMetadata.task_routing)
+                  ? rawMetadata.task_routing
+                  : isRecord(rawMetadata.routing)
+                    ? rawMetadata.routing
+                    : undefined;
             const taskResult = await invokeRegisteredTool("task.create", {
               mutation: buildPlanDispatchDerivedMutation(input.mutation, executorKind, step.step_id),
               task_id: readString(rawInput.task_id),
@@ -681,6 +692,7 @@ async function planDispatch(input: z.infer<typeof planDispatchSchema>) {
                 step_id: step.step_id,
                 goal_id: plan.goal_id,
               },
+              routing,
               priority: readInteger(rawInput.priority),
               max_attempts: readInteger(rawInput.max_attempts),
               available_at: readString(rawInput.available_at),
@@ -690,7 +702,7 @@ async function planDispatch(input: z.infer<typeof planDispatchSchema>) {
               source_agent: input.source_agent,
               tags: readStringArray(rawInput.tags) ?? ["plan.dispatch", executorKind],
               metadata: {
-                ...(isRecord(rawInput.metadata) ? rawInput.metadata : {}),
+                ...rawMetadata,
                 plan_dispatch: {
                   plan_id: plan.plan_id,
                   step_id: step.step_id,
@@ -1379,6 +1391,10 @@ registerTool("agent.session_close", "Close a durable agent session and release i
 
 registerTool("agent.claim_next", "Claim the next runnable task through a durable agent session lease.", agentClaimNextSchema, (input) =>
   agentClaimNext(storage, input)
+);
+
+registerTool("agent.worklist", "Preview the best currently claimable tasks for a durable agent session.", agentWorklistSchema, (input) =>
+  agentWorklist(storage, input)
 );
 
 registerTool("agent.current_task", "Fetch the currently claimed running task for a durable agent session.", agentCurrentTaskSchema, (input) =>

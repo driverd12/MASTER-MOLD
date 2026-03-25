@@ -86,6 +86,16 @@ test("default agentic pack generates delivery and optimization hooks for local d
     assert.equal(deliveryPlan.plan.planner_id, "agentic.delivery_path");
     assert.ok(deliveryPlan.steps.some((step) => step.tool_name === "goal.get"));
     assert.ok(deliveryPlan.steps.some((step) => step.tool_name === "pack.verify.run"));
+    assert.deepEqual(
+      deliveryPlan.steps.find((step) => step.title === "Map the relevant codebase and continuity surface").input.routing
+        .preferred_agent_ids,
+      ["codex"]
+    );
+    assert.deepEqual(
+      deliveryPlan.steps.find((step) => step.title === "Verify behavior, wiring, and quality gates").input.routing
+        .preferred_agent_ids,
+      ["cursor"]
+    );
     assert.ok(
       deliveryPlan.steps.some(
         (step) =>

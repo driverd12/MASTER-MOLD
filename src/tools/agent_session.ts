@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Storage, type PlanRecord, type PlanStepRecord, type TaskRecord } from "../storage.js";
+import { Storage, type AgentSessionRecord, type PlanRecord, type PlanStepRecord, type TaskRecord } from "../storage.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
 import { judgeExperimentRunWithStorage } from "./experiment.js";
 
@@ -67,6 +67,13 @@ export const agentClaimNextSchema = z.object({
   ...sourceSchema.shape,
 });
 
+export const agentWorklistSchema = z.object({
+  session_id: z.string().min(1),
+  limit: z.number().int().min(1).max(100).optional(),
+  scan_limit: z.number().int().min(1).max(500).optional(),
+  include_ineligible: z.boolean().optional(),
+});
+
 export const agentCurrentTaskSchema = z.object({
   session_id: z.string().min(1),
 });
@@ -123,6 +130,28 @@ function readString(value: unknown): string | null {
 function dedupeStrings(values: string[] | undefined): string[] {
   return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
 }
+
+type TaskRoutingRule = {
+  preferred_agent_ids: string[];
+  allowed_agent_ids: string[];
+  preferred_client_kinds: string[];
+  allowed_client_kinds: string[];
+  required_capabilities: string[];
+  preferred_capabilities: string[];
+};
+
+type TaskRoutingEvaluation = {
+  eligible: boolean;
+  score: number;
+  blockers: string[];
+  matched_preferences: string[];
+  routing: TaskRoutingRule;
+};
+
+type AgentTaskCandidate = {
+  task: TaskRecord;
+  routing: TaskRoutingEvaluation;
+};
 
 function resolveTaskPlanContext(
   storage: Storage,
@@ -215,6 +244,296 @@ function attachArtifactsToTaskContext(
     }
   }
   return links;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return dedupeStrings(value.filter((item): item is string => typeof item === "string"));
+}
+
+function normalizeTaskRouting(value: unknown): TaskRoutingRule {
+  if (!isRecord(value)) {
+    return {
+      preferred_agent_ids: [],
+      allowed_agent_ids: [],
+      preferred_client_kinds: [],
+      allowed_client_kinds: [],
+      required_capabilities: [],
+      preferred_capabilities: [],
+    };
+  }
+  return {
+    preferred_agent_ids: normalizeStringArray(value.preferred_agent_ids),
+    allowed_agent_ids: normalizeStringArray(value.allowed_agent_ids),
+    preferred_client_kinds: normalizeStringArray(value.preferred_client_kinds),
+    allowed_client_kinds: normalizeStringArray(value.allowed_client_kinds),
+    required_capabilities: normalizeStringArray(value.required_capabilities),
+    preferred_capabilities: normalizeStringArray(value.preferred_capabilities),
+  };
+}
+
+function resolveTaskRouting(task: TaskRecord): TaskRoutingRule {
+  const merged: TaskRoutingRule = {
+    preferred_agent_ids: [],
+    allowed_agent_ids: [],
+    preferred_client_kinds: [],
+    allowed_client_kinds: [],
+    required_capabilities: [],
+    preferred_capabilities: [],
+  };
+
+  const candidates = [
+    task.metadata.task_routing,
+    task.metadata.routing,
+    isRecord(task.payload) ? task.payload.task_routing : undefined,
+    isRecord(task.payload) ? task.payload.routing : undefined,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeTaskRouting(candidate);
+    merged.preferred_agent_ids = dedupeStrings([...merged.preferred_agent_ids, ...normalized.preferred_agent_ids]);
+    merged.allowed_agent_ids = dedupeStrings([...merged.allowed_agent_ids, ...normalized.allowed_agent_ids]);
+    merged.preferred_client_kinds = dedupeStrings([
+      ...merged.preferred_client_kinds,
+      ...normalized.preferred_client_kinds,
+    ]);
+    merged.allowed_client_kinds = dedupeStrings([...merged.allowed_client_kinds, ...normalized.allowed_client_kinds]);
+    merged.required_capabilities = dedupeStrings([
+      ...merged.required_capabilities,
+      ...normalized.required_capabilities,
+    ]);
+    merged.preferred_capabilities = dedupeStrings([
+      ...merged.preferred_capabilities,
+      ...normalized.preferred_capabilities,
+    ]);
+  }
+
+  return merged;
+}
+
+function capabilityListIncludes(value: unknown, capability: string): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((entry) => readString(entry)?.toLowerCase() === capability);
+}
+
+function hasSessionCapability(session: AgentSessionRecord, capability: string): boolean {
+  const normalized = capability.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (session.tags.some((tag) => tag.trim().toLowerCase() === normalized)) {
+    return true;
+  }
+
+  const direct = session.capabilities[normalized] ?? session.capabilities[capability];
+  if (direct === true) {
+    return true;
+  }
+  if (typeof direct === "string") {
+    const value = direct.trim().toLowerCase();
+    return value.length > 0 && !["false", "0", "none", "no"].includes(value);
+  }
+  if (typeof direct === "number") {
+    return Number.isFinite(direct) && direct > 0;
+  }
+  if (Array.isArray(direct)) {
+    return direct.length > 0;
+  }
+  if (isRecord(direct)) {
+    return Object.keys(direct).length > 0;
+  }
+
+  return (
+    capabilityListIncludes(session.capabilities.capabilities, normalized) ||
+    capabilityListIncludes(session.capabilities.supported_capabilities, normalized) ||
+    capabilityListIncludes(session.capabilities.skills, normalized) ||
+    capabilityListIncludes(session.capabilities.roles, normalized)
+  );
+}
+
+function evaluateTaskRouting(session: AgentSessionRecord, task: TaskRecord): TaskRoutingEvaluation {
+  const routing = resolveTaskRouting(task);
+  const blockers: string[] = [];
+  const matchedPreferences: string[] = [];
+  let score = 0;
+
+  const agentId = session.agent_id.trim().toLowerCase();
+  const clientKind = readString(session.client_kind)?.toLowerCase() ?? null;
+
+  if (routing.allowed_agent_ids.length > 0) {
+    const allowed = new Set(routing.allowed_agent_ids.map((value) => value.toLowerCase()));
+    if (!allowed.has(agentId)) {
+      blockers.push("agent_id_not_allowed");
+    } else {
+      matchedPreferences.push(`allowed_agent:${session.agent_id}`);
+      score += 30;
+    }
+  }
+
+  if (routing.allowed_client_kinds.length > 0) {
+    const allowed = new Set(routing.allowed_client_kinds.map((value) => value.toLowerCase()));
+    if (!clientKind || !allowed.has(clientKind)) {
+      blockers.push("client_kind_not_allowed");
+    } else {
+      matchedPreferences.push(`allowed_client:${session.client_kind}`);
+      score += 20;
+    }
+  }
+
+  const missingCapabilities = routing.required_capabilities.filter((capability) => !hasSessionCapability(session, capability));
+  if (missingCapabilities.length > 0) {
+    blockers.push(`missing_capabilities:${missingCapabilities.join(",")}`);
+  } else if (routing.required_capabilities.length > 0) {
+    matchedPreferences.push(`required_capabilities:${routing.required_capabilities.join(",")}`);
+    score += routing.required_capabilities.length * 12;
+  }
+
+  if (routing.preferred_agent_ids.some((value) => value.toLowerCase() === agentId)) {
+    matchedPreferences.push(`preferred_agent:${session.agent_id}`);
+    score += 18;
+  }
+
+  if (clientKind && routing.preferred_client_kinds.some((value) => value.toLowerCase() === clientKind)) {
+    matchedPreferences.push(`preferred_client:${session.client_kind}`);
+    score += 12;
+  }
+
+  const preferredCapabilityHits = routing.preferred_capabilities.filter((capability) => hasSessionCapability(session, capability));
+  if (preferredCapabilityHits.length > 0) {
+    matchedPreferences.push(`preferred_capabilities:${preferredCapabilityHits.join(",")}`);
+    score += preferredCapabilityHits.length * 6;
+  }
+
+  if (session.workspace_root && task.project_dir && session.workspace_root === task.project_dir) {
+    matchedPreferences.push("workspace_root_match");
+    score += 2;
+  }
+
+  return {
+    eligible: blockers.length === 0,
+    score,
+    blockers,
+    matched_preferences: matchedPreferences,
+    routing,
+  };
+}
+
+function compareTaskCandidates(left: AgentTaskCandidate, right: AgentTaskCandidate): number {
+  const scoreDiff = right.routing.score - left.routing.score;
+  if (scoreDiff !== 0) {
+    return scoreDiff;
+  }
+  const priorityDiff = right.task.priority - left.task.priority;
+  if (priorityDiff !== 0) {
+    return priorityDiff;
+  }
+  return left.task.created_at.localeCompare(right.task.created_at);
+}
+
+function isTaskClaimableNow(task: TaskRecord, nowIso: string) {
+  if (task.status !== "pending") {
+    return {
+      claimable: false,
+      reason: `not-pending:${task.status}`,
+    };
+  }
+  if (task.available_at > nowIso) {
+    return {
+      claimable: false,
+      reason: "not-ready",
+    };
+  }
+  if (task.lease && task.lease.lease_expires_at > nowIso) {
+    return {
+      claimable: false,
+      reason: "leased",
+    };
+  }
+  return {
+    claimable: true,
+    reason: "claimable",
+  };
+}
+
+function selectTaskCandidate(
+  storage: Storage,
+  session: AgentSessionRecord,
+  options?: {
+    task_id?: string;
+    scan_limit?: number;
+  }
+): { candidate?: AgentTaskCandidate; reason: string; scanned: number } {
+  const nowIso = new Date().toISOString();
+  if (options?.task_id?.trim()) {
+    const task = storage.getTaskById(options.task_id);
+    if (!task) {
+      return {
+        reason: "not-found",
+        scanned: 0,
+      };
+    }
+    const claimability = isTaskClaimableNow(task, nowIso);
+    if (!claimability.claimable) {
+      return {
+        reason: claimability.reason,
+        scanned: 1,
+      };
+    }
+    const routing = evaluateTaskRouting(session, task);
+    if (!routing.eligible) {
+      return {
+        reason: `routing-ineligible:${routing.blockers.join("|")}`,
+        scanned: 1,
+      };
+    }
+    return {
+      candidate: {
+        task,
+        routing,
+      },
+      reason: "selected",
+      scanned: 1,
+    };
+  }
+
+  const pendingTasks = storage.listTasks({
+    status: "pending",
+    limit: options?.scan_limit ?? 200,
+  });
+  const candidates = pendingTasks
+    .map((task) => {
+      const claimability = isTaskClaimableNow(task, nowIso);
+      if (!claimability.claimable) {
+        return null;
+      }
+      const routing = evaluateTaskRouting(session, task);
+      if (!routing.eligible) {
+        return null;
+      }
+      return {
+        task,
+        routing,
+      } satisfies AgentTaskCandidate;
+    })
+    .filter((candidate): candidate is AgentTaskCandidate => candidate !== null)
+    .sort(compareTaskCandidates);
+
+  if (candidates.length === 0) {
+    return {
+      reason: pendingTasks.length > 0 ? "none-eligible" : "none-available",
+      scanned: pendingTasks.length,
+    };
+  }
+
+  return {
+    candidate: candidates[0],
+    reason: "selected",
+    scanned: pendingTasks.length,
+  };
 }
 
 export async function openAgentSession(storage: Storage, input: z.infer<typeof agentSessionOpenSchema>) {
@@ -352,6 +671,91 @@ export async function closeAgentSession(storage: Storage, input: z.infer<typeof 
   });
 }
 
+export function agentWorklist(storage: Storage, input: z.infer<typeof agentWorklistSchema>) {
+  const session = storage.getAgentSessionById(input.session_id);
+  if (!session) {
+    return {
+      found: false,
+      reason: "session-not-found",
+      session_id: input.session_id,
+    };
+  }
+
+  const limit = input.limit ?? 20;
+  const scanLimit = Math.max(limit, input.scan_limit ?? Math.min(Math.max(limit * 5, 50), 200));
+  const nowIso = new Date().toISOString();
+  const pendingTasks = storage.listTasks({
+    status: "pending",
+    limit: scanLimit,
+  });
+
+  const eligible: AgentTaskCandidate[] = [];
+  const ineligible: Array<{
+    task: TaskRecord;
+    routing: TaskRoutingEvaluation;
+    reason: string;
+  }> = [];
+
+  for (const task of pendingTasks) {
+    const claimability = isTaskClaimableNow(task, nowIso);
+    const routing = evaluateTaskRouting(session, task);
+    if (claimability.claimable && routing.eligible) {
+      eligible.push({
+        task,
+        routing,
+      });
+      continue;
+    }
+    if (input.include_ineligible) {
+      ineligible.push({
+        task,
+        routing,
+        reason: claimability.claimable ? routing.blockers.join("|") || "routing-ineligible" : claimability.reason,
+      });
+    }
+  }
+
+  eligible.sort(compareTaskCandidates);
+  ineligible.sort((left, right) =>
+    compareTaskCandidates(
+      { task: left.task, routing: left.routing },
+      { task: right.task, routing: right.routing }
+    )
+  );
+
+  return {
+    found: true,
+    session,
+    scanned_count: pendingTasks.length,
+    eligible_count: eligible.length,
+    returned_count: Math.min(limit, eligible.length),
+    tasks: eligible.slice(0, limit).map((entry) => ({
+      task_id: entry.task.task_id,
+      objective: entry.task.objective,
+      priority: entry.task.priority,
+      project_dir: entry.task.project_dir,
+      available_at: entry.task.available_at,
+      tags: entry.task.tags,
+      routing_score: entry.routing.score,
+      matched_preferences: entry.routing.matched_preferences,
+      routing: entry.routing.routing,
+      task: entry.task,
+    })),
+    ineligible_count: ineligible.length,
+    ineligible_tasks: input.include_ineligible
+      ? ineligible.slice(0, limit).map((entry) => ({
+          task_id: entry.task.task_id,
+          objective: entry.task.objective,
+          priority: entry.task.priority,
+          reason: entry.reason,
+          blockers: entry.routing.blockers,
+          routing: entry.routing.routing,
+          task: entry.task,
+        }))
+      : [],
+  };
+}
+
 export async function agentClaimNext(storage: Storage, input: z.infer<typeof agentClaimNextSchema>) {
   return runIdempotentMutation({
     storage,
@@ -397,13 +801,41 @@ export async function agentClaimNext(storage: Storage, input: z.infer<typeof age
         };
       }
 
+      const selection = selectTaskCandidate(storage, session, {
+        task_id: input.task_id,
+        scan_limit: 200,
+      });
+      if (!selection.candidate) {
+        const nextStatus = selection.reason === "none-available" || selection.reason === "none-eligible" ? "idle" : session.status;
+        const renewedSession = storage.heartbeatAgentSession({
+          session_id: session.session_id,
+          lease_seconds: input.lease_seconds ?? 300,
+          status: nextStatus,
+          metadata: {
+            current_task_id: null,
+            last_claim_attempt_at: new Date().toISOString(),
+            last_claim_reason: selection.reason,
+            last_claimed_task_id: null,
+            scanned_task_count: selection.scanned,
+            ...(input.metadata ?? {}),
+          },
+        });
+        return {
+          claimed: false,
+          reason: selection.reason,
+          session: renewedSession.session ?? session,
+          scanned_task_count: selection.scanned,
+        };
+      }
+
       const claimed = storage.claimTask({
         worker_id: session.session_id,
         lease_seconds: input.lease_seconds ?? 300,
-        task_id: input.task_id,
+        task_id: selection.candidate.task.task_id,
       });
 
-      const nextStatus = claimed.claimed ? "busy" : claimed.reason === "none-available" ? "idle" : session.status;
+      const nextStatus =
+        claimed.claimed ? "busy" : claimed.reason === "none-available" || claimed.reason === "none-eligible" ? "idle" : session.status;
       const renewedSession = storage.heartbeatAgentSession({
         session_id: session.session_id,
         lease_seconds: input.lease_seconds ?? 300,
@@ -413,6 +845,9 @@ export async function agentClaimNext(storage: Storage, input: z.infer<typeof age
           last_claim_attempt_at: new Date().toISOString(),
           last_claim_reason: claimed.reason,
           last_claimed_task_id: claimed.task?.task_id ?? null,
+          scanned_task_count: selection.scanned,
+          last_claim_routing_score: selection.candidate.routing.score,
+          last_claim_routing_matches: selection.candidate.routing.matched_preferences,
           ...(input.metadata ?? {}),
         },
       });
@@ -431,6 +866,8 @@ export async function agentClaimNext(storage: Storage, input: z.infer<typeof age
                 client_kind: session.client_kind,
                 task_id: claimed.task.task_id,
                 lease_expires_at: claimed.lease_expires_at ?? null,
+                routing_score: selection.candidate.routing.score,
+                matched_preferences: selection.candidate.routing.matched_preferences,
               },
               source_client: session.source_client ?? input.source_client,
               source_model: session.source_model ?? input.source_model,
@@ -441,6 +878,8 @@ export async function agentClaimNext(storage: Storage, input: z.infer<typeof age
       return {
         ...claimed,
         session: renewedSession.session ?? session,
+        routing: selection.candidate.routing,
+        scanned_task_count: selection.scanned,
         event,
       };
     },

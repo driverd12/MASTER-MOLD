@@ -147,6 +147,10 @@ function buildDeliveryPlan(goal: GoalRecord, storage: Storage, repoRoot: string)
         input: {
           objective: `Map the repository structure, relevant files, current workflows, and continuity constraints for goal ${goal.goal_id}: ${goal.objective}`,
           project_dir: repoRoot,
+          routing: {
+            preferred_agent_ids: ["codex"],
+            preferred_capabilities: ["coding", "planning"],
+          },
           payload: {
             focus: "codebase_map",
             goal_id: goal.goal_id,
@@ -211,6 +215,10 @@ function buildDeliveryPlan(goal: GoalRecord, storage: Storage, repoRoot: string)
         input: {
           objective: `Implement the approved bounded slice for goal ${goal.goal_id}: ${goal.objective}`,
           project_dir: repoRoot,
+          routing: {
+            preferred_agent_ids: ["codex"],
+            preferred_capabilities: ["coding", "worker"],
+          },
           payload: {
             focus: "implementation",
             goal_id: goal.goal_id,
@@ -228,6 +236,10 @@ function buildDeliveryPlan(goal: GoalRecord, storage: Storage, repoRoot: string)
         input: {
           objective: `Verify the implementation for goal ${goal.goal_id} with explicit evidence for behavior, tests, and quality gates.`,
           project_dir: repoRoot,
+          routing: {
+            preferred_agent_ids: ["cursor"],
+            preferred_capabilities: ["review", "verify"],
+          },
           payload: {
             focus: "verification",
             goal_id: goal.goal_id,

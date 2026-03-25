@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Storage } from "../storage.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
+import { ensureWorkspaceFingerprint } from "./workspace_fingerprint.js";
 
 const taskStatusSchema = z.enum(["pending", "running", "completed", "failed", "cancelled"]);
 const sourceSchema = z.object({
@@ -10,12 +11,22 @@ const sourceSchema = z.object({
   source_agent: z.string().optional(),
 });
 
+export const taskRoutingSchema = z.object({
+  preferred_agent_ids: z.array(z.string().min(1)).optional(),
+  allowed_agent_ids: z.array(z.string().min(1)).optional(),
+  preferred_client_kinds: z.array(z.string().min(1)).optional(),
+  allowed_client_kinds: z.array(z.string().min(1)).optional(),
+  required_capabilities: z.array(z.string().min(1)).optional(),
+  preferred_capabilities: z.array(z.string().min(1)).optional(),
+});
+
 export const taskCreateSchema = z.object({
   mutation: mutationSchema,
   task_id: z.string().min(1).max(200).optional(),
   objective: z.string().min(1),
   project_dir: z.string().min(1).optional(),
   payload: z.record(z.unknown()).optional(),
+  routing: taskRoutingSchema.optional(),
   priority: z.number().int().min(0).max(100).optional(),
   max_attempts: z.number().int().min(1).max(20).optional(),
   available_at: z.string().optional(),
@@ -190,8 +201,23 @@ export async function taskCreate(storage: Storage, input: z.infer<typeof taskCre
     tool_name: "task.create",
     mutation: input.mutation,
     payload: input,
-    execute: () =>
-      storage.createTask({
+    execute: () => {
+      const metadata = {
+        ...(input.metadata ?? {}),
+        ...(input.routing
+          ? {
+              task_routing: {
+                preferred_agent_ids: dedupeStrings(input.routing.preferred_agent_ids),
+                allowed_agent_ids: dedupeStrings(input.routing.allowed_agent_ids),
+                preferred_client_kinds: dedupeStrings(input.routing.preferred_client_kinds),
+                allowed_client_kinds: dedupeStrings(input.routing.allowed_client_kinds),
+                required_capabilities: dedupeStrings(input.routing.required_capabilities),
+                preferred_capabilities: dedupeStrings(input.routing.preferred_capabilities),
+              },
+            }
+          : {}),
+      };
+      const task = storage.createTask({
         task_id: input.task_id,
         objective: input.objective,
         project_dir: input.project_dir ?? ".",
@@ -204,9 +230,18 @@ export async function taskCreate(storage: Storage, input: z.infer<typeof taskCre
         source_model: input.source_model,
         source_agent: input.source_agent,
         tags: input.tags,
-        metadata: input.metadata,
-      }),
+        metadata,
+      });
+      ensureWorkspaceFingerprint(storage, input.project_dir ?? ".", {
+        source: "task.create",
+      });
+      return task;
+    },
   });
+}
+
+function dedupeStrings(values: string[] | undefined): string[] {
+  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
 }
 
 export function taskList(storage: Storage, input: z.infer<typeof taskListSchema>) {

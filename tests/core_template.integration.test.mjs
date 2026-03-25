@@ -61,6 +61,7 @@ test("server starts with default agentic workflow hooks and exposes core + TriCh
     assert.equal(names.has("agent.session_heartbeat"), true);
     assert.equal(names.has("agent.session_close"), true);
     assert.equal(names.has("agent.claim_next"), true);
+    assert.equal(names.has("agent.worklist"), true);
     assert.equal(names.has("agent.current_task"), true);
     assert.equal(names.has("agent.heartbeat_task"), true);
     assert.equal(names.has("agent.report_result"), true);
@@ -474,6 +475,127 @@ test("agent session lifecycle persists across open, heartbeat, list, and close",
       limit: 10,
     });
     assert.equal(activeAfterClose.sessions.some((session) => session.session_id === "session-integration-1"), false);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("agent.worklist and agent.claim_next respect task routing for codex and cursor sessions", async () => {
+  const testId = `${Date.now()}-agent-routing`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-agent-routing-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open.codex", () => mutationCounter++),
+      session_id: "routing-codex-session",
+      agent_id: "codex",
+      client_kind: "codex",
+      transport_kind: "stdio",
+      workspace_root: REPO_ROOT,
+      status: "active",
+      capabilities: {
+        coding: true,
+        worker: true,
+      },
+    });
+
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open.cursor", () => mutationCounter++),
+      session_id: "routing-cursor-session",
+      agent_id: "cursor",
+      client_kind: "cursor",
+      transport_kind: "stdio",
+      workspace_root: REPO_ROOT,
+      status: "active",
+      capabilities: {
+        review: true,
+        verify: true,
+      },
+    });
+
+    const codexOnlyTask = await callTool(client, "task.create", {
+      mutation: nextMutation(testId, "task.create.codex", () => mutationCounter++),
+      objective: "Codex-only implementation task",
+      project_dir: REPO_ROOT,
+      priority: 4,
+      routing: {
+        allowed_agent_ids: ["codex"],
+      },
+      tags: ["routing", "codex"],
+    });
+
+    const cursorOnlyTask = await callTool(client, "task.create", {
+      mutation: nextMutation(testId, "task.create.cursor", () => mutationCounter++),
+      objective: "Cursor-only review task",
+      project_dir: REPO_ROOT,
+      priority: 7,
+      routing: {
+        allowed_agent_ids: ["cursor"],
+      },
+      tags: ["routing", "cursor"],
+    });
+
+    const verifyTask = await callTool(client, "task.create", {
+      mutation: nextMutation(testId, "task.create.verify", () => mutationCounter++),
+      objective: "Verification task for review-capable agents",
+      project_dir: REPO_ROOT,
+      priority: 6,
+      routing: {
+        required_capabilities: ["verify"],
+      },
+      tags: ["routing", "verify"],
+    });
+
+    const codexWorklist = await callTool(client, "agent.worklist", {
+      session_id: "routing-codex-session",
+      limit: 10,
+      include_ineligible: true,
+    });
+    assert.equal(codexWorklist.found, true);
+    assert.equal(codexWorklist.eligible_count, 1);
+    assert.equal(codexWorklist.tasks[0].task_id, codexOnlyTask.task.task_id);
+    assert.ok(codexWorklist.ineligible_tasks.some((task) => task.task_id === cursorOnlyTask.task.task_id));
+    assert.ok(codexWorklist.ineligible_tasks.some((task) => task.task_id === verifyTask.task.task_id));
+
+    const rejectedClaim = await callTool(client, "agent.claim_next", {
+      mutation: nextMutation(testId, "agent.claim_next.rejected", () => mutationCounter++),
+      session_id: "routing-codex-session",
+      task_id: cursorOnlyTask.task.task_id,
+    });
+    assert.equal(rejectedClaim.claimed, false);
+    assert.match(rejectedClaim.reason, /^routing-ineligible:/);
+
+    const codexClaim = await callTool(client, "agent.claim_next", {
+      mutation: nextMutation(testId, "agent.claim_next.codex", () => mutationCounter++),
+      session_id: "routing-codex-session",
+      lease_seconds: 120,
+    });
+    assert.equal(codexClaim.claimed, true);
+    assert.equal(codexClaim.task.task_id, codexOnlyTask.task.task_id);
+    assert.equal(codexClaim.routing.eligible, true);
+
+    const cursorWorklist = await callTool(client, "agent.worklist", {
+      session_id: "routing-cursor-session",
+      limit: 10,
+      include_ineligible: true,
+    });
+    assert.equal(cursorWorklist.found, true);
+    assert.equal(cursorWorklist.eligible_count, 2);
+    assert.equal(cursorWorklist.tasks[0].task_id, cursorOnlyTask.task.task_id);
+    assert.ok(cursorWorklist.tasks.some((task) => task.task_id === verifyTask.task.task_id));
+
+    const cursorClaim = await callTool(client, "agent.claim_next", {
+      mutation: nextMutation(testId, "agent.claim_next.cursor", () => mutationCounter++),
+      session_id: "routing-cursor-session",
+      lease_seconds: 120,
+    });
+    assert.equal(cursorClaim.claimed, true);
+    assert.equal(cursorClaim.task.task_id, cursorOnlyTask.task.task_id);
+    assert.equal(cursorClaim.routing.eligible, true);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
