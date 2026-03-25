@@ -158,7 +158,7 @@ function inferRunStatus(
   return "completed";
 }
 
-function attachArtifactsToExperiment(
+export function attachArtifactsToExperiment(
   storage: Storage,
   params: {
     artifact_ids?: string[];
@@ -202,6 +202,111 @@ function attachArtifactsToExperiment(
     artifact_ids: artifactIds,
     links_created: links.length,
     links,
+  };
+}
+
+export function judgeExperimentRunWithStorage(
+  storage: Storage,
+  params: {
+    experiment_id: string;
+    experiment_run_id: string;
+    status?: z.infer<typeof experimentRunStatusSchema>;
+    verdict?: z.infer<typeof experimentVerdictSchema>;
+    task_id?: string;
+    run_id?: string;
+    observed_metric?: number;
+    observed_metrics?: Record<string, unknown>;
+    summary?: string;
+    log_excerpt?: string;
+    error_text?: string;
+    artifact_ids?: string[];
+    metadata?: Record<string, unknown>;
+    set_selected_on_accept?: boolean;
+    experiment_status?: z.infer<typeof experimentStatusSchema>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }
+) {
+  const experiment = storage.getExperimentById(params.experiment_id);
+  if (!experiment) {
+    throw new Error(`Experiment not found: ${params.experiment_id}`);
+  }
+  const experimentRun = storage.getExperimentRunById(params.experiment_run_id);
+  if (!experimentRun) {
+    throw new Error(`Experiment run not found: ${params.experiment_run_id}`);
+  }
+  if (experimentRun.experiment_id !== experiment.experiment_id) {
+    throw new Error(
+      `Experiment run ${experimentRun.experiment_run_id} does not belong to experiment ${experiment.experiment_id}`
+    );
+  }
+
+  const observedMetric =
+    params.observed_metric !== undefined ? params.observed_metric : experimentRun.observed_metric ?? null;
+  const comparisonMetric = resolveComparisonMetric(experiment);
+  const improvement = computeImprovement(experiment.metric_direction, comparisonMetric, observedMetric);
+  const verdict = inferVerdict({
+    explicitVerdict: params.verdict,
+    run: experimentRun,
+    experiment,
+    observedMetric,
+    improvement,
+    errorText: params.error_text,
+  });
+  const status = inferRunStatus(params.status, verdict, params.error_text);
+
+  const updatedRun = storage.updateExperimentRun({
+    experiment_run_id: experimentRun.experiment_run_id,
+    status,
+    verdict,
+    task_id: params.task_id,
+    run_id: params.run_id,
+    artifact_ids: params.artifact_ids,
+    observed_metric: observedMetric,
+    observed_metrics: params.observed_metrics,
+    delta: improvement,
+    summary: params.summary,
+    log_excerpt: params.log_excerpt,
+    error_text: params.error_text,
+    metadata: params.metadata,
+  });
+
+  const artifactLinks = attachArtifactsToExperiment(storage, {
+    artifact_ids: params.artifact_ids,
+    experiment_id: experiment.experiment_id,
+    experiment_run_id: experimentRun.experiment_run_id,
+    source_client: params.source_client,
+    source_model: params.source_model,
+    source_agent: params.source_agent,
+  });
+
+  const selectAcceptedRun = (params.set_selected_on_accept ?? true) && verdict === "accepted" && observedMetric !== null;
+  const updatedExperiment = storage.updateExperiment({
+    experiment_id: experiment.experiment_id,
+    status: params.experiment_status,
+    current_best_metric: selectAcceptedRun ? observedMetric : undefined,
+    selected_run_id: selectAcceptedRun ? experimentRun.experiment_run_id : undefined,
+    metadata: {
+      last_judged_run_id: experimentRun.experiment_run_id,
+      last_verdict: verdict,
+      last_observed_metric: observedMetric,
+      last_delta: improvement,
+    },
+  }).experiment;
+
+  return {
+    ok: true,
+    experiment: updatedExperiment,
+    experiment_run: updatedRun.experiment_run,
+    comparison_metric: comparisonMetric,
+    observed_metric: observedMetric,
+    delta: improvement,
+    verdict,
+    accepted: verdict === "accepted",
+    artifact_ids: artifactLinks.artifact_ids,
+    artifact_links_created: artifactLinks.links_created,
+    artifact_links: artifactLinks.links,
   };
 }
 
@@ -400,87 +505,26 @@ export async function experimentJudge(storage: Storage, input: z.infer<typeof ex
     tool_name: "experiment.judge",
     mutation: input.mutation,
     payload: input,
-    execute: () => {
-      const experiment = storage.getExperimentById(input.experiment_id);
-      if (!experiment) {
-        throw new Error(`Experiment not found: ${input.experiment_id}`);
-      }
-      const experimentRun = storage.getExperimentRunById(input.experiment_run_id);
-      if (!experimentRun) {
-        throw new Error(`Experiment run not found: ${input.experiment_run_id}`);
-      }
-      if (experimentRun.experiment_id !== experiment.experiment_id) {
-        throw new Error(
-          `Experiment run ${experimentRun.experiment_run_id} does not belong to experiment ${experiment.experiment_id}`
-        );
-      }
-
-      const observedMetric =
-        input.observed_metric !== undefined ? input.observed_metric : experimentRun.observed_metric ?? null;
-      const comparisonMetric = resolveComparisonMetric(experiment);
-      const improvement = computeImprovement(experiment.metric_direction, comparisonMetric, observedMetric);
-      const verdict = inferVerdict({
-        explicitVerdict: input.verdict,
-        run: experimentRun,
-        experiment,
-        observedMetric,
-        improvement,
-        errorText: input.error_text,
-      });
-      const status = inferRunStatus(input.status, verdict, input.error_text);
-
-      const updatedRun = storage.updateExperimentRun({
-        experiment_run_id: experimentRun.experiment_run_id,
-        status,
-        verdict,
+    execute: () =>
+      judgeExperimentRunWithStorage(storage, {
+        experiment_id: input.experiment_id,
+        experiment_run_id: input.experiment_run_id,
+        status: input.status,
+        verdict: input.verdict,
         task_id: input.task_id,
         run_id: input.run_id,
-        artifact_ids: input.artifact_ids,
-        observed_metric: observedMetric,
+        observed_metric: input.observed_metric,
         observed_metrics: input.observed_metrics,
-        delta: improvement,
         summary: input.summary,
         log_excerpt: input.log_excerpt,
         error_text: input.error_text,
-        metadata: input.metadata,
-      });
-
-      const artifactLinks = attachArtifactsToExperiment(storage, {
         artifact_ids: input.artifact_ids,
-        experiment_id: experiment.experiment_id,
-        experiment_run_id: experimentRun.experiment_run_id,
+        metadata: input.metadata,
+        set_selected_on_accept: input.set_selected_on_accept,
+        experiment_status: input.experiment_status,
         source_client: input.source_client,
         source_model: input.source_model,
         source_agent: input.source_agent,
-      });
-
-      const selectAcceptedRun = input.set_selected_on_accept && verdict === "accepted" && observedMetric !== null;
-      const updatedExperiment = storage.updateExperiment({
-        experiment_id: experiment.experiment_id,
-        status: input.experiment_status,
-        current_best_metric: selectAcceptedRun ? observedMetric : undefined,
-        selected_run_id: selectAcceptedRun ? experimentRun.experiment_run_id : undefined,
-        metadata: {
-          last_judged_run_id: experimentRun.experiment_run_id,
-          last_verdict: verdict,
-          last_observed_metric: observedMetric,
-          last_delta: improvement,
-        },
-      }).experiment;
-
-      return {
-        ok: true,
-        experiment: updatedExperiment,
-        experiment_run: updatedRun.experiment_run,
-        comparison_metric: comparisonMetric,
-        observed_metric: observedMetric,
-        delta: improvement,
-        verdict,
-        accepted: verdict === "accepted",
-        artifact_ids: artifactLinks.artifact_ids,
-        artifact_links_created: artifactLinks.links_created,
-        artifact_links: artifactLinks.links,
-      };
-    },
+      }),
   });
 }

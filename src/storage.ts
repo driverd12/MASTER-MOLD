@@ -4493,6 +4493,85 @@ export class Storage {
     return mapTaskRow(row);
   }
 
+  getRunningTaskByWorkerId(workerId: string): TaskRecord | null {
+    const normalized = workerId.trim();
+    if (!normalized) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT t.task_id, t.created_at, t.updated_at, t.status, t.priority, t.objective, t.project_dir,
+                t.payload_json, t.source, t.source_client, t.source_model, t.source_agent,
+                t.tags_json, t.metadata_json, t.max_attempts, t.attempt_count, t.available_at,
+                t.started_at, t.finished_at, t.last_worker_id, t.last_error, t.result_json,
+                l.owner_id AS lease_owner_id, l.lease_expires_at AS lease_expires_at,
+                l.heartbeat_at AS lease_heartbeat_at, l.created_at AS lease_created_at, l.updated_at AS lease_updated_at
+         FROM tasks t
+         INNER JOIN task_leases l ON l.task_id = t.task_id
+         WHERE t.status = 'running'
+           AND l.owner_id = ?
+         ORDER BY t.updated_at DESC
+         LIMIT 1`
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+    return mapTaskRow(row);
+  }
+
+  findPlanStepByTaskId(taskId: string): { plan: PlanRecord; step: PlanStepRecord } | null {
+    const normalized = taskId.trim();
+    if (!normalized) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT step_id, plan_id
+         FROM plan_steps
+         WHERE task_id = ?
+         ORDER BY updated_at DESC
+         LIMIT 1`
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+    const planId = String(row.plan_id ?? "");
+    const stepId = String(row.step_id ?? "");
+    const plan = this.getPlanById(planId);
+    const step = this.listPlanSteps(planId).find((candidate) => candidate.step_id === stepId) ?? null;
+    if (!plan || !step) {
+      return null;
+    }
+    return {
+      plan,
+      step,
+    };
+  }
+
+  findExperimentRunByTaskId(taskId: string): ExperimentRunRecord | null {
+    const normalized = taskId.trim();
+    if (!normalized) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT experiment_run_id, experiment_id, created_at, updated_at, candidate_label, status, verdict, task_id, run_id,
+                artifact_ids_json, observed_metric, observed_metrics_json, delta, summary, log_excerpt, error_text, metadata_json,
+                source_client, source_model, source_agent
+         FROM experiment_runs
+         WHERE task_id = ?
+         ORDER BY updated_at DESC
+         LIMIT 1`
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+    return mapExperimentRunRow(row);
+  }
+
   claimTask(params: {
     worker_id: string;
     lease_seconds: number;

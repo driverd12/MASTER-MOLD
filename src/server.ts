@@ -10,6 +10,10 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { Storage } from "./storage.js";
 import {
+  agentClaimNext,
+  agentClaimNextSchema,
+  agentReportResult,
+  agentReportResultSchema,
   agentSessionCloseSchema,
   agentSessionGetSchema,
   agentSessionHeartbeatSchema,
@@ -1104,6 +1108,14 @@ registerTool("agent.session_heartbeat", "Renew a durable agent session lease and
 
 registerTool("agent.session_close", "Close a durable agent session and release its lease.", agentSessionCloseSchema, (input) =>
   closeAgentSession(storage, input)
+);
+
+registerTool("agent.claim_next", "Claim the next runnable task through a durable agent session lease.", agentClaimNextSchema, (input) =>
+  agentClaimNext(storage, input)
+);
+
+registerTool("agent.report_result", "Report task completion or failure through a durable agent session and sync plan context.", agentReportResultSchema, (input) =>
+  agentReportResult(storage, input)
 );
 
 registerTool("goal.create", "Create a durable goal with acceptance criteria and autonomy settings.", goalCreateSchema, (input) =>

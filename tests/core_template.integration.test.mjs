@@ -53,6 +53,8 @@ test("server starts without domain packs and exposes core + TriChat tools", asyn
     assert.equal(names.has("agent.session_list"), true);
     assert.equal(names.has("agent.session_heartbeat"), true);
     assert.equal(names.has("agent.session_close"), true);
+    assert.equal(names.has("agent.claim_next"), true);
+    assert.equal(names.has("agent.report_result"), true);
     assert.equal(names.has("task.create"), true);
     assert.equal(names.has("transcript.log"), true);
 
@@ -457,6 +459,152 @@ test("agent session lifecycle persists across open, heartbeat, list, and close",
       limit: 10,
     });
     assert.equal(activeAfterClose.sessions.some((session) => session.session_id === "session-integration-1"), false);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("agent.claim_next and agent.report_result close the worker loop back into plan steps", async () => {
+  const testId = `${Date.now()}-agent-worker-loop`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-agent-worker-loop-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const openedSession = await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open", () => mutationCounter++),
+      session_id: "agent-worker-loop-session",
+      agent_id: "codex",
+      display_name: "Kernel worker session",
+      client_kind: "codex",
+      transport_kind: "stdio",
+      workspace_root: REPO_ROOT,
+      lease_seconds: 120,
+      status: "active",
+      capabilities: {
+        worker: true,
+      },
+    });
+    assert.equal(openedSession.created, true);
+
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Agent worker loop goal",
+      objective: "Exercise claim and report through a durable session",
+      status: "active",
+      acceptance_criteria: ["Agents can claim queued work", "Plan step state updates on report"],
+    });
+
+    const createdPlan = await callTool(client, "plan.create", {
+      mutation: nextMutation(testId, "plan.create", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      title: "Agent worker loop plan",
+      summary: "Dispatch a worker step and complete it through the session bridge",
+      selected: true,
+      steps: [
+        {
+          step_id: "worker-step",
+          seq: 1,
+          title: "Execute the worker through an agent session",
+          step_kind: "mutation",
+          executor_kind: "worker",
+          input: {
+            objective: "Complete the worker loop integration task",
+            project_dir: REPO_ROOT,
+            priority: 6,
+            tags: ["agent", "worker-loop"],
+            payload: {
+              lane: "worker",
+            },
+          },
+        },
+      ],
+    });
+
+    const dispatchResult = await callTool(client, "plan.dispatch", {
+      mutation: nextMutation(testId, "plan.dispatch", () => mutationCounter++),
+      plan_id: createdPlan.plan.plan_id,
+    });
+    assert.equal(dispatchResult.dispatched_count, 1);
+    const dispatchedTaskId = dispatchResult.results[0].task_id;
+    assert.equal(typeof dispatchedTaskId, "string");
+
+    const claimedTask = await callTool(client, "agent.claim_next", {
+      mutation: nextMutation(testId, "agent.claim_next", () => mutationCounter++),
+      session_id: "agent-worker-loop-session",
+      lease_seconds: 120,
+    });
+    assert.equal(claimedTask.claimed, true);
+    assert.equal(claimedTask.task.task_id, dispatchedTaskId);
+    assert.equal(claimedTask.session.status, "busy");
+
+    const producedArtifact = await callTool(client, "artifact.record", {
+      mutation: nextMutation(testId, "artifact.record.worker-loop", () => mutationCounter++),
+      artifact_type: "worker.result",
+      producer_kind: "worker",
+      task_id: claimedTask.task.task_id,
+      content_json: {
+        outcome: "success",
+      },
+      related_entities: [
+        {
+          entity_type: "task",
+          entity_id: claimedTask.task.task_id,
+        },
+      ],
+    });
+    assert.equal(producedArtifact.created, true);
+
+    const reported = await callTool(client, "agent.report_result", {
+      mutation: nextMutation(testId, "agent.report_result", () => mutationCounter++),
+      session_id: "agent-worker-loop-session",
+      task_id: claimedTask.task.task_id,
+      outcome: "completed",
+      summary: "Worker completed through agent.report_result",
+      run_id: "agent-worker-run-1",
+      result: {
+        completed: true,
+      },
+      produced_artifact_ids: [producedArtifact.artifact.artifact_id],
+    });
+    assert.equal(reported.reported, true);
+    assert.equal(reported.task.status, "completed");
+    assert.equal(reported.session.status, "idle");
+    assert.equal(reported.plan_step_update.step.status, "completed");
+    assert.equal(reported.plan_step_update.step.run_id, "agent-worker-run-1");
+    assert.deepEqual(reported.plan_step_update.step.metadata.produced_artifact_ids, [
+      producedArtifact.artifact.artifact_id,
+    ]);
+
+    const fetchedPlan = await callTool(client, "plan.get", {
+      plan_id: createdPlan.plan.plan_id,
+    });
+    const workerStep = fetchedPlan.steps.find((step) => step.step_id === "worker-step");
+    assert.equal(workerStep.status, "completed");
+    assert.equal(workerStep.task_id, claimedTask.task.task_id);
+    assert.equal(workerStep.run_id, "agent-worker-run-1");
+    assert.deepEqual(workerStep.metadata.produced_artifact_ids, [producedArtifact.artifact.artifact_id]);
+
+    const stepBundle = await callTool(client, "artifact.bundle", {
+      entity: {
+        entity_type: "step",
+        entity_id: "worker-step",
+      },
+      limit: 20,
+    });
+    assert.equal(stepBundle.found, true);
+    assert.ok(
+      stepBundle.artifacts.some((artifact) => artifact.artifact_id === producedArtifact.artifact.artifact_id)
+    );
+
+    const sessionAfterReport = await callTool(client, "agent.session_get", {
+      session_id: "agent-worker-loop-session",
+    });
+    assert.equal(sessionAfterReport.found, true);
+    assert.equal(sessionAfterReport.session.status, "idle");
+    assert.equal(sessionAfterReport.session.metadata.last_reported_task_id, claimedTask.task.task_id);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
