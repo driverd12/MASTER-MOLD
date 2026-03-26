@@ -544,6 +544,50 @@ function buildWorkerPoolRecoveryFingerprint(storage: Storage) {
     .join("|");
 }
 
+function summarizeWorkerPoolRecoveryStatus(storage: Storage, plan: PlanRecord) {
+  const workerPoolPause = isRecord(plan.metadata.worker_pool_pause) ? plan.metadata.worker_pool_pause : null;
+  if (!workerPoolPause) {
+    return {
+      state: "none" as const,
+      viable_pool_available: false,
+      current_pool_fingerprint: null,
+      last_attempted_pool_fingerprint: null,
+    };
+  }
+
+  const viablePoolAvailable = hasViableWorkerPoolForRecovery(storage);
+  const currentPoolFingerprint = buildWorkerPoolRecoveryFingerprint(storage);
+  const existingAttempt = isRecord(plan.metadata.worker_pool_recovery_attempt)
+    ? plan.metadata.worker_pool_recovery_attempt
+    : null;
+  const lastAttemptedPoolFingerprint = readString(existingAttempt?.pool_fingerprint);
+
+  if (!viablePoolAvailable || !currentPoolFingerprint) {
+    return {
+      state: "no_viable_pool" as const,
+      viable_pool_available: false,
+      current_pool_fingerprint: currentPoolFingerprint,
+      last_attempted_pool_fingerprint: lastAttemptedPoolFingerprint,
+    };
+  }
+
+  if (lastAttemptedPoolFingerprint === currentPoolFingerprint) {
+    return {
+      state: "awaiting_pool_change" as const,
+      viable_pool_available: true,
+      current_pool_fingerprint: currentPoolFingerprint,
+      last_attempted_pool_fingerprint: lastAttemptedPoolFingerprint,
+    };
+  }
+
+  return {
+    state: "ready_for_recovery" as const,
+    viable_pool_available: true,
+    current_pool_fingerprint: currentPoolFingerprint,
+    last_attempted_pool_fingerprint: lastAttemptedPoolFingerprint,
+  };
+}
+
 function resolveWorkerPoolRecoveryFingerprint(
   storage: Storage,
   input: {
@@ -556,24 +600,8 @@ function resolveWorkerPoolRecoveryFingerprint(
   if (input.plan_id || input.create_plan_if_missing === false || assessment.can_auto_execute) {
     return null;
   }
-  if (!isRecord(plan.metadata.worker_pool_pause)) {
-    return null;
-  }
-  if (!hasViableWorkerPoolForRecovery(storage)) {
-    return null;
-  }
-
-  const recoveryFingerprint = buildWorkerPoolRecoveryFingerprint(storage);
-  if (!recoveryFingerprint) {
-    return null;
-  }
-  const existingAttempt = isRecord(plan.metadata.worker_pool_recovery_attempt)
-    ? plan.metadata.worker_pool_recovery_attempt
-    : null;
-  if (readString(existingAttempt?.pool_fingerprint) === recoveryFingerprint) {
-    return null;
-  }
-  return recoveryFingerprint;
+  const recoveryStatus = summarizeWorkerPoolRecoveryStatus(storage, plan);
+  return recoveryStatus.state === "ready_for_recovery" ? recoveryStatus.current_pool_fingerprint : null;
 }
 
 async function generateGoalExecutionPlanCandidate(
@@ -648,6 +676,7 @@ async function generateGoalExecutionPlanCandidate(
               source_plan_id: params.previous_plan_id ?? null,
             }
           : null,
+      worker_pool_recovery_suppressed: null,
     },
     ...params.source,
   }).plan;
@@ -1029,6 +1058,11 @@ function persistPlanRiskAssessment(
         adaptive_routing_summary: assessment.adaptive_routing_summary,
       },
       worker_pool_pause: workerPoolPause,
+      ...(assessment.can_auto_execute
+        ? {
+            worker_pool_recovery_suppressed: null,
+          }
+        : {}),
     },
     source_client: source?.source_client,
     source_model: source?.source_model,
@@ -1063,11 +1097,84 @@ function persistWorkerPoolRecoveryAttempt(
         pool_fingerprint: recoveryPoolFingerprint,
         source_plan_id: sourcePlanId ?? null,
       },
+      worker_pool_recovery_suppressed: null,
     },
     source_client: source?.source_client,
     source_model: source?.source_model,
     source_agent: source?.source_agent,
   }).plan;
+}
+
+function persistWorkerPoolRecoverySuppression(
+  storage: Storage,
+  goal: GoalRecord,
+  plan: PlanRecord,
+  source: {
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }
+) {
+  const recoveryStatus = summarizeWorkerPoolRecoveryStatus(storage, plan);
+  if (recoveryStatus.state !== "awaiting_pool_change" || !recoveryStatus.current_pool_fingerprint) {
+    return {
+      plan,
+      recovery_status: recoveryStatus,
+      suppression_count: 0,
+      event_emitted: false,
+    };
+  }
+
+  const existingSuppression = isRecord(plan.metadata.worker_pool_recovery_suppressed)
+    ? plan.metadata.worker_pool_recovery_suppressed
+    : null;
+  const workerPoolPause = isRecord(plan.metadata.worker_pool_pause) ? plan.metadata.worker_pool_pause : null;
+  const sameFingerprint = readString(existingSuppression?.pool_fingerprint) === recoveryStatus.current_pool_fingerprint;
+  const suppressionCount = sameFingerprint ? (readFiniteNumber(existingSuppression?.count) ?? 0) + 1 : 1;
+  const updatedPlan = storage.updatePlan({
+    plan_id: plan.plan_id,
+    metadata: {
+      worker_pool_recovery_suppressed: {
+        first_seen_at: sameFingerprint
+          ? readString(existingSuppression?.first_seen_at) ?? new Date().toISOString()
+          : new Date().toISOString(),
+        last_seen_at: new Date().toISOString(),
+        count: suppressionCount,
+        pool_fingerprint: recoveryStatus.current_pool_fingerprint,
+        last_attempted_pool_fingerprint: recoveryStatus.last_attempted_pool_fingerprint,
+        reason: "awaiting_pool_change",
+      },
+    },
+    ...source,
+  }).plan;
+
+  let eventEmitted = false;
+  if (!sameFingerprint) {
+    eventEmitted = true;
+    storage.appendRuntimeEvent({
+      event_type: "goal.worker_pool_recovery_waiting",
+      entity_type: "goal",
+      entity_id: goal.goal_id,
+      status: goal.status,
+      summary: `Goal ${goal.goal_id} is paused until the live worker pool changes.`,
+      details: {
+        goal_id: goal.goal_id,
+        plan_id: plan.plan_id,
+        pause_reason: readString(workerPoolPause?.reason) ?? null,
+        current_pool_fingerprint: recoveryStatus.current_pool_fingerprint,
+        last_attempted_pool_fingerprint: recoveryStatus.last_attempted_pool_fingerprint,
+        suppression_count: suppressionCount,
+      },
+      ...source,
+    });
+  }
+
+  return {
+    plan: updatedPlan,
+    recovery_status: recoveryStatus,
+    suppression_count: suppressionCount,
+    event_emitted: eventEmitted,
+  };
 }
 
 function listGoalAutorunCandidates(storage: Storage, input: Pick<GoalAutorunLikeInput, "goal_id" | "limit">) {
@@ -1544,12 +1651,14 @@ async function executeGoalAutorunPass(
     let planRecord = plan;
     const steps = storage.listPlanSteps(plan.plan_id);
     const planAssessment = planResolution.assessment ?? assessPlanRisk(goal, planRecord, steps);
-    planRecord = persistPlanRiskAssessment(storage, goal, planRecord, planAssessment, {
+    const source = {
       source_client: input.source_client,
       source_model: input.source_model,
       source_agent: input.source_agent,
-    });
+    };
+    planRecord = persistPlanRiskAssessment(storage, goal, planRecord, planAssessment, source);
     if (!planAssessment.can_auto_execute) {
+      const recoveryStatus = summarizeWorkerPoolRecoveryStatus(storage, planRecord);
       const recoveryPoolFingerprint = resolveWorkerPoolRecoveryFingerprint(
         storage,
         {
@@ -1593,6 +1702,13 @@ async function executeGoalAutorunPass(
         continue;
       }
 
+      let suppressionCount = 0;
+      if (recoveryStatus.state === "awaiting_pool_change") {
+        const suppressed = persistWorkerPoolRecoverySuppression(storage, goal, planRecord, source);
+        planRecord = suppressed.plan;
+        suppressionCount = suppressed.suppression_count;
+      }
+
       skippedCount += 1;
       results.push({
         goal_id: goal.goal_id,
@@ -1601,6 +1717,10 @@ async function executeGoalAutorunPass(
         reason: "worker_pool_paused",
         pause_reason: planAssessment.pause_reason,
         plan_risk_assessment: planAssessment,
+        recovery_state: recoveryStatus.state,
+        current_pool_fingerprint: recoveryStatus.current_pool_fingerprint,
+        last_attempted_pool_fingerprint: recoveryStatus.last_attempted_pool_fingerprint,
+        suppression_count: suppressionCount,
       });
       continue;
     }

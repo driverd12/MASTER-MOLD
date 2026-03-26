@@ -36,6 +36,11 @@ type GoalExecutionSnapshot = {
   blocked_approval_count: number;
   blocked_human_count: number;
   worker_pool_paused: boolean;
+  worker_pool_pause_reason: string | null;
+  worker_pool_recovery_state: "none" | "no_viable_pool" | "awaiting_pool_change" | "ready_for_recovery";
+  worker_pool_recovery_suppressed_count: number;
+  current_worker_pool_fingerprint: string | null;
+  last_attempted_worker_pool_fingerprint: string | null;
   next_action: string;
 };
 
@@ -122,6 +127,11 @@ function summarizeGoalExecution(plan: PlanRecord | null, steps: PlanStepRecord[]
       blocked_approval_count: 0,
       blocked_human_count: 0,
       worker_pool_paused: false,
+      worker_pool_pause_reason: null,
+      worker_pool_recovery_state: "none",
+      worker_pool_recovery_suppressed_count: 0,
+      current_worker_pool_fingerprint: null,
+      last_attempted_worker_pool_fingerprint: null,
       next_action: "No active plan exists for this goal.",
     };
   }
@@ -169,6 +179,11 @@ function summarizeGoalExecution(plan: PlanRecord | null, steps: PlanStepRecord[]
     blocked_approval_count: blockedApprovalCount,
     blocked_human_count: blockedHumanCount,
     worker_pool_paused: workerPoolPause !== null,
+    worker_pool_pause_reason: readString(workerPoolPause?.reason),
+    worker_pool_recovery_state: workerPoolPause ? "no_viable_pool" : "none",
+    worker_pool_recovery_suppressed_count: 0,
+    current_worker_pool_fingerprint: null,
+    last_attempted_worker_pool_fingerprint: null,
     next_action: nextAction,
   };
 }
@@ -183,6 +198,76 @@ function readString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function buildWorkerPoolRecoveryFingerprint(sessions: AgentSessionRecord[]) {
+  if (sessions.length === 0) {
+    return null;
+  }
+  return sessions
+    .map((session) => {
+      const adaptiveState = summarizeAdaptiveSessionHealth(session).adaptive_state;
+      return [session.session_id, session.agent_id, session.client_kind ?? "", session.status, adaptiveState].join(":");
+    })
+    .sort()
+    .join("|");
+}
+
+function summarizeWorkerPoolRecoveryState(plan: PlanRecord, activeSessions: AgentSessionRecord[]) {
+  const workerPoolPause = isRecord(plan.metadata.worker_pool_pause) ? plan.metadata.worker_pool_pause : null;
+  if (!workerPoolPause) {
+    return {
+      state: "none" as const,
+      pause_reason: null,
+      suppression_count: 0,
+      current_pool_fingerprint: null,
+      last_attempted_pool_fingerprint: null,
+    };
+  }
+
+  const currentPoolFingerprint = buildWorkerPoolRecoveryFingerprint(activeSessions);
+  const viablePoolAvailable = activeSessions.some((session) => {
+    const state = summarizeAdaptiveSessionHealth(session).adaptive_state;
+    return state === "healthy" || state === "unproven";
+  });
+  const existingAttempt = isRecord(plan.metadata.worker_pool_recovery_attempt) ? plan.metadata.worker_pool_recovery_attempt : null;
+  const existingSuppression = isRecord(plan.metadata.worker_pool_recovery_suppressed)
+    ? plan.metadata.worker_pool_recovery_suppressed
+    : null;
+  const lastAttemptedPoolFingerprint = readString(existingAttempt?.pool_fingerprint);
+  const suppressionCount = readFiniteNumber(existingSuppression?.count) ?? 0;
+
+  if (!viablePoolAvailable || !currentPoolFingerprint) {
+    return {
+      state: "no_viable_pool" as const,
+      pause_reason: readString(workerPoolPause.reason),
+      suppression_count: suppressionCount,
+      current_pool_fingerprint: currentPoolFingerprint,
+      last_attempted_pool_fingerprint: lastAttemptedPoolFingerprint,
+    };
+  }
+
+  if (lastAttemptedPoolFingerprint === currentPoolFingerprint) {
+    return {
+      state: "awaiting_pool_change" as const,
+      pause_reason: readString(workerPoolPause.reason),
+      suppression_count: suppressionCount,
+      current_pool_fingerprint: currentPoolFingerprint,
+      last_attempted_pool_fingerprint: lastAttemptedPoolFingerprint,
+    };
+  }
+
+  return {
+    state: "ready_for_recovery" as const,
+    pause_reason: readString(workerPoolPause.reason),
+    suppression_count: suppressionCount,
+    current_pool_fingerprint: currentPoolFingerprint,
+    last_attempted_pool_fingerprint: lastAttemptedPoolFingerprint,
+  };
 }
 
 function summarizePlanAdaptiveRouting(steps: PlanStepRecord[]): GoalAdaptiveRoutingSnapshot {
@@ -335,7 +420,21 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
   const goalSummaries = openGoals.map((goal) => {
     const plan = resolveGoalPlan(storage, goal);
     const steps = plan ? storage.listPlanSteps(plan.plan_id) : [];
+    const recovery = plan ? summarizeWorkerPoolRecoveryState(plan, activeSessions) : null;
     const executionSummary = summarizeGoalExecution(plan, steps);
+    executionSummary.worker_pool_pause_reason = recovery?.pause_reason ?? null;
+    executionSummary.worker_pool_recovery_state = recovery?.state ?? "none";
+    executionSummary.worker_pool_recovery_suppressed_count = recovery?.suppression_count ?? 0;
+    executionSummary.current_worker_pool_fingerprint = recovery?.current_pool_fingerprint ?? null;
+    executionSummary.last_attempted_worker_pool_fingerprint = recovery?.last_attempted_pool_fingerprint ?? null;
+    if (executionSummary.worker_pool_paused) {
+      executionSummary.next_action =
+        recovery?.state === "ready_for_recovery"
+          ? "Healthier worker lanes are available; goal.execute or goal.autorun can retry recovery now."
+          : recovery?.state === "awaiting_pool_change"
+            ? "Execution is paused until the live worker pool changes meaningfully."
+            : "Execution is paused until healthier worker lanes are available or a safer plan is selected.";
+    }
     const adaptiveRoutingSummary = summarizePlanAdaptiveRouting(steps);
     return {
       goal_id: goal.goal_id,
@@ -358,6 +457,11 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       acc.blocked_human_count += summary.execution_summary.blocked_human_count;
       acc.failed_step_count += summary.execution_summary.failed_count;
       acc.worker_pool_paused_count += summary.execution_summary.worker_pool_paused ? 1 : 0;
+      acc.worker_pool_recovery_ready_count += summary.execution_summary.worker_pool_recovery_state === "ready_for_recovery" ? 1 : 0;
+      acc.worker_pool_recovery_waiting_count +=
+        summary.execution_summary.worker_pool_recovery_state === "awaiting_pool_change" ? 1 : 0;
+      acc.worker_pool_no_viable_pool_count +=
+        summary.execution_summary.worker_pool_recovery_state === "no_viable_pool" ? 1 : 0;
       acc.adaptive_preferred_pool_count += summary.adaptive_routing_summary.mode_counts.preferred_pool;
       acc.adaptive_fallback_degraded_count += summary.adaptive_routing_summary.mode_counts.fallback_degraded;
       acc.adaptive_none_count += summary.adaptive_routing_summary.mode_counts.none;
@@ -370,6 +474,9 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       blocked_human_count: 0,
       failed_step_count: 0,
       worker_pool_paused_count: 0,
+      worker_pool_recovery_ready_count: 0,
+      worker_pool_recovery_waiting_count: 0,
+      worker_pool_no_viable_pool_count: 0,
       adaptive_preferred_pool_count: 0,
       adaptive_fallback_degraded_count: 0,
       adaptive_none_count: 0,
@@ -413,6 +520,21 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
   }
   if (totals.worker_pool_paused_count > 0) {
     attention.push(`Worker-pool risk is pausing ${totals.worker_pool_paused_count} open plan(s).`);
+  }
+  if (totals.worker_pool_recovery_ready_count > 0) {
+    attention.push(
+      `${totals.worker_pool_recovery_ready_count} paused plan(s) can recover immediately because a healthier worker pool is available.`
+    );
+  }
+  if (totals.worker_pool_recovery_waiting_count > 0) {
+    attention.push(
+      `${totals.worker_pool_recovery_waiting_count} paused plan(s) are suppressed until the live worker pool changes.`
+    );
+  }
+  if (totals.worker_pool_no_viable_pool_count > 0) {
+    attention.push(
+      `${totals.worker_pool_no_viable_pool_count} paused plan(s) still have no viable healthy or unproven worker pool.`
+    );
   }
   if (activeSessions.length === 0 && ((taskSummary.counts.pending ?? 0) > 0 || totals.ready_step_count > 0)) {
     attention.push("Work is queued or ready, but no active agent sessions are available to claim it.");
@@ -467,6 +589,9 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       blocked_approval_count: totals.blocked_approval_count,
       blocked_human_count: totals.blocked_human_count,
       worker_pool_paused_count: totals.worker_pool_paused_count,
+      worker_pool_recovery_ready_count: totals.worker_pool_recovery_ready_count,
+      worker_pool_recovery_waiting_count: totals.worker_pool_recovery_waiting_count,
+      worker_pool_no_viable_pool_count: totals.worker_pool_no_viable_pool_count,
       failed_step_count: totals.failed_step_count,
     },
     open_goals: goalSummaries,

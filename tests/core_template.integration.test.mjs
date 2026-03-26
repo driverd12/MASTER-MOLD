@@ -878,6 +878,26 @@ test("goal.autorun does not repeat worker-pool recovery replans against the same
     assert.equal(repeatedAutorun.skipped_count, 1);
     assert.equal(repeatedAutorun.results[0].reason, "worker_pool_paused");
     assert.equal(repeatedAutorun.results[0].plan_id, recoveryPlanId);
+    assert.equal(repeatedAutorun.results[0].recovery_state, "awaiting_pool_change");
+    assert.ok(repeatedAutorun.results[0].suppression_count >= 1);
+
+    const kernelSummary = await callTool(client, "kernel.summary", {
+      goal_limit: 10,
+      event_limit: 50,
+    });
+    assert.ok(kernelSummary.attention.some((entry) => /suppressed until the live worker pool changes/i.test(entry)));
+    assert.ok(kernelSummary.overview.worker_pool_recovery_waiting_count >= 1);
+    const pausedGoalSummary = kernelSummary.open_goals.find((entry) => entry.goal_id === createdGoal.goal.goal_id);
+    assert.ok(pausedGoalSummary);
+    assert.equal(pausedGoalSummary.execution_summary.worker_pool_recovery_state, "awaiting_pool_change");
+    assert.ok(pausedGoalSummary.execution_summary.worker_pool_recovery_suppressed_count >= 1);
+
+    const recoveryEvents = await callTool(client, "event.tail", {
+      entity_type: "goal",
+      entity_id: createdGoal.goal.goal_id,
+      limit: 50,
+    });
+    assert.ok(recoveryEvents.events.some((event) => event.event_type === "goal.worker_pool_recovery_waiting"));
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
