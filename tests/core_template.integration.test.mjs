@@ -429,6 +429,8 @@ test("goal.execute generates a default agentic plan and dispatches the first run
     assert.equal(executedGoal.execution.stop_reason, "idle");
     assert.equal(executedGoal.plan.metadata.planner_hook.hook_id, "agentic.delivery_path");
     assert.equal(typeof executedGoal.plan.plan_id, "string");
+    assert.equal(executedGoal.plan.metadata.adaptive_plan_routing_summary.mode_counts.none, 3);
+    assert.ok(executedGoal.plan.confidence < 0.84);
     assert.equal(executedGoal.execution_summary.completed_count, 1);
     assert.equal(executedGoal.execution_summary.running_count, 1);
     assert.equal(executedGoal.execution_summary.failed_count, 0);
@@ -1823,6 +1825,8 @@ test("pack.plan.generate shapes worker lanes from adaptive session health", asyn
     assert.equal(verifySlice.metadata.adaptive_assignment.lane_kind, "verification");
     assert.equal(verifySlice.metadata.adaptive_assignment.health_counts.healthy_count, 1);
     assert.equal(verifySlice.metadata.adaptive_assignment.health_counts.suppressed_count, 1);
+    assert.equal(generatedPlan.plan.metadata.adaptive_plan_routing_summary.mode_counts.preferred_pool, 3);
+    assert.equal(generatedPlan.plan.confidence, 0.84);
     assert.deepEqual(
       verifySlice.metadata.adaptive_assignment.preferred_lane_hints.preferred_agent_ids,
       ["cursor", "codex"]

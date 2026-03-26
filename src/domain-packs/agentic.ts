@@ -93,6 +93,12 @@ type PlannerWorkerLaneResolution = {
   adaptive_assignment: PlannerAdaptiveAssignment;
 };
 
+type PlannerAdaptivePlanSummary = {
+  worker_step_count: number;
+  mode_counts: Record<AdaptiveDispatchRoutingGuidance["mode"], number>;
+  attention: string[];
+};
+
 function listPreferredCouncilAgents(storage: Storage): string[] {
   const sessions = storage.listAgentSessions({ active_only: true, limit: 100 });
   const preferredAgentOrder = ["codex", "cursor", "local-imprint"];
@@ -220,6 +226,52 @@ function buildPlannerWorkerLaneResolution(
   };
 }
 
+function summarizePlannerAdaptivePlan(lanes: PlannerWorkerLaneResolution[]): PlannerAdaptivePlanSummary {
+  const modeCounts: Record<AdaptiveDispatchRoutingGuidance["mode"], number> = {
+    preferred_pool: 0,
+    fallback_degraded: 0,
+    none: 0,
+  };
+  for (const lane of lanes) {
+    modeCounts[lane.adaptive_assignment.mode] += 1;
+  }
+  const attention: string[] = [];
+  if (modeCounts.fallback_degraded > 0) {
+    attention.push(`Planner is falling back to degraded worker lanes for ${modeCounts.fallback_degraded} step(s).`);
+  }
+  if (modeCounts.none > 0) {
+    attention.push(`Planner could not find a dispatchable worker lane for ${modeCounts.none} step(s).`);
+  }
+  return {
+    worker_step_count: lanes.length,
+    mode_counts: modeCounts,
+    attention,
+  };
+}
+
+function resolveAdaptivePlanningConfidence(baseConfidence: number, summary: PlannerAdaptivePlanSummary) {
+  const adjusted =
+    baseConfidence -
+    (summary.mode_counts.fallback_degraded * 0.06) -
+    (summary.mode_counts.none * 0.1);
+  return Number(Math.max(0.45, Math.min(0.99, adjusted)).toFixed(3));
+}
+
+function buildAdaptivePlanningAssumptions(summary: PlannerAdaptivePlanSummary) {
+  const assumptions: string[] = [];
+  if (summary.mode_counts.fallback_degraded > 0) {
+    assumptions.push(
+      "Some worker steps are currently targeting degraded live lanes and may need healthier sessions before execution quality is acceptable."
+    );
+  }
+  if (summary.mode_counts.none > 0) {
+    assumptions.push(
+      "Some worker steps currently have no dispatchable live lane and will rely on future session availability or later dispatch-time reassignment."
+    );
+  }
+  return assumptions;
+}
+
 function buildDeliveryPlan(goal: GoalRecord, storage: Storage, repoRoot: string) {
   const councilAgents = listPreferredCouncilAgents(storage);
   const mapCodebaseTask = {
@@ -268,16 +320,23 @@ function buildDeliveryPlan(goal: GoalRecord, storage: Storage, repoRoot: string)
     preferred_client_kinds: ["cursor", "codex"],
     preferred_capabilities: ["review", "verify"],
   });
+  const adaptivePlanSummary = summarizePlannerAdaptivePlan([
+    mapCodebaseLane,
+    implementSliceLane,
+    verifySliceLane,
+  ]);
+  const confidence = resolveAdaptivePlanningConfidence(0.84, adaptivePlanSummary);
 
   return {
     summary: `Built a spec-driven delivery path for goal ${goal.goal_id} using the active local agent lanes.`,
-    confidence: 0.84,
+    confidence,
     assumptions: dedupeStrings([
       "The next slice should be the smallest reversible change that advances the goal.",
       "Cursor and Codex are the primary execution lanes unless more active sessions are present.",
       goal.acceptance_criteria.length > 0
         ? "Existing goal acceptance criteria remain the top-level finish condition."
         : "Acceptance criteria will be refined during planning before broad execution begins.",
+      ...buildAdaptivePlanningAssumptions(adaptivePlanSummary),
     ]),
     success_criteria:
       goal.acceptance_criteria.length > 0
@@ -296,6 +355,7 @@ function buildDeliveryPlan(goal: GoalRecord, storage: Storage, repoRoot: string)
       methodology_source: "gsd-build/get-shit-done",
       council_agents: councilAgents,
       repo_root: repoRoot,
+      adaptive_plan_routing_summary: adaptivePlanSummary,
     },
     steps: [
       {
@@ -457,15 +517,18 @@ function buildOptimizationPlan(goal: GoalRecord, storage: Storage, repoRoot: str
     preferred_client_kinds: ["codex", "cursor"],
     preferred_capabilities: ["coding", "worker"],
   });
+  const adaptivePlanSummary = summarizePlannerAdaptivePlan([baselineLane, variantLane]);
+  const confidence = resolveAdaptivePlanningConfidence(0.8, adaptivePlanSummary);
 
   return {
     summary: `Built an experiment-driven optimization loop for goal ${goal.goal_id} with a durable experiment ledger and review gate.`,
-    confidence: 0.8,
-    assumptions: [
+    confidence,
+    assumptions: dedupeStrings([
       "Optimization should be driven by measurable deltas, not preference alone.",
       "Only one bounded candidate should be in flight per loop unless the user explicitly expands the search.",
       "The same measurement protocol should be used for both baseline and candidate runs.",
-    ],
+      ...buildAdaptivePlanningAssumptions(adaptivePlanSummary),
+    ]),
     success_criteria: [
       "A durable experiment record exists before running the variant.",
       "The candidate run is measured against a named metric with clear directionality.",
@@ -482,6 +545,7 @@ function buildOptimizationPlan(goal: GoalRecord, storage: Storage, repoRoot: str
       metric_name: metricName,
       metric_direction: metricDirection,
       repo_root: repoRoot,
+      adaptive_plan_routing_summary: adaptivePlanSummary,
     },
     steps: [
       {
