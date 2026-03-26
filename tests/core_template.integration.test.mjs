@@ -558,6 +558,154 @@ test("goal.execute auto-selects the optimization planner and bootstraps an exper
   }
 });
 
+test("goal.execute downgrades weak optimization intent to the safer delivery path when no viable worker lane exists", async () => {
+  const testId = `${Date.now()}-goal-execute-methodology-safety-override`;
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "mcp-core-template-goal-execute-methodology-safety-override-test-")
+  );
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Score tuning goal",
+      objective: "Improve score",
+      status: "active",
+      autonomy_mode: "execute_bounded",
+      acceptance_criteria: ["A safer delivery plan is chosen when the optimization signal is weak"],
+    });
+
+    const executedGoal = await callTool(client, "goal.execute", {
+      mutation: nextMutation(testId, "goal.execute", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      max_passes: 4,
+    });
+
+    assert.equal(executedGoal.ok, true);
+    assert.equal(executedGoal.executed, true);
+    assert.equal(executedGoal.created_plan, true);
+    assert.equal(executedGoal.plan_resolution, "generated");
+    assert.equal(executedGoal.planner_selection.methodology, "delivery");
+    assert.equal(executedGoal.planner_selection.reason, "worker_pool_safety_override");
+    assert.equal(executedGoal.methodology_entry_decision.original_selection.methodology, "optimization");
+    assert.equal(executedGoal.methodology_entry_decision.selection.methodology, "delivery");
+    assert.equal(executedGoal.methodology_entry_decision.selection_strength, "weak");
+    assert.equal(executedGoal.methodology_entry_decision.switched_selection, true);
+    assert.equal(executedGoal.methodology_entry_decision.hold_generation, false);
+    assert.equal(executedGoal.methodology_entry_decision.state, "blocked_by_no_viable_lane");
+
+    const generatedPlan = await callTool(client, "plan.get", {
+      plan_id: executedGoal.plan.plan_id,
+    });
+    assert.equal(generatedPlan.plan.metadata.planner_hook.hook_id, "agentic.delivery_path");
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("goal.execute holds generation before planning when destructive autonomy has no viable worker lane", async () => {
+  const testId = `${Date.now()}-goal-execute-held-before-generation`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-goal-execute-held-before-generation-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Destructive score tuning goal",
+      objective: "Improve score",
+      status: "active",
+      autonomy_mode: "execute_destructive_with_approval",
+      acceptance_criteria: ["Generation is held before planning when the live worker pool is not viable"],
+    });
+
+    const executedGoal = await callTool(client, "goal.execute", {
+      mutation: nextMutation(testId, "goal.execute", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      max_passes: 4,
+    });
+
+    assert.equal(executedGoal.ok, true);
+    assert.equal(executedGoal.executed, false);
+    assert.equal(executedGoal.held_before_generation, true);
+    assert.equal(executedGoal.created_plan, false);
+    assert.equal(executedGoal.plan_resolution, "missing");
+    assert.equal(executedGoal.planner_selection.methodology, "delivery");
+    assert.equal(executedGoal.planner_selection.reason, "worker_pool_safety_override");
+    assert.equal(executedGoal.methodology_entry_decision.original_selection.methodology, "optimization");
+    assert.equal(executedGoal.methodology_entry_decision.selection.methodology, "delivery");
+    assert.equal(executedGoal.methodology_entry_decision.selection_strength, "weak");
+    assert.equal(executedGoal.methodology_entry_decision.switched_selection, true);
+    assert.equal(executedGoal.methodology_entry_decision.hold_generation, true);
+    assert.equal(executedGoal.methodology_entry_decision.state, "blocked_by_no_viable_lane");
+    assert.match(executedGoal.message, /held|viable worker lane/i);
+
+    const goalPlans = await callTool(client, "plan.list", {
+      goal_id: createdGoal.goal.goal_id,
+      limit: 10,
+    });
+    assert.equal(goalPlans.count, 0);
+
+    const skippedAutorun = await callTool(client, "goal.autorun", {
+      mutation: nextMutation(testId, "goal.autorun.blocked", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      max_passes: 4,
+    });
+    assert.equal(skippedAutorun.executed_count, 0);
+    assert.equal(skippedAutorun.skipped_count, 1);
+    assert.equal(skippedAutorun.results[0].reason, "held_pre_generation_worker_pool");
+    assert.equal(skippedAutorun.results[0].methodology_entry_hold.state, "blocked_by_no_viable_lane");
+
+    const blockedSummary = await callTool(client, "kernel.summary", {
+      goal_limit: 10,
+      event_limit: 20,
+    });
+    assert.ok(blockedSummary.attention.some((entry) => /held before plan generation/i.test(entry)));
+    assert.ok(blockedSummary.overview.methodology_entry_hold_count >= 1);
+    const blockedGoalSummary = blockedSummary.open_goals.find((entry) => entry.goal_id === createdGoal.goal.goal_id);
+    assert.ok(blockedGoalSummary);
+    assert.equal(blockedGoalSummary.execution_summary.methodology_entry_held, true);
+    assert.equal(blockedGoalSummary.execution_summary.methodology_entry_hold_state, "blocked_by_no_viable_lane");
+
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open.codex", () => mutationCounter++),
+      session_id: "goal-execute-held-before-generation-codex",
+      agent_id: "codex",
+      client_kind: "codex",
+      transport_kind: "stdio",
+      workspace_root: REPO_ROOT,
+      status: "active",
+      capabilities: {
+        worker: true,
+        coding: true,
+        planning: true,
+      },
+    });
+
+    const recoveredAutorun = await callTool(client, "goal.autorun", {
+      mutation: nextMutation(testId, "goal.autorun.recovered", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      max_passes: 4,
+    });
+    assert.equal(recoveredAutorun.executed_count, 1);
+    assert.equal(recoveredAutorun.results[0].reason, "generated_plan");
+    assert.equal(recoveredAutorun.results[0].execution.executed, true);
+    assert.equal(recoveredAutorun.results[0].execution.created_plan, true);
+
+    const goalState = await callTool(client, "goal.get", {
+      goal_id: createdGoal.goal.goal_id,
+    });
+    assert.notEqual(goalState.goal.active_plan_id, null);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("goal.execute pauses destructive autonomy when the generated worker pool is too weak", async () => {
   const testId = `${Date.now()}-goal-execute-pause-worker-pool`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-goal-execute-pause-worker-pool-test-"));
@@ -1127,6 +1275,98 @@ test("playbook.run routes autoresearch through the dynamic optimization planner"
     assert.equal(experiments.experiments[0].metric_name, "throughput_ops_per_sec");
     assert.equal(experiments.experiments[0].metric_direction, "maximize");
     assert.equal(experiments.experiments[0].acceptance_delta, 2);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("playbook.run can hold explicit delivery planning before plan creation when destructive autonomy has no viable lane", async () => {
+  const testId = `${Date.now()}-playbook-run-held-before-planning`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-playbook-run-held-before-planning-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const ranPlaybook = await callTool(client, "playbook.run", {
+      mutation: nextMutation(testId, "playbook.run", () => mutationCounter++),
+      playbook_id: "gsd.phase_delivery",
+      title: "Ship a guarded mutation slice",
+      objective: "Ship a guarded mutation slice once a viable live worker lane exists",
+      autonomy_mode: "execute_destructive_with_approval",
+      max_passes: 4,
+    });
+
+    assert.equal(ranPlaybook.ok, true);
+    assert.equal(ranPlaybook.held_before_planning, true);
+    assert.equal(ranPlaybook.planning_mode, "held_pre_generation");
+    assert.equal(ranPlaybook.plan, null);
+    assert.deepEqual(ranPlaybook.steps, []);
+    assert.equal(ranPlaybook.execution, null);
+    assert.equal(ranPlaybook.methodology_entry_decision.selection.methodology, "delivery");
+    assert.equal(ranPlaybook.methodology_entry_decision.selection_strength, "explicit");
+    assert.equal(ranPlaybook.methodology_entry_decision.hold_generation, true);
+    assert.equal(ranPlaybook.methodology_entry_decision.switched_selection, false);
+    assert.equal(ranPlaybook.methodology_entry_decision.state, "blocked_by_no_viable_lane");
+
+    const goalPlans = await callTool(client, "plan.list", {
+      goal_id: ranPlaybook.goal.goal_id,
+      limit: 10,
+    });
+    assert.equal(goalPlans.count, 0);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("playbook.run executes the static delivery path against a viable worker lane without duplicating the goal", async () => {
+  const testId = `${Date.now()}-playbook-run-static-delivery`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-playbook-run-static-delivery-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open.codex", () => mutationCounter++),
+      session_id: "playbook-run-static-delivery-codex",
+      agent_id: "codex",
+      client_kind: "codex",
+      transport_kind: "stdio",
+      workspace_root: REPO_ROOT,
+      status: "active",
+      capabilities: {
+        worker: true,
+        coding: true,
+        planning: true,
+      },
+    });
+
+    const ranPlaybook = await callTool(client, "playbook.run", {
+      mutation: nextMutation(testId, "playbook.run", () => mutationCounter++),
+      playbook_id: "gsd.phase_delivery",
+      title: "Ship a resilient worker fix",
+      objective: "Ship a resilient worker fix through the GSD delivery path",
+      autonomy_mode: "execute_bounded",
+      max_passes: 4,
+      trichat_bridge_dry_run: true,
+    });
+
+    assert.equal(ranPlaybook.ok, true);
+    assert.equal(ranPlaybook.planning_mode, "static_playbook_plan");
+    assert.equal(ranPlaybook.methodology_entry_decision.selection.methodology, "delivery");
+    assert.equal(ranPlaybook.goal.active_plan_id, ranPlaybook.plan.plan_id);
+    assert.equal(ranPlaybook.plan.goal_id, ranPlaybook.goal.goal_id);
+    assert.equal(ranPlaybook.plan.metadata.playbook_id, "gsd.phase_delivery");
+
+    const goalPlans = await callTool(client, "plan.list", {
+      goal_id: ranPlaybook.goal.goal_id,
+      limit: 10,
+    });
+    assert.equal(goalPlans.count, 1);
+    assert.equal(goalPlans.plans[0].plan_id, ranPlaybook.plan.plan_id);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -41,6 +41,10 @@ type GoalExecutionSnapshot = {
   worker_pool_recovery_suppressed_count: number;
   current_worker_pool_fingerprint: string | null;
   last_attempted_worker_pool_fingerprint: string | null;
+  methodology_entry_held: boolean;
+  methodology_entry_hold_state: "none" | "blocked_by_no_viable_lane" | "ready_for_recovery";
+  methodology_entry_hold_reason: string | null;
+  methodology_entry_hold_count: number;
   next_action: string;
 };
 
@@ -132,6 +136,10 @@ function summarizeGoalExecution(plan: PlanRecord | null, steps: PlanStepRecord[]
       worker_pool_recovery_suppressed_count: 0,
       current_worker_pool_fingerprint: null,
       last_attempted_worker_pool_fingerprint: null,
+      methodology_entry_held: false,
+      methodology_entry_hold_state: "none",
+      methodology_entry_hold_reason: null,
+      methodology_entry_hold_count: 0,
       next_action: "No active plan exists for this goal.",
     };
   }
@@ -184,6 +192,10 @@ function summarizeGoalExecution(plan: PlanRecord | null, steps: PlanStepRecord[]
     worker_pool_recovery_suppressed_count: 0,
     current_worker_pool_fingerprint: null,
     last_attempted_worker_pool_fingerprint: null,
+    methodology_entry_held: false,
+    methodology_entry_hold_state: "none",
+    methodology_entry_hold_reason: null,
+    methodology_entry_hold_count: 0,
     next_action: nextAction,
   };
 }
@@ -267,6 +279,33 @@ function summarizeWorkerPoolRecoveryState(plan: PlanRecord, activeSessions: Agen
     suppression_count: suppressionCount,
     current_pool_fingerprint: currentPoolFingerprint,
     last_attempted_pool_fingerprint: lastAttemptedPoolFingerprint,
+  };
+}
+
+function summarizeMethodologyEntryHoldState(goal: GoalRecord, activeSessions: AgentSessionRecord[]) {
+  const hold = isRecord(goal.metadata.methodology_entry_hold) ? goal.metadata.methodology_entry_hold : null;
+  if (!hold) {
+    return {
+      held: false,
+      state: "none" as const,
+      reason: null,
+      count: 0,
+      current_pool_fingerprint: null,
+    };
+  }
+
+  const currentPoolFingerprint = buildWorkerPoolRecoveryFingerprint(activeSessions);
+  const viablePoolAvailable = activeSessions.some((session) => {
+    const state = summarizeAdaptiveSessionHealth(session).adaptive_state;
+    return state === "healthy" || state === "unproven";
+  });
+
+  return {
+    held: true,
+    state: viablePoolAvailable ? ("ready_for_recovery" as const) : ("blocked_by_no_viable_lane" as const),
+    reason: readString(hold.reason),
+    count: readFiniteNumber(hold.count) ?? 0,
+    current_pool_fingerprint: currentPoolFingerprint,
   };
 }
 
@@ -421,6 +460,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     const plan = resolveGoalPlan(storage, goal);
     const steps = plan ? storage.listPlanSteps(plan.plan_id) : [];
     const recovery = plan ? summarizeWorkerPoolRecoveryState(plan, activeSessions) : null;
+    const methodologyEntryHold = !plan ? summarizeMethodologyEntryHoldState(goal, activeSessions) : null;
     const executionSummary = summarizeGoalExecution(plan, steps);
     executionSummary.worker_pool_pause_reason = recovery?.pause_reason ?? null;
     executionSummary.worker_pool_recovery_state = recovery?.state ?? "none";
@@ -434,6 +474,16 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
           : recovery?.state === "awaiting_pool_change"
             ? "Execution is paused until the live worker pool changes meaningfully."
             : "Execution is paused until healthier worker lanes are available or a safer plan is selected.";
+    } else if (methodologyEntryHold?.held) {
+      executionSummary.methodology_entry_held = true;
+      executionSummary.methodology_entry_hold_state = methodologyEntryHold.state;
+      executionSummary.methodology_entry_hold_reason = methodologyEntryHold.reason;
+      executionSummary.methodology_entry_hold_count = methodologyEntryHold.count;
+      executionSummary.current_worker_pool_fingerprint = methodologyEntryHold.current_pool_fingerprint;
+      executionSummary.next_action =
+        methodologyEntryHold.state === "ready_for_recovery"
+          ? "A viable worker lane is now available; goal.execute or goal.autorun can retry plan generation."
+          : "Plan generation is being held until a viable worker lane appears.";
     }
     const adaptiveRoutingSummary = summarizePlanAdaptiveRouting(steps);
     return {
@@ -462,6 +512,9 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
         summary.execution_summary.worker_pool_recovery_state === "awaiting_pool_change" ? 1 : 0;
       acc.worker_pool_no_viable_pool_count +=
         summary.execution_summary.worker_pool_recovery_state === "no_viable_pool" ? 1 : 0;
+      acc.methodology_entry_hold_count += summary.execution_summary.methodology_entry_held ? 1 : 0;
+      acc.methodology_entry_recovery_ready_count +=
+        summary.execution_summary.methodology_entry_hold_state === "ready_for_recovery" ? 1 : 0;
       acc.adaptive_preferred_pool_count += summary.adaptive_routing_summary.mode_counts.preferred_pool;
       acc.adaptive_fallback_degraded_count += summary.adaptive_routing_summary.mode_counts.fallback_degraded;
       acc.adaptive_none_count += summary.adaptive_routing_summary.mode_counts.none;
@@ -477,6 +530,8 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       worker_pool_recovery_ready_count: 0,
       worker_pool_recovery_waiting_count: 0,
       worker_pool_no_viable_pool_count: 0,
+      methodology_entry_hold_count: 0,
+      methodology_entry_recovery_ready_count: 0,
       adaptive_preferred_pool_count: 0,
       adaptive_fallback_degraded_count: 0,
       adaptive_none_count: 0,
@@ -536,6 +591,16 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       `${totals.worker_pool_no_viable_pool_count} paused plan(s) still have no viable healthy or unproven worker pool.`
     );
   }
+  if (totals.methodology_entry_hold_count > 0) {
+    attention.push(
+      `${totals.methodology_entry_hold_count} goal(s) are being held before plan generation because no viable worker lane exists.`
+    );
+  }
+  if (totals.methodology_entry_recovery_ready_count > 0) {
+    attention.push(
+      `${totals.methodology_entry_recovery_ready_count} pre-generation hold(s) can recover immediately because a viable worker lane is now available.`
+    );
+  }
   if (activeSessions.length === 0 && ((taskSummary.counts.pending ?? 0) > 0 || totals.ready_step_count > 0)) {
     attention.push("Work is queued or ready, but no active agent sessions are available to claim it.");
   }
@@ -592,6 +657,8 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       worker_pool_recovery_ready_count: totals.worker_pool_recovery_ready_count,
       worker_pool_recovery_waiting_count: totals.worker_pool_recovery_waiting_count,
       worker_pool_no_viable_pool_count: totals.worker_pool_no_viable_pool_count,
+      methodology_entry_hold_count: totals.methodology_entry_hold_count,
+      methodology_entry_recovery_ready_count: totals.methodology_entry_recovery_ready_count,
       failed_step_count: totals.failed_step_count,
     },
     open_goals: goalSummaries,

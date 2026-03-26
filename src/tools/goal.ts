@@ -169,11 +169,31 @@ type AdaptiveRoutingMode = "preferred_pool" | "fallback_degraded" | "none";
 type GoalAutorunLikeInput = Omit<z.infer<typeof goalAutorunSchema>, "mutation"> & {
   mutation?: { idempotency_key: string; side_effect_fingerprint: string };
 };
-type PlannerSelection = {
+export type PlannerSelection = {
   hook_name: string;
   methodology: "delivery" | "optimization";
   reason: string;
   evidence: Record<string, unknown>;
+};
+type PlannerSelectionStrength = "explicit" | "strong" | "weak";
+export type MethodologyEntryDecision = {
+  state: "dispatchable_now" | "blocked_by_no_viable_lane";
+  selection_strength: PlannerSelectionStrength;
+  active_session_count: number;
+  viable_session_count: number;
+  degraded_session_count: number;
+  suppressed_session_count: number;
+  switched_selection: boolean;
+  hold_generation: boolean;
+  original_selection: PlannerSelection;
+  selection: PlannerSelection;
+  reason: string;
+};
+type GoalMethodologyEntryHoldStatus = {
+  state: "none" | "blocked_by_no_viable_lane" | "ready_for_recovery";
+  current_pool_fingerprint: string | null;
+  hold_count: number;
+  hold_reason: string | null;
 };
 type GoalAutorunDaemonConfig = {
   interval_seconds: number;
@@ -362,7 +382,7 @@ function countKeywordHits(text: string, keywords: string[]) {
   return count;
 }
 
-function buildExplicitPlannerSelection(hookName: string): PlannerSelection {
+export function buildExplicitPlannerSelection(hookName: string): PlannerSelection {
   return {
     hook_name: hookName,
     methodology: hookName === "optimization_loop" ? "optimization" : "delivery",
@@ -505,6 +525,207 @@ function resolveDefaultPlannerSelection(goal: GoalRecord, options?: Record<strin
       optimization_hits: optimizationHits,
       delivery_hits: deliveryHits,
     },
+  };
+}
+
+function resolvePlannerSelectionStrength(selection: PlannerSelection): PlannerSelectionStrength {
+  if (
+    selection.reason === "input.hook_name" ||
+    selection.reason === "goal.metadata.preferred_planner_hook_name" ||
+    selection.reason === "goal.metadata.methodology_source" ||
+    selection.reason === "goal.tags" ||
+    selection.reason === "goal.target_entity_type" ||
+    selection.reason === "metric_hint"
+  ) {
+    return "explicit";
+  }
+  if (selection.reason !== "objective_classifier" && selection.reason !== "default_delivery_tie_break") {
+    return "strong";
+  }
+  const optimizationHits = readFiniteNumber(selection.evidence.optimization_hits) ?? 0;
+  const deliveryHits = readFiniteNumber(selection.evidence.delivery_hits) ?? 0;
+  return Math.abs(optimizationHits - deliveryHits) >= 2 ? "strong" : "weak";
+}
+
+function summarizeMethodologyEntryPool(storage: Storage) {
+  const activeSessions = storage.listAgentSessions({
+    active_only: true,
+    limit: 100,
+  });
+  let viableSessionCount = 0;
+  let degradedSessionCount = 0;
+  let suppressedSessionCount = 0;
+  for (const session of activeSessions) {
+    const adaptiveState = summarizeAdaptiveSessionHealth(session).adaptive_state;
+    if (adaptiveState === "healthy" || adaptiveState === "unproven") {
+      viableSessionCount += 1;
+    } else if (adaptiveState === "degraded") {
+      degradedSessionCount += 1;
+    } else if (adaptiveState === "suppressed") {
+      suppressedSessionCount += 1;
+    }
+  }
+  return {
+    active_session_count: activeSessions.length,
+    viable_session_count: viableSessionCount,
+    degraded_session_count: degradedSessionCount,
+    suppressed_session_count: suppressedSessionCount,
+  };
+}
+
+function hasPersistedMethodologyEntryHold(goal: GoalRecord) {
+  return isRecord(goal.metadata.methodology_entry_hold);
+}
+
+export function resolveMethodologyEntryDecision(
+  storage: Storage,
+  goal: GoalRecord,
+  selection: PlannerSelection,
+  options?: {
+    allow_hold_on_explicit_selection?: boolean;
+  }
+): MethodologyEntryDecision {
+  const pool = summarizeMethodologyEntryPool(storage);
+  const selectionStrength = resolvePlannerSelectionStrength(selection);
+  let nextSelection = selection;
+  let switchedSelection = false;
+  let reason =
+    pool.viable_session_count > 0
+      ? "Viable worker lanes are available for plan generation."
+      : "No healthy or unproven worker lanes are currently available for plan generation.";
+
+  if (
+    pool.viable_session_count === 0 &&
+    selectionStrength === "weak" &&
+    selection.methodology === "optimization"
+  ) {
+    nextSelection = {
+      hook_name: "delivery_path",
+      methodology: "delivery",
+      reason: "worker_pool_safety_override",
+      evidence: {
+        original_selection: selection,
+        active_session_count: pool.active_session_count,
+        viable_session_count: pool.viable_session_count,
+        degraded_session_count: pool.degraded_session_count,
+        suppressed_session_count: pool.suppressed_session_count,
+      },
+    };
+    switchedSelection = true;
+    reason =
+      "Weak optimization intent was downgraded to the safer delivery path because no viable worker lane is available right now.";
+  }
+
+  const holdGeneration =
+    pool.viable_session_count === 0 &&
+    goal.autonomy_mode === "execute_destructive_with_approval" &&
+    (options?.allow_hold_on_explicit_selection === true || selectionStrength === "weak");
+
+  if (holdGeneration) {
+    reason =
+      "Generation is being held because destructive autonomy requires a viable worker lane before the kernel creates a new plan.";
+  }
+
+  return {
+    state: pool.viable_session_count > 0 ? "dispatchable_now" : "blocked_by_no_viable_lane",
+    selection_strength: selectionStrength,
+    active_session_count: pool.active_session_count,
+    viable_session_count: pool.viable_session_count,
+    degraded_session_count: pool.degraded_session_count,
+    suppressed_session_count: pool.suppressed_session_count,
+    switched_selection: switchedSelection,
+    hold_generation: holdGeneration,
+    original_selection: selection,
+    selection: nextSelection,
+    reason,
+  };
+}
+
+export function persistMethodologyEntryHold(
+  storage: Storage,
+  goal: GoalRecord,
+  decision: MethodologyEntryDecision,
+  source?: {
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }
+) {
+  const now = new Date().toISOString();
+  const existingHold = isRecord(goal.metadata.methodology_entry_hold) ? goal.metadata.methodology_entry_hold : null;
+  const currentPoolFingerprint = buildWorkerPoolRecoveryFingerprint(storage);
+  const sameFingerprint = readString(existingHold?.pool_fingerprint) === currentPoolFingerprint;
+  const count = sameFingerprint ? (readFiniteNumber(existingHold?.count) ?? 0) + 1 : 1;
+
+  return storage.updateGoalMetadata({
+    goal_id: goal.goal_id,
+    metadata: {
+      methodology_entry_hold: {
+        first_seen_at: sameFingerprint
+          ? readString(existingHold?.first_seen_at) ?? now
+          : now,
+        last_seen_at: now,
+        count,
+        state: decision.state,
+        reason: decision.reason,
+        selection_strength: decision.selection_strength,
+        original_selection: decision.original_selection,
+        selection: decision.selection,
+        switched_selection: decision.switched_selection,
+        active_session_count: decision.active_session_count,
+        viable_session_count: decision.viable_session_count,
+        degraded_session_count: decision.degraded_session_count,
+        suppressed_session_count: decision.suppressed_session_count,
+        pool_fingerprint: currentPoolFingerprint,
+      },
+    },
+    source_client: source?.source_client,
+    source_model: source?.source_model,
+    source_agent: source?.source_agent,
+  }).goal;
+}
+
+export function clearMethodologyEntryHold(
+  storage: Storage,
+  goal: GoalRecord,
+  source?: {
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }
+) {
+  if (!hasPersistedMethodologyEntryHold(goal)) {
+    return goal;
+  }
+  return storage.updateGoalMetadata({
+    goal_id: goal.goal_id,
+    metadata: {
+      methodology_entry_hold: null,
+    },
+    source_client: source?.source_client,
+    source_model: source?.source_model,
+    source_agent: source?.source_agent,
+  }).goal;
+}
+
+function summarizeGoalMethodologyEntryHoldStatus(storage: Storage, goal: GoalRecord): GoalMethodologyEntryHoldStatus {
+  const existingHold = isRecord(goal.metadata.methodology_entry_hold) ? goal.metadata.methodology_entry_hold : null;
+  if (!existingHold) {
+    return {
+      state: "none",
+      current_pool_fingerprint: null,
+      hold_count: 0,
+      hold_reason: null,
+    };
+  }
+
+  const currentPoolFingerprint = buildWorkerPoolRecoveryFingerprint(storage);
+  const pool = summarizeMethodologyEntryPool(storage);
+  return {
+    state: pool.viable_session_count > 0 ? "ready_for_recovery" : "blocked_by_no_viable_lane",
+    current_pool_fingerprint: currentPoolFingerprint,
+    hold_count: readFiniteNumber(existingHold.count) ?? 0,
+    hold_reason: readString(existingHold.reason),
   };
 }
 
@@ -1274,7 +1495,7 @@ export async function goalExecute(
     mutation: input.mutation,
     payload: input,
     execute: async () => {
-      const goal = storage.getGoalById(input.goal_id);
+      let goal = storage.getGoalById(input.goal_id);
       if (!goal) {
         throw new Error(`Goal not found: ${input.goal_id}`);
       }
@@ -1288,6 +1509,7 @@ export async function goalExecute(
       let generatedPlanResult: Record<string, unknown> | null = null;
       let plannerSelection: PlannerSelection | null = null;
       let generatedPlanReason: "missing_plan" | "worker_pool_recovery" | null = null;
+      let methodologyEntryDecision: MethodologyEntryDecision | null = null;
 
       if (!planResolution.plan) {
         if (!input.create_plan_if_missing) {
@@ -1306,6 +1528,39 @@ export async function goalExecute(
         plannerSelection = input.hook_name
           ? buildExplicitPlannerSelection(input.hook_name)
           : resolveDefaultPlannerSelection(goal, input.options);
+        methodologyEntryDecision = resolveMethodologyEntryDecision(storage, goal, plannerSelection);
+        plannerSelection = methodologyEntryDecision.selection;
+        if (methodologyEntryDecision.hold_generation) {
+          goal = persistMethodologyEntryHold(storage, goal, methodologyEntryDecision, source);
+          storage.appendRuntimeEvent({
+            event_type: "goal.executed",
+            entity_type: "goal",
+            entity_id: goal.goal_id,
+            status: goal.status,
+            summary: `Goal ${goal.goal_id} execution held before plan generation because no viable worker pool is available.`,
+            details: {
+              action: "held_pre_generation_worker_pool",
+              methodology_entry_decision: methodologyEntryDecision,
+              planner_selection: plannerSelection,
+            },
+            source_client: input.source_client,
+            source_model: input.source_model,
+            source_agent: input.source_agent,
+          });
+          return {
+            ok: true,
+            executed: false,
+            held_before_generation: true,
+            goal,
+            created_plan: false,
+            plan_resolution: planResolution.resolution,
+            message: methodologyEntryDecision.reason,
+            execution_summary: null,
+            planner_selection: plannerSelection,
+            methodology_entry_decision: methodologyEntryDecision,
+          };
+        }
+        goal = clearMethodologyEntryHold(storage, goal, source);
         generatedPlanReason = "missing_plan";
         const generatedCandidate = await generateGoalExecutionPlanCandidate(storage, invokeTool, {
           input,
@@ -1317,6 +1572,8 @@ export async function goalExecute(
         generatedPlanResult = generatedCandidate.generated_plan_result;
         planResolution = generatedCandidate.plan_resolution;
       }
+
+      goal = clearMethodologyEntryHold(storage, goal, source);
 
       let plan = planResolution.plan;
       if (!plan) {
@@ -1389,6 +1646,7 @@ export async function goalExecute(
             plan_resolution: planResolution.resolution,
             planner_selection: plannerSelection,
             plan_risk_assessment: planAssessment,
+            methodology_entry_decision: methodologyEntryDecision,
           },
           ...source,
         });
@@ -1409,6 +1667,7 @@ export async function goalExecute(
           adaptive_routing_summary: pausedAdaptiveRouting,
           plan_risk_assessment: planAssessment,
           planner_selection: plannerSelection,
+          methodology_entry_decision: methodologyEntryDecision,
           final_plan: plan,
           final_steps: pausedSteps,
           final_readiness: evaluatePlanStepReadiness(pausedSteps),
@@ -1463,6 +1722,7 @@ export async function goalExecute(
             planner_selection: plannerSelection,
             adaptive_routing_summary: initialAdaptiveRouting,
             plan_risk_assessment: planAssessment,
+            methodology_entry_decision: methodologyEntryDecision,
           },
           ...source,
         });
@@ -1481,6 +1741,7 @@ export async function goalExecute(
           adaptive_routing_summary: initialAdaptiveRouting,
           plan_risk_assessment: planAssessment,
           planner_selection: plannerSelection,
+          methodology_entry_decision: methodologyEntryDecision,
           final_plan: plan,
           final_steps: initialSteps,
           final_readiness: evaluatePlanStepReadiness(initialSteps),
@@ -1535,6 +1796,7 @@ export async function goalExecute(
           execution_summary: executionSummary,
           adaptive_routing_summary: adaptiveRoutingSummary,
           plan_risk_assessment: finalPlanAssessment,
+          methodology_entry_decision: methodologyEntryDecision,
         },
         ...source,
       });
@@ -1555,6 +1817,7 @@ export async function goalExecute(
         execution_summary: executionSummary,
         adaptive_routing_summary: adaptiveRoutingSummary,
         plan_risk_assessment: finalPlanAssessment,
+        methodology_entry_decision: methodologyEntryDecision,
         final_plan: finalPlan,
         final_steps: finalSteps,
         final_readiness: finalReadiness,
@@ -1578,6 +1841,11 @@ async function executeGoalAutorunPass(
   let skippedCount = 0;
 
   for (const goal of candidates) {
+    const source = {
+      source_client: input.source_client,
+      source_model: input.source_model,
+      source_agent: input.source_agent,
+    };
     const planResolution = resolveGoalExecutionPlan(
       storage,
       {
@@ -1593,6 +1861,25 @@ async function executeGoalAutorunPass(
 
     const plan = planResolution.plan;
     if (!plan) {
+      const methodologyHold = summarizeGoalMethodologyEntryHoldStatus(storage, goal);
+      if (methodologyHold.state === "blocked_by_no_viable_lane") {
+        skippedCount += 1;
+        results.push({
+          goal_id: goal.goal_id,
+          action: "skipped",
+          reason: "held_pre_generation_worker_pool",
+          methodology_entry_hold: {
+            state: methodologyHold.state,
+            hold_count: methodologyHold.hold_count,
+            hold_reason: methodologyHold.hold_reason,
+            current_pool_fingerprint: methodologyHold.current_pool_fingerprint,
+          },
+        });
+        continue;
+      }
+      if (methodologyHold.state === "ready_for_recovery") {
+        clearMethodologyEntryHold(storage, goal, source);
+      }
       if (input.create_plan_if_missing === false) {
         skippedCount += 1;
         results.push({
@@ -1651,11 +1938,6 @@ async function executeGoalAutorunPass(
     let planRecord = plan;
     const steps = storage.listPlanSteps(plan.plan_id);
     const planAssessment = planResolution.assessment ?? assessPlanRisk(goal, planRecord, steps);
-    const source = {
-      source_client: input.source_client,
-      source_model: input.source_model,
-      source_agent: input.source_agent,
-    };
     planRecord = persistPlanRiskAssessment(storage, goal, planRecord, planAssessment, source);
     if (!planAssessment.can_auto_execute) {
       const recoveryStatus = summarizeWorkerPoolRecoveryStatus(storage, planRecord);

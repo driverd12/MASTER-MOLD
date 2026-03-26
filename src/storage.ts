@@ -2775,6 +2775,49 @@ export class Storage {
     return mapGoalRow(row);
   }
 
+  updateGoalMetadata(params: {
+    goal_id: string;
+    metadata: Record<string, unknown>;
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  }): { goal: GoalRecord } {
+    const goalId = params.goal_id.trim();
+    if (!goalId) {
+      throw new Error("goal_id is required");
+    }
+    const existing = this.getGoalById(goalId);
+    if (!existing) {
+      throw new Error(`Goal not found: ${goalId}`);
+    }
+    const now = new Date().toISOString();
+    const metadata = {
+      ...existing.metadata,
+      ...parseLooseObject(params.metadata),
+    };
+
+    this.db
+      .prepare(
+        `UPDATE goals
+         SET updated_at = ?, metadata_json = ?, source_client = ?, source_model = ?, source_agent = ?
+         WHERE goal_id = ?`
+      )
+      .run(
+        now,
+        stableStringify(metadata),
+        params.source_client ?? existing.source_client,
+        params.source_model ?? existing.source_model,
+        params.source_agent ?? existing.source_agent,
+        goalId
+      );
+
+    const goal = this.getGoalById(goalId);
+    if (!goal) {
+      throw new Error(`Failed to read goal after metadata update: ${goalId}`);
+    }
+    return { goal };
+  }
+
   listGoals(params: {
     status?: GoalStatus;
     limit: number;

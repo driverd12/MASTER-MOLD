@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { Storage, type PlanExecutorKind, type PlanStepKind } from "../storage.js";
+import {
+  buildExplicitPlannerSelection,
+  clearMethodologyEntryHold,
+  persistMethodologyEntryHold,
+  resolveMethodologyEntryDecision,
+} from "./goal.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
 
 const sourceSchema = z.object({
@@ -598,18 +604,38 @@ function instantiatePlaybook(
   if (!playbook) {
     throw new Error(`Unknown playbook: ${input.playbook_id}`);
   }
+  const goalResult = createPlaybookGoal(storage, playbook, input);
+  const createdPlan = instantiatePlaybookPlan(storage, playbook, goalResult.goal, input, options);
 
+  return {
+    created: true,
+    playbook,
+    goal: goalResult.goal,
+    plan: createdPlan.plan,
+    steps: createdPlan.steps,
+  };
+}
+
+function instantiatePlaybookPlan(
+  storage: Storage,
+  playbook: PlaybookDefinition,
+  goal: ReturnType<typeof createPlaybookGoal>["goal"],
+  input: z.infer<typeof playbookInstantiateSchema> | z.infer<typeof playbookRunSchema>,
+  options?: {
+    workflow_autorun_enabled?: boolean;
+    workflow_autorun_max_passes?: number;
+  }
+) {
   const context = {
     title: input.title,
     objective: input.objective,
     repo_root: process.cwd(),
   };
-  const goalResult = createPlaybookGoal(storage, playbook, input);
-  const acceptanceCriteria = goalResult.goal.acceptance_criteria;
+  const acceptanceCriteria = goal.acceptance_criteria;
 
-  const createdPlan = storage.createPlan({
+  return storage.createPlan({
     plan_id: input.plan_id,
-    goal_id: goalResult.goal.goal_id,
+    goal_id: goal.goal_id,
     title: `${playbook.title}: ${input.title}`,
     summary: `${playbook.summary} Objective: ${input.objective}`,
     status: "candidate",
@@ -654,14 +680,6 @@ function instantiatePlaybook(
     source_model: input.source_model,
     source_agent: input.source_agent,
   });
-
-  return {
-    created: true,
-    playbook,
-    goal: goalResult.goal,
-    plan: createdPlan.plan,
-    steps: createdPlan.steps,
-  };
 }
 
 export function playbookList(_storage: Storage, input: z.infer<typeof playbookListSchema>) {
@@ -727,16 +745,90 @@ export async function playbookRun(
       }
       const plannerHook = resolvePlaybookPlannerHook(playbook);
 
-      if (plannerHook === "optimization_loop") {
+      if (plannerHook) {
         const goalResult = createPlaybookGoal(storage, playbook, input);
+        const methodologyEntryDecision = resolveMethodologyEntryDecision(
+          storage,
+          goalResult.goal,
+          buildExplicitPlannerSelection(plannerHook),
+          {
+            allow_hold_on_explicit_selection: true,
+          }
+        );
+
+        if (methodologyEntryDecision.hold_generation) {
+          const heldGoal = persistMethodologyEntryHold(storage, goalResult.goal, methodologyEntryDecision, {
+            source_client: input.source_client,
+            source_model: input.source_model,
+            source_agent: input.source_agent,
+          });
+          return {
+            ok: true,
+            held_before_planning: true,
+            playbook,
+            goal: heldGoal,
+            plan: null,
+            steps: [],
+            execution: null,
+            planning_mode: "held_pre_generation",
+            methodology_entry_decision: methodologyEntryDecision,
+          };
+        }
+
+        const playbookGoal = clearMethodologyEntryHold(storage, goalResult.goal, {
+          source_client: input.source_client,
+          source_model: input.source_model,
+          source_agent: input.source_agent,
+        });
+
+        if (plannerHook === "optimization_loop") {
+          const execution = (await invokeTool("goal.execute", {
+            mutation: buildPlaybookDerivedMutation(input.mutation, "execute"),
+            goal_id: playbookGoal.goal_id,
+            create_plan_if_missing: true,
+            pack_id: "agentic",
+            hook_name: plannerHook,
+            title: `${playbook.title}: ${input.title}`,
+            selected: input.selected_plan ?? true,
+            dry_run: input.dry_run,
+            dispatch_limit: input.dispatch_limit,
+            max_passes: input.max_passes,
+            trichat_agent_ids: input.trichat_agent_ids,
+            trichat_max_rounds: input.trichat_max_rounds,
+            trichat_min_success_agents: input.trichat_min_success_agents,
+            trichat_bridge_timeout_seconds: input.trichat_bridge_timeout_seconds,
+            trichat_bridge_dry_run: input.trichat_bridge_dry_run,
+            source_client: input.source_client,
+            source_model: input.source_model,
+            source_agent: input.source_agent,
+          })) as Record<string, unknown>;
+
+          const goalAfter = storage.getGoalById(playbookGoal.goal_id) ?? playbookGoal;
+          const planId =
+            (isRecord(execution.plan) ? readString(execution.plan.plan_id) : null) ?? goalAfter.active_plan_id;
+          const planAfter = planId ? storage.getPlanById(planId) : null;
+
+          return {
+            ok: true,
+            playbook,
+            goal: goalAfter,
+            plan: planAfter,
+            steps: planAfter ? storage.listPlanSteps(planAfter.plan_id) : [],
+            execution,
+            planning_mode: "dynamic_pack_planner",
+            methodology_entry_decision: methodologyEntryDecision,
+          };
+        }
+
+        const instantiatedPlan = instantiatePlaybookPlan(storage, playbook, playbookGoal, input, {
+          workflow_autorun_enabled: true,
+          workflow_autorun_max_passes: input.max_passes ?? 4,
+        });
         const execution = (await invokeTool("goal.execute", {
           mutation: buildPlaybookDerivedMutation(input.mutation, "execute"),
-          goal_id: goalResult.goal.goal_id,
-          create_plan_if_missing: true,
-          pack_id: "agentic",
-          hook_name: plannerHook,
-          title: `${playbook.title}: ${input.title}`,
-          selected: input.selected_plan ?? true,
+          goal_id: playbookGoal.goal_id,
+          plan_id: instantiatedPlan.plan.plan_id,
+          create_plan_if_missing: false,
           dry_run: input.dry_run,
           dispatch_limit: input.dispatch_limit,
           max_passes: input.max_passes,
@@ -750,22 +842,19 @@ export async function playbookRun(
           source_agent: input.source_agent,
         })) as Record<string, unknown>;
 
-        const goalAfter = storage.getGoalById(goalResult.goal.goal_id) ?? goalResult.goal;
-        const planId =
-          (isRecord(execution.plan) ? readString(execution.plan.plan_id) : null) ?? goalAfter.active_plan_id;
-        const planAfter = planId ? storage.getPlanById(planId) : null;
-
+        const planAfter = storage.getPlanById(instantiatedPlan.plan.plan_id) ?? instantiatedPlan.plan;
+        const goalAfter = storage.getGoalById(playbookGoal.goal_id) ?? playbookGoal;
         return {
           ok: true,
           playbook,
           goal: goalAfter,
           plan: planAfter,
-          steps: planAfter ? storage.listPlanSteps(planAfter.plan_id) : [],
+          steps: storage.listPlanSteps(planAfter.plan_id),
           execution,
-          planning_mode: "dynamic_pack_planner",
+          planning_mode: "static_playbook_plan",
+          methodology_entry_decision: methodologyEntryDecision,
         };
       }
-
       const instantiated = instantiatePlaybook(storage, input, {
         workflow_autorun_enabled: true,
         workflow_autorun_max_passes: input.max_passes ?? 4,
@@ -798,6 +887,7 @@ export async function playbookRun(
         steps: storage.listPlanSteps(planAfter.plan_id),
         execution,
         planning_mode: "static_playbook_plan",
+        methodology_entry_decision: null,
       };
     },
   });
