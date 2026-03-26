@@ -2,6 +2,7 @@ import { z } from "zod";
 import { Storage, type AgentSessionRecord, type PlanRecord, type PlanStepRecord, type TaskRecord } from "../storage.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
 import { deriveExperimentObservation, judgeExperimentRunWithStorage } from "./experiment.js";
+import { type TaskExecutionProfile, resolveTaskExecutionProfile } from "./task.js";
 
 const agentSessionStatusSchema = z.enum(["active", "idle", "busy", "expired", "closed", "failed"]);
 
@@ -167,11 +168,21 @@ type TaskRoutingEvaluation = {
   blockers: string[];
   matched_preferences: string[];
   routing: TaskRoutingRule;
+  task_profile: TaskExecutionProfile;
+  session_capability_tier: "low" | "medium" | "high";
 };
 
 type AgentTaskCandidate = {
   task: TaskRecord;
   routing: TaskRoutingEvaluation;
+};
+
+type ExpectedArtifactCheck = {
+  expected_artifact_types: string[];
+  produced_artifact_ids: string[];
+  produced_artifact_types: string[];
+  missing_artifact_types: string[];
+  satisfied: boolean;
 };
 
 function resolveTaskPlanContext(
@@ -199,6 +210,27 @@ function resolveTaskPlanContext(
     return null;
   }
   return { plan, step };
+}
+
+function evaluateExpectedArtifacts(
+  storage: Storage,
+  step: PlanStepRecord,
+  producedArtifactIds: string[]
+): ExpectedArtifactCheck {
+  const expectedArtifactTypes = dedupeStrings(step.expected_artifact_types);
+  const producedArtifactTypes = dedupeStrings(
+    producedArtifactIds
+      .map((artifactId) => storage.getArtifactById(artifactId)?.artifact_type ?? null)
+      .filter((artifactType): artifactType is string => typeof artifactType === "string" && artifactType.trim().length > 0)
+  );
+  const missingArtifactTypes = expectedArtifactTypes.filter((artifactType) => !producedArtifactTypes.includes(artifactType));
+  return {
+    expected_artifact_types: expectedArtifactTypes,
+    produced_artifact_ids: producedArtifactIds,
+    produced_artifact_types: producedArtifactTypes,
+    missing_artifact_types: missingArtifactTypes,
+    satisfied: missingArtifactTypes.length === 0,
+  };
 }
 
 function goalSupportsAutorun(goalAutonomyMode: string | null | undefined) {
@@ -486,14 +518,42 @@ function hasSessionCapability(session: AgentSessionRecord, capability: string): 
   );
 }
 
+function resolveSessionCapabilityTier(session: AgentSessionRecord): "low" | "medium" | "high" {
+  const explicitTier = readString(session.capabilities.capability_tier)?.toLowerCase();
+  if (explicitTier === "low" || explicitTier === "medium" || explicitTier === "high") {
+    return explicitTier;
+  }
+
+  const agentId = session.agent_id.trim().toLowerCase();
+  const clientKind = readString(session.client_kind)?.toLowerCase() ?? null;
+  if (["codex", "cursor"].includes(agentId) || ["codex", "cursor"].includes(clientKind ?? "")) {
+    return "high";
+  }
+  if (agentId.includes("imprint") || (clientKind && clientKind.includes("imprint"))) {
+    return "low";
+  }
+  if (hasSessionCapability(session, "coding") || hasSessionCapability(session, "planning")) {
+    return "high";
+  }
+  if (hasSessionCapability(session, "review") || hasSessionCapability(session, "verify") || hasSessionCapability(session, "analysis")) {
+    return "medium";
+  }
+  return "low";
+}
+
 function evaluateTaskRouting(session: AgentSessionRecord, task: TaskRecord): TaskRoutingEvaluation {
   const routing = resolveTaskRouting(task);
   const blockers: string[] = [];
   const matchedPreferences: string[] = [];
   let score = 0;
+  const taskProfile = resolveTaskExecutionProfile(task);
+  const sessionCapabilityTier = resolveSessionCapabilityTier(session);
 
   const agentId = session.agent_id.trim().toLowerCase();
   const clientKind = readString(session.client_kind)?.toLowerCase() ?? null;
+  const explicitlyTargetedSession =
+    routing.allowed_agent_ids.some((value) => value.toLowerCase() === agentId) ||
+    (!!clientKind && routing.allowed_client_kinds.some((value) => value.toLowerCase() === clientKind));
 
   if (routing.allowed_agent_ids.length > 0) {
     const allowed = new Set(routing.allowed_agent_ids.map((value) => value.toLowerCase()));
@@ -539,6 +599,22 @@ function evaluateTaskRouting(session: AgentSessionRecord, task: TaskRecord): Tas
     score += preferredCapabilityHits.length * 6;
   }
 
+  if (!explicitlyTargetedSession && taskProfile.requires_agent_session) {
+    if (taskProfile.complexity === "high" && sessionCapabilityTier !== "high") {
+      blockers.push("insufficient_capability_tier:high");
+    } else if (taskProfile.complexity === "medium" && sessionCapabilityTier === "low") {
+      blockers.push("insufficient_capability_tier:medium");
+    }
+  }
+
+  if (taskProfile.complexity === "high" && sessionCapabilityTier === "high") {
+    matchedPreferences.push("capability_tier_match:high");
+    score += 10;
+  } else if (taskProfile.complexity === "medium" && sessionCapabilityTier !== "low") {
+    matchedPreferences.push("capability_tier_match:medium");
+    score += 5;
+  }
+
   if (session.workspace_root && task.project_dir && session.workspace_root === task.project_dir) {
     matchedPreferences.push("workspace_root_match");
     score += 2;
@@ -550,6 +626,8 @@ function evaluateTaskRouting(session: AgentSessionRecord, task: TaskRecord): Tas
     blockers,
     matched_preferences: matchedPreferences,
     routing,
+    task_profile: taskProfile,
+    session_capability_tier: sessionCapabilityTier,
   };
 }
 
@@ -870,6 +948,8 @@ export function agentWorklist(storage: Storage, input: z.infer<typeof agentWorkl
       routing_score: entry.routing.score,
       matched_preferences: entry.routing.matched_preferences,
       routing: entry.routing.routing,
+      task_profile: entry.routing.task_profile,
+      session_capability_tier: entry.routing.session_capability_tier,
       task: entry.task,
     })),
     ineligible_count: ineligible.length,
@@ -881,6 +961,8 @@ export function agentWorklist(storage: Storage, input: z.infer<typeof agentWorkl
           reason: entry.reason,
           blockers: entry.routing.blockers,
           routing: entry.routing.routing,
+          task_profile: entry.routing.task_profile,
+          session_capability_tier: entry.routing.session_capability_tier,
           task: entry.task,
         }))
       : [],
@@ -1217,20 +1299,37 @@ export async function agentReportResult(
         },
         planContext
       );
+      const expectedArtifactCheck = planContext
+        ? evaluateExpectedArtifacts(storage, planContext.step, producedArtifactIds)
+        : null;
+      const missingExpectedArtifacts =
+        input.outcome === "completed" &&
+        expectedArtifactCheck !== null &&
+        expectedArtifactCheck.expected_artifact_types.length > 0 &&
+        !expectedArtifactCheck.satisfied;
 
       const planStepUpdate = planContext
         ? storage.updatePlanStep({
             plan_id: planContext.plan.plan_id,
             step_id: planContext.step.step_id,
-            status: input.outcome === "completed" ? "completed" : "failed",
+            status:
+              input.outcome === "completed" ? (missingExpectedArtifacts ? "blocked" : "completed") : "failed",
             task_id: task.task_id,
             run_id: input.run_id,
             produced_artifact_ids: producedArtifactIds,
-              metadata: {
-                human_approval_required: false,
-                dispatch_gate_type: null,
-                last_agent_report: {
-                  session_id: session.session_id,
+            metadata: {
+              human_approval_required: false,
+              dispatch_gate_type: missingExpectedArtifacts ? "artifact_evidence" : null,
+              evidence_gate_required: missingExpectedArtifacts,
+              artifact_expectations: expectedArtifactCheck ?? {
+                expected_artifact_types: [],
+                produced_artifact_ids: producedArtifactIds,
+                produced_artifact_types: [],
+                missing_artifact_types: [],
+                satisfied: true,
+              },
+              last_agent_report: {
+                session_id: session.session_id,
                 agent_id: session.agent_id,
                 reported_at: new Date().toISOString(),
                 outcome: input.outcome,
@@ -1247,13 +1346,19 @@ export async function agentReportResult(
       const planStepEvent =
         planContext && planStepUpdate
           ? storage.appendRuntimeEvent({
-              event_type: input.outcome === "completed" ? "plan.step_completed" : "plan.step_failed",
+              event_type: missingExpectedArtifacts
+                ? "plan.step_evidence_blocked"
+                : input.outcome === "completed"
+                  ? "plan.step_completed"
+                  : "plan.step_failed",
               entity_type: "step",
               entity_id: planContext.step.step_id,
               status: planStepUpdate.step.status,
               summary:
-                input.summary?.trim() ||
-                `Plan step ${planContext.step.step_id} ${input.outcome === "completed" ? "completed" : "failed"} via agent report.`,
+                missingExpectedArtifacts
+                  ? `Plan step ${planContext.step.step_id} is blocked pending expected evidence artifacts.`
+                  : input.summary?.trim() ||
+                    `Plan step ${planContext.step.step_id} ${input.outcome === "completed" ? "completed" : "failed"} via agent report.`,
               details: {
                 plan_id: planContext.plan.plan_id,
                 goal_id: planContext.plan.goal_id,
@@ -1263,6 +1368,7 @@ export async function agentReportResult(
                 session_id: session.session_id,
                 agent_id: session.agent_id,
                 produced_artifact_ids: producedArtifactIds,
+                expected_artifacts: expectedArtifactCheck,
               },
               source_client: input.source_client,
               source_model: input.source_model,
@@ -1337,7 +1443,10 @@ export async function agentReportResult(
       });
       const goalAutorunTrigger = shouldTriggerGoalAutorun(storage, task, planContext);
       const goalAutorun =
-        input.outcome === "completed" && goalAutorunTrigger.enabled && goalAutorunTrigger.goal_id
+        input.outcome === "completed" &&
+        !missingExpectedArtifacts &&
+        goalAutorunTrigger.enabled &&
+        goalAutorunTrigger.goal_id
           ? ((await invokeTool("goal.autorun", {
               mutation: buildAgentDerivedMutation(input.mutation, `goal-autorun:${task.task_id}`),
               goal_id: goalAutorunTrigger.goal_id,
@@ -1349,7 +1458,12 @@ export async function agentReportResult(
             })) as Record<string, unknown>)
           : {
               triggered: false,
-              reason: input.outcome !== "completed" ? "task_failed" : goalAutorunTrigger.reason,
+              reason:
+                input.outcome !== "completed"
+                  ? "task_failed"
+                  : missingExpectedArtifacts
+                    ? "missing_expected_artifacts"
+                    : goalAutorunTrigger.reason,
             };
       const agentTaskEvent = storage.appendRuntimeEvent({
         event_type: "agent.task_reported",
@@ -1370,6 +1484,7 @@ export async function agentReportResult(
                 auto_report_artifact_id: autoReportArtifact.artifact_id,
                 experiment_run_id: experimentRun?.experiment_run_id ?? null,
                 goal_autorun_triggered: goalAutorunTrigger.enabled && input.outcome === "completed",
+                expected_artifacts: expectedArtifactCheck,
               },
               source_client: input.source_client,
               source_model: input.source_model,
@@ -1387,6 +1502,7 @@ export async function agentReportResult(
         artifact_links_created: artifactLinks.length,
         artifact_links: artifactLinks,
         experiment: experimentUpdate,
+        evidence_gate: expectedArtifactCheck,
         goal_autorun: goalAutorun,
         events: {
           task: agentTaskEvent,

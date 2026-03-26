@@ -15,6 +15,7 @@
     "start:http": "MCP_HTTP=1 node dist/server.js --http --http-port 8787",
     "start:core": "MCP_DOMAIN_PACKS=none node dist/server.js",
     "start:core:http": "MCP_HTTP=1 MCP_DOMAIN_PACKS=none node dist/server.js --http --http-port 8787",
+    "agentic:micro-soak": "npm run build && node ./scripts/agentic_micro_soak.mjs",
     "inbox:worker": "python3 ./scripts/imprint_inbox_worker.py --repo-root .",
     "inbox:enqueue": "node ./scripts/inbox_enqueue.mjs",
     "mvp:smoke": "./scripts/mvp_smoke.sh",

@@ -86,12 +86,20 @@ function resolveMetricDirection(options?: Record<string, unknown>) {
   if (explicit === "minimize" || explicit === "maximize") {
     return explicit;
   }
+  const preferred = readString(options?.goal_metric_direction);
+  if (preferred === "minimize" || preferred === "maximize") {
+    return preferred;
+  }
   return "maximize";
 }
 
-function resolveAcceptanceDelta(options?: Record<string, unknown>) {
+function resolveAcceptanceDelta(goal: GoalRecord, options?: Record<string, unknown>) {
   const explicit = readNumber(options?.acceptance_delta);
-  return explicit !== null && explicit >= 0 ? explicit : undefined;
+  if (explicit !== null && explicit >= 0) {
+    return explicit;
+  }
+  const preferred = readNumber(goal.metadata.acceptance_delta);
+  return preferred !== null && preferred >= 0 ? preferred : undefined;
 }
 
 function buildDeliveryPlan(goal: GoalRecord, storage: Storage, repoRoot: string) {
@@ -256,8 +264,12 @@ function buildOptimizationPlan(goal: GoalRecord, storage: Storage, repoRoot: str
   const councilAgents = listPreferredCouncilAgents(storage);
   const experimentId = readString(options?.experiment_id) ?? `experiment-${crypto.randomUUID()}`;
   const metricName = resolveMetricName(goal, options);
-  const metricDirection = resolveMetricDirection(options);
-  const acceptanceDelta = resolveAcceptanceDelta(options);
+  const metricDirection =
+    resolveMetricDirection({
+      ...(options ?? {}),
+      goal_metric_direction: readString(goal.metadata.preferred_metric_direction) ?? undefined,
+    });
+  const acceptanceDelta = resolveAcceptanceDelta(goal, options);
 
   return {
     summary: `Built an experiment-driven optimization loop for goal ${goal.goal_id} with a durable experiment ledger and review gate.`,

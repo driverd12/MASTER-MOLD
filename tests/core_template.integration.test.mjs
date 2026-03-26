@@ -23,6 +23,7 @@ test("server starts with default agentic workflow hooks and exposes core + TriCh
     assert.equal(names.has("memory.append"), true);
     assert.equal(names.has("goal.create"), true);
     assert.equal(names.has("goal.autorun"), true);
+    assert.equal(names.has("goal.autorun_daemon"), true);
     assert.equal(names.has("goal.execute"), true);
     assert.equal(names.has("goal.get"), true);
     assert.equal(names.has("goal.list"), true);
@@ -33,6 +34,7 @@ test("server starts with default agentic workflow hooks and exposes core + TriCh
     assert.equal(names.has("event.publish"), true);
     assert.equal(names.has("event.tail"), true);
     assert.equal(names.has("event.summary"), true);
+    assert.equal(names.has("kernel.summary"), true);
     assert.equal(names.has("artifact.record"), true);
     assert.equal(names.has("artifact.get"), true);
     assert.equal(names.has("artifact.list"), true);
@@ -468,6 +470,87 @@ test("goal.execute generates a default agentic plan and dispatches the first run
   }
 });
 
+test("goal.execute auto-selects the optimization planner and bootstraps an experiment flow", async () => {
+  const testId = `${Date.now()}-goal-execute-optimization`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-goal-execute-optimization-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Optimize agent claim latency",
+      objective: "Reduce latency of the agent claim loop and benchmark the improvement against the baseline",
+      status: "active",
+      autonomy_mode: "execute_bounded",
+      acceptance_criteria: [
+        "The kernel creates a durable experiment loop automatically",
+        "A baseline and candidate path are prepared with explicit metric semantics",
+      ],
+      metadata: {
+        preferred_metric_name: "latency_ms",
+        preferred_metric_direction: "minimize",
+        acceptance_delta: 5,
+      },
+    });
+
+    const executedGoal = await callTool(client, "goal.execute", {
+      mutation: nextMutation(testId, "goal.execute", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      max_passes: 4,
+    });
+
+    assert.equal(executedGoal.ok, true);
+    assert.equal(executedGoal.created_plan, true);
+    assert.equal(executedGoal.plan.metadata.planner_hook.hook_id, "agentic.optimization_loop");
+    assert.equal(executedGoal.planner_selection.methodology, "optimization");
+    assert.equal(executedGoal.planner_selection.reason, "metric_hint");
+    assert.equal(executedGoal.plan.metadata.metric_name, "latency_ms");
+    assert.equal(executedGoal.plan.metadata.metric_direction, "minimize");
+
+    const generatedPlan = await callTool(client, "plan.get", {
+      plan_id: executedGoal.plan.plan_id,
+    });
+    assert.ok(
+      generatedPlan.steps.some(
+        (step) =>
+          step.step_id.endsWith("create-experiment-ledger") || step.title === "Create the durable experiment ledger"
+      )
+    );
+    assert.ok(
+      generatedPlan.steps.some(
+        (step) => step.step_id.endsWith("launch-candidate-run") || step.title === "Launch the measured candidate run"
+      )
+    );
+    assert.equal(
+      generatedPlan.steps.find(
+        (step) =>
+          step.step_id.endsWith("create-experiment-ledger") || step.title === "Create the durable experiment ledger"
+      ).status,
+      "completed"
+    );
+    assert.equal(
+      generatedPlan.steps.find(
+        (step) => step.step_id.endsWith("establish-baseline") || step.title === "Establish the baseline measurement"
+      ).status,
+      "running"
+    );
+
+    const experiments = await callTool(client, "experiment.list", {
+      goal_id: createdGoal.goal.goal_id,
+      limit: 10,
+    });
+    assert.equal(experiments.count, 1);
+    assert.equal(experiments.experiments[0].metric_name, "latency_ms");
+    assert.equal(experiments.experiments[0].metric_direction, "minimize");
+    assert.equal(experiments.experiments[0].acceptance_delta, 5);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("goal.execute can run an existing synchronous plan to terminal completion", async () => {
   const testId = `${Date.now()}-goal-execute-complete`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-goal-execute-complete-test-"));
@@ -541,6 +624,52 @@ test("goal.execute can run an existing synchronous plan to terminal completion",
     });
     assert.equal(completedPlan.plan.status, "completed");
     assert.ok(completedPlan.steps.every((step) => step.status === "completed"));
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("playbook.run routes autoresearch through the dynamic optimization planner", async () => {
+  const testId = `${Date.now()}-playbook-run-autoresearch-dynamic`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-playbook-run-autoresearch-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const ranPlaybook = await callTool(client, "playbook.run", {
+      mutation: nextMutation(testId, "playbook.run", () => mutationCounter++),
+      playbook_id: "autoresearch.optimize_loop",
+      title: "Optimize worker claim throughput",
+      objective: "Improve worker claim throughput and compare the result to the current baseline",
+      max_passes: 4,
+      metadata: {
+        preferred_metric_name: "throughput_ops_per_sec",
+        preferred_metric_direction: "maximize",
+        acceptance_delta: 2,
+      },
+    });
+
+    assert.equal(ranPlaybook.ok, true);
+    assert.equal(ranPlaybook.planning_mode, "dynamic_pack_planner");
+    assert.equal(ranPlaybook.plan.metadata.planner_hook.hook_id, "agentic.optimization_loop");
+    assert.equal(ranPlaybook.execution.planner_selection.methodology, "optimization");
+    assert.ok(
+      ranPlaybook.steps.some(
+        (step) =>
+          step.step_id.endsWith("create-experiment-ledger") || step.title === "Create the durable experiment ledger"
+      )
+    );
+
+    const experiments = await callTool(client, "experiment.list", {
+      goal_id: ranPlaybook.goal.goal_id,
+      limit: 10,
+    });
+    assert.equal(experiments.count, 1);
+    assert.equal(experiments.experiments[0].metric_name, "throughput_ops_per_sec");
+    assert.equal(experiments.experiments[0].metric_direction, "maximize");
+    assert.equal(experiments.experiments[0].acceptance_delta, 2);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -658,6 +787,115 @@ test("goal.autorun executes eligible goals and skips running-worker or human-gat
     assert.equal(runningResult.action, "skipped");
     assert.equal(runningResult.reason, "running_worker");
     assert.equal(runningResult.running_step.title, "Run the worker step");
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("goal.autorun_daemon can run once and manage persisted daemon lifecycle", async () => {
+  const testId = `${Date.now()}-goal-autorun-daemon`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-goal-autorun-daemon-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Daemon-driven goal",
+      objective: "Allow the goal autorun daemon to generate and dispatch a plan",
+      status: "active",
+      autonomy_mode: "execute_bounded",
+      acceptance_criteria: ["A single bounded autorun tick can execute eligible work"],
+      tags: ["agentic"],
+    });
+
+    const runOnce = await callTool(client, "goal.autorun_daemon", {
+      action: "run_once",
+      mutation: nextMutation(testId, "goal.autorun_daemon.run_once", () => mutationCounter++),
+      limit: 5,
+      max_passes: 4,
+    });
+    assert.equal(runOnce.tick.skipped, false);
+    assert.equal(runOnce.tick.tick.executed_count, 1);
+    assert.ok(runOnce.status.tick_count >= 1);
+
+    const statusBeforeStart = await callTool(client, "goal.autorun_daemon", {
+      action: "status",
+    });
+    assert.equal(statusBeforeStart.running, false);
+
+    const started = await callTool(client, "goal.autorun_daemon", {
+      action: "start",
+      mutation: nextMutation(testId, "goal.autorun_daemon.start", () => mutationCounter++),
+      interval_seconds: 60,
+      run_immediately: false,
+    });
+    assert.equal(started.running, true);
+    assert.equal(started.persisted.enabled, true);
+
+    const statusWhileRunning = await callTool(client, "goal.autorun_daemon", {
+      action: "status",
+    });
+    assert.equal(statusWhileRunning.running, true);
+    assert.equal(statusWhileRunning.config.interval_seconds, 60);
+
+    const stopped = await callTool(client, "goal.autorun_daemon", {
+      action: "stop",
+      mutation: nextMutation(testId, "goal.autorun_daemon.stop", () => mutationCounter++),
+    });
+    assert.equal(stopped.running, false);
+    assert.equal(stopped.persisted.enabled, false);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("kernel.summary reports operator-facing state across goals, tasks, sessions, and events", async () => {
+  const testId = `${Date.now()}-kernel-summary`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-kernel-summary-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Kernel summary goal",
+      objective: "Map the codebase and leave a queued slice for the operator summary",
+      status: "active",
+      autonomy_mode: "execute_bounded",
+      acceptance_criteria: ["The kernel summary reports queued work and the active plan state"],
+      tags: ["agentic"],
+    });
+
+    const executedGoal = await callTool(client, "goal.execute", {
+      mutation: nextMutation(testId, "goal.execute", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      max_passes: 4,
+    });
+    assert.equal(executedGoal.ok, true);
+
+    const summary = await callTool(client, "kernel.summary", {
+      goal_limit: 10,
+      event_limit: 20,
+      artifact_limit: 5,
+      session_limit: 10,
+    });
+
+    assert.equal(summary.state, "degraded");
+    assert.ok(summary.overview.goal_counts.active >= 1);
+    assert.ok(summary.overview.task_counts.pending >= 1);
+    assert.equal(summary.overview.active_session_count, 0);
+    assert.ok(summary.attention.some((entry) => /no active agent sessions/i.test(entry)));
+    assert.ok(summary.recent_events.length >= 1);
+
+    const goalEntry = summary.open_goals.find((goal) => goal.goal_id === createdGoal.goal.goal_id);
+    assert.ok(goalEntry);
+    assert.equal(goalEntry.execution_summary.running_count, 1);
+    assert.match(goalEntry.execution_summary.next_action, /wait for running work/i);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -942,6 +1180,104 @@ test("task.claim skips explicitly agent-routed work for generic workers", async 
   }
 });
 
+test("worker hardening keeps low-tier and generic lanes away from high-complexity tasks", async () => {
+  const testId = `${Date.now()}-worker-hardening`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-worker-hardening-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open.codex", () => mutationCounter++),
+      session_id: "hardening-codex-session",
+      agent_id: "codex",
+      client_kind: "codex",
+      transport_kind: "stdio",
+      workspace_root: REPO_ROOT,
+      status: "active",
+      capabilities: {
+        coding: true,
+        planning: true,
+        worker: true,
+      },
+    });
+
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open.imprint", () => mutationCounter++),
+      session_id: "hardening-imprint-session",
+      agent_id: "local-imprint",
+      client_kind: "imprint",
+      transport_kind: "stdio",
+      workspace_root: REPO_ROOT,
+      status: "active",
+      capabilities: {
+        worker: true,
+        background: true,
+      },
+    });
+
+    const createdTask = await callTool(client, "task.create", {
+      mutation: nextMutation(testId, "task.create", () => mutationCounter++),
+      objective: "Implement and verify a bounded refactor across the local agentic kernel codebase with explicit regression checks",
+      project_dir: REPO_ROOT,
+      priority: 8,
+      tags: ["agentic", "implementation"],
+    });
+
+    const imprintWorklist = await callTool(client, "agent.worklist", {
+      session_id: "hardening-imprint-session",
+      limit: 10,
+      include_ineligible: true,
+    });
+    assert.equal(imprintWorklist.eligible_count, 0);
+    assert.ok(
+      imprintWorklist.ineligible_tasks.some(
+        (task) =>
+          task.task_id === createdTask.task.task_id &&
+          task.blockers.some((blocker) => blocker.startsWith("insufficient_capability_tier"))
+      )
+    );
+
+    const rejectedLowTierClaim = await callTool(client, "agent.claim_next", {
+      mutation: nextMutation(testId, "agent.claim_next.imprint", () => mutationCounter++),
+      session_id: "hardening-imprint-session",
+      task_id: createdTask.task.task_id,
+    });
+    assert.equal(rejectedLowTierClaim.claimed, false);
+    assert.match(rejectedLowTierClaim.reason, /^routing-ineligible:/);
+
+    const rejectedGenericClaim = await callTool(client, "task.claim", {
+      mutation: nextMutation(testId, "task.claim.generic", () => mutationCounter++),
+      worker_id: "background-worker",
+      task_id: createdTask.task.task_id,
+    });
+    assert.equal(rejectedGenericClaim.claimed, false);
+    assert.equal(rejectedGenericClaim.reason, "routing-ineligible:complexity_high");
+
+    const codexWorklist = await callTool(client, "agent.worklist", {
+      session_id: "hardening-codex-session",
+      limit: 10,
+    });
+    assert.ok(codexWorklist.tasks.some((task) => task.task_id === createdTask.task.task_id));
+    assert.equal(
+      codexWorklist.tasks.find((task) => task.task_id === createdTask.task.task_id).task_profile.complexity,
+      "high"
+    );
+
+    const codexClaim = await callTool(client, "agent.claim_next", {
+      mutation: nextMutation(testId, "agent.claim_next.codex", () => mutationCounter++),
+      session_id: "hardening-codex-session",
+      task_id: createdTask.task.task_id,
+    });
+    assert.equal(codexClaim.claimed, true);
+    assert.equal(codexClaim.routing.task_profile.complexity, "high");
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("agent.claim_next and agent.report_result close the worker loop back into plan steps", async () => {
   const testId = `${Date.now()}-agent-worker-loop`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-agent-worker-loop-test-"));
@@ -1162,6 +1498,103 @@ test("agent.claim_next and agent.report_result close the worker loop back into p
     });
     assert.equal(taskEventSummary.count, 3);
     assert.ok(taskEventSummary.event_type_counts.some((entry) => entry.event_type === "task.created"));
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("agent.report_result blocks plan advancement when expected evidence artifacts are missing", async () => {
+  const testId = `${Date.now()}-agent-missing-evidence`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-agent-missing-evidence-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open", () => mutationCounter++),
+      session_id: "agent-missing-evidence-session",
+      agent_id: "codex",
+      display_name: "Evidence enforcement worker",
+      client_kind: "codex",
+      transport_kind: "stdio",
+      workspace_root: REPO_ROOT,
+      lease_seconds: 120,
+      status: "active",
+      capabilities: {
+        worker: true,
+      },
+    });
+
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Evidence-enforced goal",
+      objective: "Block downstream advancement when required evidence is missing",
+      status: "active",
+      autonomy_mode: "execute_bounded",
+      acceptance_criteria: ["Steps requiring verification evidence stay blocked until that evidence exists"],
+    });
+
+    const createdPlan = await callTool(client, "plan.create", {
+      mutation: nextMutation(testId, "plan.create", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      title: "Evidence-enforced plan",
+      summary: "Require a verification artifact before allowing the step to complete",
+      selected: true,
+      steps: [
+        {
+          step_id: "verify-step",
+          seq: 1,
+          title: "Produce a verification report",
+          step_kind: "verification",
+          executor_kind: "worker",
+          expected_artifact_types: ["verification_report"],
+          input: {
+            objective: "Run verification and attach the verification report artifact",
+            project_dir: REPO_ROOT,
+          },
+        },
+      ],
+    });
+
+    const dispatched = await callTool(client, "plan.dispatch", {
+      mutation: nextMutation(testId, "plan.dispatch", () => mutationCounter++),
+      plan_id: createdPlan.plan.plan_id,
+    });
+    const claimed = await callTool(client, "agent.claim_next", {
+      mutation: nextMutation(testId, "agent.claim_next", () => mutationCounter++),
+      session_id: "agent-missing-evidence-session",
+      lease_seconds: 120,
+    });
+    assert.equal(claimed.claimed, true);
+
+    const reported = await callTool(client, "agent.report_result", {
+      mutation: nextMutation(testId, "agent.report_result", () => mutationCounter++),
+      session_id: "agent-missing-evidence-session",
+      task_id: claimed.task.task_id,
+      outcome: "completed",
+      summary: "Completed the verification task but forgot to attach the evidence artifact",
+      result: {
+        completed: true,
+      },
+    });
+
+    assert.equal(reported.reported, true);
+    assert.equal(reported.plan_step_update.step.status, "blocked");
+    assert.equal(reported.evidence_gate.satisfied, false);
+    assert.deepEqual(reported.evidence_gate.missing_artifact_types, ["verification_report"]);
+    assert.equal(reported.goal_autorun.triggered, false);
+    assert.equal(reported.goal_autorun.reason, "missing_expected_artifacts");
+
+    const fetchedPlan = await callTool(client, "plan.get", {
+      plan_id: createdPlan.plan.plan_id,
+    });
+    const blockedStep = fetchedPlan.steps.find((step) => step.step_id === "verify-step");
+    assert.equal(blockedStep.status, "blocked");
+    assert.equal(blockedStep.metadata.dispatch_gate_type, "artifact_evidence");
+    assert.deepEqual(blockedStep.metadata.artifact_expectations.missing_artifact_types, ["verification_report"]);
+    assert.equal(dispatched.dispatched_count, 1);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

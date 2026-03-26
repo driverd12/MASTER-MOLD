@@ -675,6 +675,18 @@ export type TaskAutoRetryStateRecord = {
   updated_at: string;
 };
 
+export type GoalAutorunStateRecord = {
+  enabled: boolean;
+  interval_seconds: number;
+  limit: number;
+  create_plan_if_missing: boolean;
+  dispatch_limit: number;
+  max_passes: number;
+  pack_id: string;
+  hook_name: string | null;
+  updated_at: string;
+};
+
 export type TriChatAutoRetentionStateRecord = {
   enabled: boolean;
   interval_seconds: number;
@@ -1703,6 +1715,81 @@ export class Storage {
            updated_at = excluded.updated_at`
       )
       .run("task.auto_retry", normalized.enabled ? 1 : 0, configJson, now);
+
+    return {
+      ...normalized,
+      updated_at: now,
+    };
+  }
+
+  getGoalAutorunState(): GoalAutorunStateRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT enabled, config_json, updated_at
+         FROM daemon_configs
+         WHERE daemon_key = ?`
+      )
+      .get("goal.autorun") as Record<string, unknown> | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    const config = parseJsonObject(row.config_json);
+    return {
+      enabled: Number(row.enabled ?? 0) === 1,
+      interval_seconds: parseBoundedInt(config.interval_seconds, 90, 5, 3600),
+      limit: parseBoundedInt(config.limit, 10, 1, 100),
+      create_plan_if_missing: config.create_plan_if_missing !== false,
+      dispatch_limit: parseBoundedInt(config.dispatch_limit, 20, 1, 100),
+      max_passes: parseBoundedInt(config.max_passes, 4, 1, 20),
+      pack_id: asNullableString(config.pack_id)?.trim() || "agentic",
+      hook_name: asNullableString(config.hook_name)?.trim() || null,
+      updated_at: String(row.updated_at ?? ""),
+    };
+  }
+
+  setGoalAutorunState(params: {
+    enabled: boolean;
+    interval_seconds: number;
+    limit: number;
+    create_plan_if_missing: boolean;
+    dispatch_limit: number;
+    max_passes: number;
+    pack_id: string;
+    hook_name?: string | null;
+  }): GoalAutorunStateRecord {
+    const now = new Date().toISOString();
+    const normalized = {
+      enabled: Boolean(params.enabled),
+      interval_seconds: parseBoundedInt(params.interval_seconds, 90, 5, 3600),
+      limit: parseBoundedInt(params.limit, 10, 1, 100),
+      create_plan_if_missing: params.create_plan_if_missing !== false,
+      dispatch_limit: parseBoundedInt(params.dispatch_limit, 20, 1, 100),
+      max_passes: parseBoundedInt(params.max_passes, 4, 1, 20),
+      pack_id: params.pack_id.trim() || "agentic",
+      hook_name: params.hook_name?.trim() || null,
+    };
+    const configJson = stableStringify({
+      interval_seconds: normalized.interval_seconds,
+      limit: normalized.limit,
+      create_plan_if_missing: normalized.create_plan_if_missing,
+      dispatch_limit: normalized.dispatch_limit,
+      max_passes: normalized.max_passes,
+      pack_id: normalized.pack_id,
+      hook_name: normalized.hook_name,
+    });
+
+    this.db
+      .prepare(
+        `INSERT INTO daemon_configs (daemon_key, enabled, config_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(daemon_key) DO UPDATE SET
+           enabled = excluded.enabled,
+           config_json = excluded.config_json,
+           updated_at = excluded.updated_at`
+      )
+      .run("goal.autorun", normalized.enabled ? 1 : 0, configJson, now);
 
     return {
       ...normalized,

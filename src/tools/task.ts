@@ -142,6 +142,12 @@ const DEFAULT_TASK_AUTO_RETRY_CONFIG: TaskAutoRetryConfig = {
   max_delay_seconds: 3600,
 };
 
+export type TaskExecutionProfile = {
+  complexity: "low" | "medium" | "high";
+  requires_agent_session: boolean;
+  signals: string[];
+};
+
 const taskAutoRetryRuntime: {
   running: boolean;
   timer: NodeJS.Timeout | null;
@@ -202,7 +208,7 @@ export async function taskCreate(storage: Storage, input: z.infer<typeof taskCre
     mutation: input.mutation,
     payload: input,
     execute: () => {
-      const metadata = {
+      const metadata: Record<string, unknown> = {
         ...(input.metadata ?? {}),
         ...(input.routing
           ? {
@@ -217,6 +223,13 @@ export async function taskCreate(storage: Storage, input: z.infer<typeof taskCre
             }
           : {}),
       };
+      metadata.task_profile = resolveTaskExecutionProfile({
+        objective: input.objective,
+        project_dir: input.project_dir ?? ".",
+        payload: input.payload ?? {},
+        tags: input.tags ?? [],
+        metadata,
+      });
       const task = storage.createTask({
         task_id: input.task_id,
         objective: input.objective,
@@ -261,6 +274,21 @@ function normalizeStringArray(value: unknown): string[] {
     return [];
   }
   return dedupeStrings(value.filter((item): item is string => typeof item === "string"));
+}
+
+function normalizeTaskProfile(value: unknown): TaskExecutionProfile | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const complexity = readString(value.complexity);
+  if (complexity !== "low" && complexity !== "medium" && complexity !== "high") {
+    return null;
+  }
+  return {
+    complexity,
+    requires_agent_session: value.requires_agent_session !== false,
+    signals: normalizeStringArray(value.signals),
+  };
 }
 
 function resolveTaskRouting(task: TaskRecord) {
@@ -308,6 +336,65 @@ function resolveTaskRouting(task: TaskRecord) {
   return merged;
 }
 
+export function resolveTaskExecutionProfile(task: Pick<TaskRecord, "objective" | "project_dir" | "payload" | "tags" | "metadata">): TaskExecutionProfile {
+  const existingProfile = normalizeTaskProfile(isRecord(task.metadata) ? task.metadata.task_profile : null);
+  if (existingProfile) {
+    return existingProfile;
+  }
+
+  const routing = isRecord(task.metadata) || isRecord(task.payload)
+    ? resolveTaskRouting(task as TaskRecord)
+    : {
+        preferred_agent_ids: [],
+        allowed_agent_ids: [],
+        preferred_client_kinds: [],
+        allowed_client_kinds: [],
+        required_capabilities: [],
+        preferred_capabilities: [],
+      };
+  const signals: string[] = [];
+  let score = 0;
+  const objective = task.objective.trim().toLowerCase();
+  const focus = isRecord(task.payload) ? readString(task.payload.focus)?.toLowerCase() ?? null : null;
+  const tags = new Set(task.tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean));
+
+  if (task.project_dir && task.project_dir !== ".") {
+    score += 1;
+    signals.push("project_dir");
+  }
+  if (focus && ["implementation", "candidate_variant", "baseline_measurement", "codebase_map", "verification", "implementation_research", "task_breakdown", "fix"].includes(focus)) {
+    score += 2;
+    signals.push(`focus:${focus}`);
+  }
+  if (
+    /implement|refactor|debug|fix|benchmark|latency|throughput|performance|verify|verification|codebase|architecture|integration|optimiz/.test(
+      objective
+    )
+  ) {
+    score += 2;
+    signals.push("objective_keywords");
+  }
+  if (objective.length >= 120) {
+    score += 1;
+    signals.push("long_objective");
+  }
+  if (routing.required_capabilities.length > 0 || routing.preferred_capabilities.length > 0) {
+    score += 2;
+    signals.push("routing_capabilities");
+  }
+  if (["agentic", "autoresearch", "gsd", "benchmark", "verification", "implementation"].some((tag) => tags.has(tag))) {
+    score += 1;
+    signals.push("workflow_tags");
+  }
+
+  const complexity: TaskExecutionProfile["complexity"] = score >= 4 ? "high" : score >= 2 ? "medium" : "low";
+  return {
+    complexity,
+    requires_agent_session: complexity !== "low",
+    signals,
+  };
+}
+
 function isTaskClaimableNow(task: TaskRecord, nowIso: string) {
   if (task.status !== "pending") {
     return {
@@ -336,6 +423,10 @@ function isTaskClaimableNow(task: TaskRecord, nowIso: string) {
 function isTaskEligibleForGenericWorker(task: TaskRecord, workerId: string) {
   const routing = resolveTaskRouting(task);
   const normalizedWorkerId = workerId.trim().toLowerCase();
+  const profile = resolveTaskExecutionProfile(task);
+  const explicitlyAllowedWorker =
+    routing.allowed_agent_ids.length > 0 &&
+    routing.allowed_agent_ids.some((value) => value.toLowerCase() === normalizedWorkerId);
 
   if (routing.allowed_agent_ids.length > 0) {
     const allowed = new Set(routing.allowed_agent_ids.map((value) => value.toLowerCase()));
@@ -345,6 +436,13 @@ function isTaskEligibleForGenericWorker(task: TaskRecord, workerId: string) {
         reason: "routing-ineligible:agent_id_not_allowed",
       };
     }
+  }
+
+  if (profile.requires_agent_session && !explicitlyAllowedWorker) {
+    return {
+      eligible: false,
+      reason: `routing-ineligible:complexity_${profile.complexity}`,
+    };
   }
 
   if (routing.allowed_client_kinds.length > 0) {

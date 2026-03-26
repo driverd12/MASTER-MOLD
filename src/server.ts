@@ -80,6 +80,8 @@ import {
 import { eventPublish, eventPublishSchema, eventSummary, eventSummarySchema, eventTail, eventTailSchema } from "./tools/event.js";
 import {
   goalAutorun,
+  goalAutorunDaemonControl,
+  goalAutorunDaemonSchema,
   goalAutorunSchema,
   goalCreate,
   goalCreateSchema,
@@ -87,9 +89,11 @@ import {
   goalExecuteSchema,
   goalGet,
   goalGetSchema,
+  initializeGoalAutorunDaemon,
   goalList,
   goalListSchema,
 } from "./tools/goal.js";
+import { kernelSummary, kernelSummarySchema } from "./tools/kernel.js";
 import {
   goalPlanGenerate,
   goalPlanGenerateSchema,
@@ -1438,6 +1442,13 @@ registerTool("goal.autorun", "Scan eligible goals and re-enter goal.execute wher
   goalAutorun(storage, invokeRegisteredTool, input)
 );
 
+registerTool(
+  "goal.autorun_daemon",
+  "Manage the bounded periodic goal.autorun daemon for unattended continuation.",
+  goalAutorunDaemonSchema,
+  (input) => goalAutorunDaemonControl(storage, invokeRegisteredTool, input)
+);
+
 registerTool("goal.plan_generate", "Generate and persist a durable plan for a goal through a registered pack planner hook.", goalPlanGenerateSchema, (input) =>
   goalPlanGenerate(storage, packHookRegistry, input)
 );
@@ -1468,6 +1479,13 @@ registerTool("event.tail", "Tail the shared kernel event feed with type, entity,
 
 registerTool("event.summary", "Summarize the shared kernel event feed by type and entity.", eventSummarySchema, (input) =>
   eventSummary(storage, input)
+);
+
+registerTool(
+  "kernel.summary",
+  "Summarize goals, plans, tasks, sessions, experiments, artifacts, and recent events into one kernel snapshot.",
+  kernelSummarySchema,
+  (input) => kernelSummary(storage, input)
 );
 
 registerTool("artifact.record", "Persist a durable artifact and optionally link it to goals, plans, tasks, runs, or other entities.", artifactRecordSchema, (input) =>
@@ -2358,6 +2376,7 @@ initializeImprintAutoSnapshotDaemon(storage, {
   server_version: SERVER_VERSION,
   get_tool_names: () => Array.from(toolRegistry.keys()),
 });
+initializeGoalAutorunDaemon(storage, invokeRegisteredTool);
 
 function createServerInstance() {
   const server = new Server(

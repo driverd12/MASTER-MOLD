@@ -138,6 +138,18 @@ type PlaybookDefinition = {
   steps: PlaybookTemplateStep[];
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 const PLAYBOOKS: readonly PlaybookDefinition[] = [
   {
     playbook_id: "gsd.map_codebase",
@@ -512,6 +524,68 @@ function buildPlaybookDerivedMutation(
   };
 }
 
+function resolvePlaybookPlannerHook(playbook: PlaybookDefinition): string | null {
+  if (playbook.source_repo === "karpathy/autoresearch") {
+    return "optimization_loop";
+  }
+  if (playbook.source_repo === "gsd-build/get-shit-done") {
+    return "delivery_path";
+  }
+  return null;
+}
+
+function createPlaybookGoal(
+  storage: Storage,
+  playbook: PlaybookDefinition,
+  input: z.infer<typeof playbookInstantiateSchema> | z.infer<typeof playbookRunSchema>
+) {
+  const goalTags = Array.from(new Set([...(input.tags ?? []), ...playbook.tags]));
+  const acceptanceCriteria = Array.from(
+    new Set([...(input.acceptance_criteria ?? []), ...playbook.default_acceptance_criteria])
+  );
+  const preferredPlannerHookName = resolvePlaybookPlannerHook(playbook);
+
+  return storage.createGoal({
+    goal_id: input.goal_id,
+    title: input.title,
+    objective: input.objective,
+    status: input.goal_status,
+    priority: input.priority,
+    risk_tier: input.risk_tier,
+    autonomy_mode: input.autonomy_mode,
+    target_entity_type: input.target_entity_type,
+    target_entity_id: input.target_entity_id,
+    acceptance_criteria: acceptanceCriteria,
+    constraints: input.constraints,
+    assumptions: input.assumptions,
+    tags: goalTags,
+    metadata: {
+      ...(input.metadata ?? {}),
+      methodology_source:
+        typeof input.metadata?.methodology_source === "string" && input.metadata.methodology_source.trim().length > 0
+          ? input.metadata.methodology_source
+          : playbook.source_repo,
+      ...(preferredPlannerHookName
+        ? {
+            preferred_planner_hook_name:
+              typeof input.metadata?.preferred_planner_hook_name === "string" &&
+              input.metadata.preferred_planner_hook_name.trim().length > 0
+                ? input.metadata.preferred_planner_hook_name
+                : preferredPlannerHookName,
+          }
+        : {}),
+      playbook: {
+        playbook_id: playbook.playbook_id,
+        source_repo: playbook.source_repo,
+        category: playbook.category,
+      },
+    },
+    source_client: input.source_client,
+    source_model: input.source_model,
+    source_agent: input.source_agent,
+  });
+}
+
 function instantiatePlaybook(
   storage: Storage,
   input: z.infer<typeof playbookInstantiateSchema> | z.infer<typeof playbookRunSchema>,
@@ -530,37 +604,8 @@ function instantiatePlaybook(
     objective: input.objective,
     repo_root: process.cwd(),
   };
-  const goalTags = Array.from(new Set([...(input.tags ?? []), ...playbook.tags]));
-  const acceptanceCriteria = Array.from(
-    new Set([...(input.acceptance_criteria ?? []), ...playbook.default_acceptance_criteria])
-  );
-
-  const goalResult = storage.createGoal({
-    goal_id: input.goal_id,
-    title: input.title,
-    objective: input.objective,
-    status: input.goal_status,
-    priority: input.priority,
-    risk_tier: input.risk_tier,
-    autonomy_mode: input.autonomy_mode,
-    target_entity_type: input.target_entity_type,
-    target_entity_id: input.target_entity_id,
-    acceptance_criteria: acceptanceCriteria,
-    constraints: input.constraints,
-    assumptions: input.assumptions,
-    tags: goalTags,
-    metadata: {
-      ...(input.metadata ?? {}),
-      playbook: {
-        playbook_id: playbook.playbook_id,
-        source_repo: playbook.source_repo,
-        category: playbook.category,
-      },
-    },
-    source_client: input.source_client,
-    source_model: input.source_model,
-    source_agent: input.source_agent,
-  });
+  const goalResult = createPlaybookGoal(storage, playbook, input);
+  const acceptanceCriteria = goalResult.goal.acceptance_criteria;
 
   const createdPlan = storage.createPlan({
     plan_id: input.plan_id,
@@ -676,6 +721,51 @@ export async function playbookRun(
     mutation: input.mutation,
     payload: input,
     execute: async () => {
+      const playbook = getPlaybookDefinition(input.playbook_id);
+      if (!playbook) {
+        throw new Error(`Unknown playbook: ${input.playbook_id}`);
+      }
+      const plannerHook = resolvePlaybookPlannerHook(playbook);
+
+      if (plannerHook === "optimization_loop") {
+        const goalResult = createPlaybookGoal(storage, playbook, input);
+        const execution = (await invokeTool("goal.execute", {
+          mutation: buildPlaybookDerivedMutation(input.mutation, "execute"),
+          goal_id: goalResult.goal.goal_id,
+          create_plan_if_missing: true,
+          pack_id: "agentic",
+          hook_name: plannerHook,
+          title: `${playbook.title}: ${input.title}`,
+          selected: input.selected_plan ?? true,
+          dry_run: input.dry_run,
+          dispatch_limit: input.dispatch_limit,
+          max_passes: input.max_passes,
+          trichat_agent_ids: input.trichat_agent_ids,
+          trichat_max_rounds: input.trichat_max_rounds,
+          trichat_min_success_agents: input.trichat_min_success_agents,
+          trichat_bridge_timeout_seconds: input.trichat_bridge_timeout_seconds,
+          trichat_bridge_dry_run: input.trichat_bridge_dry_run,
+          source_client: input.source_client,
+          source_model: input.source_model,
+          source_agent: input.source_agent,
+        })) as Record<string, unknown>;
+
+        const goalAfter = storage.getGoalById(goalResult.goal.goal_id) ?? goalResult.goal;
+        const planId =
+          (isRecord(execution.plan) ? readString(execution.plan.plan_id) : null) ?? goalAfter.active_plan_id;
+        const planAfter = planId ? storage.getPlanById(planId) : null;
+
+        return {
+          ok: true,
+          playbook,
+          goal: goalAfter,
+          plan: planAfter,
+          steps: planAfter ? storage.listPlanSteps(planAfter.plan_id) : [],
+          execution,
+          planning_mode: "dynamic_pack_planner",
+        };
+      }
+
       const instantiated = instantiatePlaybook(storage, input, {
         workflow_autorun_enabled: true,
         workflow_autorun_max_passes: input.max_passes ?? 4,
@@ -707,6 +797,7 @@ export async function playbookRun(
         plan: planAfter,
         steps: storage.listPlanSteps(planAfter.plan_id),
         execution,
+        planning_mode: "static_playbook_plan",
       };
     },
   });
