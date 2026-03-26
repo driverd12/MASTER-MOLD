@@ -400,6 +400,7 @@ function deriveKernelState(params: {
   failed_experiment_count: number;
   blocked_approval_count: number;
   blocked_human_count: number;
+  methodology_entry_hold_count: number;
   ready_step_count: number;
   running_step_count: number;
   pending_task_count: number;
@@ -408,7 +409,7 @@ function deriveKernelState(params: {
   if (params.failed_goal_count > 0 || params.failed_task_count > 0 || params.failed_experiment_count > 0) {
     return "degraded";
   }
-  if (params.blocked_approval_count > 0) {
+  if (params.blocked_approval_count > 0 || params.methodology_entry_hold_count > 0) {
     return "blocked";
   }
   if (params.active_session_count === 0 && (params.ready_step_count > 0 || params.pending_task_count > 0)) {
@@ -544,6 +545,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     failed_experiment_count: experimentCounts.failed ?? 0,
     blocked_approval_count: totals.blocked_approval_count,
     blocked_human_count: totals.blocked_human_count,
+    methodology_entry_hold_count: totals.methodology_entry_hold_count,
     ready_step_count: totals.ready_step_count,
     running_step_count: totals.running_step_count,
     pending_task_count: taskSummary.counts.pending ?? 0,

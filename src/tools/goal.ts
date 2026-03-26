@@ -1878,6 +1878,20 @@ async function executeGoalAutorunPass(
         continue;
       }
       if (methodologyHold.state === "ready_for_recovery") {
+        storage.appendRuntimeEvent({
+          event_type: "goal.entry_recovery_ready",
+          entity_type: "goal",
+          entity_id: goal.goal_id,
+          status: goal.status,
+          summary: `Goal ${goal.goal_id} can retry plan generation because a viable worker lane is now available.`,
+          details: {
+            goal_id: goal.goal_id,
+            current_pool_fingerprint: methodologyHold.current_pool_fingerprint,
+            hold_count: methodologyHold.hold_count,
+            hold_reason: methodologyHold.hold_reason,
+          },
+          ...source,
+        });
         clearMethodologyEntryHold(storage, goal, source);
       }
       if (input.create_plan_if_missing === false) {

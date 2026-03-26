@@ -664,6 +664,7 @@ test("goal.execute holds generation before planning when destructive autonomy ha
       goal_limit: 10,
       event_limit: 20,
     });
+    assert.equal(blockedSummary.state, "blocked");
     assert.ok(blockedSummary.attention.some((entry) => /held before plan generation/i.test(entry)));
     assert.ok(blockedSummary.overview.methodology_entry_hold_count >= 1);
     const blockedGoalSummary = blockedSummary.open_goals.find((entry) => entry.goal_id === createdGoal.goal.goal_id);
@@ -1315,6 +1316,13 @@ test("playbook.run can hold explicit delivery planning before plan creation when
       limit: 10,
     });
     assert.equal(goalPlans.count, 0);
+
+    const recentEvents = await callTool(client, "event.tail", {
+      entity_type: "goal",
+      entity_id: ranPlaybook.goal.goal_id,
+      limit: 10,
+    });
+    assert.ok(recentEvents.events.some((event) => event.event_type === "goal.entry_held"));
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

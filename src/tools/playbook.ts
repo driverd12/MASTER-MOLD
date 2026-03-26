@@ -762,6 +762,22 @@ export async function playbookRun(
             source_model: input.source_model,
             source_agent: input.source_agent,
           });
+          storage.appendRuntimeEvent({
+            event_type: "goal.entry_held",
+            entity_type: "goal",
+            entity_id: heldGoal.goal_id,
+            status: heldGoal.status,
+            summary: `Goal ${heldGoal.goal_id} was held before playbook planning because no viable worker lane is available.`,
+            details: {
+              action: "held_pre_generation_worker_pool",
+              playbook_id: playbook.playbook_id,
+              planning_mode: "held_pre_generation",
+              methodology_entry_decision: methodologyEntryDecision,
+            },
+            source_client: input.source_client,
+            source_model: input.source_model,
+            source_agent: input.source_agent,
+          });
           return {
             ok: true,
             held_before_planning: true,
