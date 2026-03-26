@@ -730,6 +730,7 @@ test("goal.autorun executes eligible goals and skips running-worker or human-gat
       title: "Autorun running worker goal",
       objective: "Ensure goal.autorun skips goals that already have an in-flight worker step",
       status: "active",
+      autonomy_mode: "execute_bounded",
       acceptance_criteria: ["Running worker steps are not re-entered prematurely"],
     });
     const runningPlan = await callTool(client, "plan.create", {
@@ -1307,6 +1308,7 @@ test("agent.claim_next and agent.report_result close the worker loop back into p
       title: "Agent worker loop goal",
       objective: "Exercise claim and report through a durable session",
       status: "active",
+      autonomy_mode: "execute_bounded",
       acceptance_criteria: ["Agents can claim queued work", "Plan step state updates on report"],
     });
     const publishedEvent = await callTool(client, "event.publish", {
@@ -2060,7 +2062,7 @@ test("plan.approve and plan.resume unblock a human gate before dispatching downs
       title: "Approval integration goal",
       objective: "Exercise the approval and resume tools",
       status: "active",
-      autonomy_mode: "recommend",
+      autonomy_mode: "execute_bounded",
       acceptance_criteria: ["Human-gated work can resume into downstream execution"],
     });
 
@@ -2159,6 +2161,142 @@ test("plan.approve and plan.resume unblock a human gate before dispatching downs
   }
 });
 
+test("strict policy gates mutation steps until approval while execute-bounded plans dispatch immediately", async () => {
+  const testId = `${Date.now()}-policy-approval`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-policy-approval-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const strictGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create.strict", () => mutationCounter++),
+      title: "Strict approval goal",
+      objective: "Require approval before a mutation step is dispatched",
+      status: "active",
+      autonomy_mode: "execute_destructive_with_approval",
+      acceptance_criteria: ["Mutation execution requires an explicit approval gate"],
+    });
+
+    const strictPlan = await callTool(client, "plan.create", {
+      mutation: nextMutation(testId, "plan.create.strict", () => mutationCounter++),
+      goal_id: strictGoal.goal.goal_id,
+      title: "Strict policy plan",
+      summary: "Block mutation work behind a policy-backed approval gate",
+      selected: true,
+      steps: [
+        {
+          step_id: "policy-worker",
+          seq: 1,
+          title: "Dispatch the mutation worker only after approval",
+          step_kind: "mutation",
+          executor_kind: "worker",
+          input: {
+            objective: "Policy-gated worker execution",
+            project_dir: ".",
+            priority: 5,
+            tags: ["policy", "strict"],
+          },
+        },
+      ],
+    });
+
+    const strictDispatch = await callTool(client, "plan.dispatch", {
+      mutation: nextMutation(testId, "plan.dispatch.strict", () => mutationCounter++),
+      plan_id: strictPlan.plan.plan_id,
+    });
+    assert.equal(strictDispatch.blocked_count, 1);
+    assert.equal(strictDispatch.dispatched_count, 0);
+    assert.equal(strictDispatch.results[0].action, "approval_required");
+    assert.equal(strictDispatch.results[0].gate_type, "policy");
+    assert.equal(strictDispatch.results[0].policy_profile, "strict");
+
+    const blockedStrictPlan = await callTool(client, "plan.get", {
+      plan_id: strictPlan.plan.plan_id,
+    });
+    const blockedStrictStep = blockedStrictPlan.steps.find((step) => step.step_id === "policy-worker");
+    assert.equal(blockedStrictStep.status, "blocked");
+    assert.equal(blockedStrictStep.metadata.dispatch_gate_type, "policy");
+    assert.equal(blockedStrictStep.metadata.human_approval_required, true);
+    assert.equal(blockedStrictStep.metadata.policy_profile, "strict");
+
+    const approvedStrictGate = await callTool(client, "plan.approve", {
+      mutation: nextMutation(testId, "plan.approve.strict", () => mutationCounter++),
+      plan_id: strictPlan.plan.plan_id,
+      step_id: "policy-worker",
+      summary: "Approve mutation dispatch under the strict policy profile",
+    });
+    assert.equal(approvedStrictGate.step.status, "pending");
+    assert.equal(approvedStrictGate.step.metadata.dispatch_gate_type, null);
+    assert.equal(approvedStrictGate.step.metadata.approval.gate_type, "policy");
+
+    await callTool(client, "plan.resume", {
+      mutation: nextMutation(testId, "plan.resume.strict", () => mutationCounter++),
+      plan_id: strictPlan.plan.plan_id,
+    });
+
+    const resumedStrictPlan = await waitFor(async () => {
+      const fetchedPlan = await callTool(client, "plan.get", {
+        plan_id: strictPlan.plan.plan_id,
+      });
+      const step = fetchedPlan.steps.find((candidate) => candidate.step_id === "policy-worker");
+      if (step.status !== "running" || !step.task_id) {
+        return null;
+      }
+      return {
+        step,
+        fetchedPlan,
+      };
+    });
+    assert.equal(resumedStrictPlan.step.status, "running");
+    assert.equal(typeof resumedStrictPlan.step.task_id, "string");
+
+    const boundedGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create.bounded", () => mutationCounter++),
+      title: "Bounded execution goal",
+      objective: "Allow bounded mutation work to dispatch without a policy gate",
+      status: "active",
+      autonomy_mode: "execute_bounded",
+      acceptance_criteria: ["Mutation execution dispatches directly in bounded mode"],
+    });
+
+    const boundedPlan = await callTool(client, "plan.create", {
+      mutation: nextMutation(testId, "plan.create.bounded", () => mutationCounter++),
+      goal_id: boundedGoal.goal.goal_id,
+      title: "Bounded execution plan",
+      summary: "Dispatch the worker directly when the policy profile is bounded",
+      selected: true,
+      steps: [
+        {
+          step_id: "bounded-worker",
+          seq: 1,
+          title: "Dispatch the bounded worker",
+          step_kind: "mutation",
+          executor_kind: "worker",
+          input: {
+            objective: "Bounded worker execution",
+            project_dir: ".",
+            priority: 5,
+            tags: ["policy", "bounded"],
+          },
+        },
+      ],
+    });
+
+    const boundedDispatch = await callTool(client, "plan.dispatch", {
+      mutation: nextMutation(testId, "plan.dispatch.bounded", () => mutationCounter++),
+      plan_id: boundedPlan.plan.plan_id,
+    });
+    assert.equal(boundedDispatch.blocked_count, 0);
+    assert.equal(boundedDispatch.dispatched_count, 1);
+    assert.equal(boundedDispatch.results[0].action, "task_created");
+    assert.equal(typeof boundedDispatch.results[0].task_id, "string");
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("dispatch.autorun finalizes TriChat steps before dispatching dependent worker tasks", async () => {
   const testId = `${Date.now()}-autorun`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-autorun-test-"));
@@ -2174,7 +2312,7 @@ test("dispatch.autorun finalizes TriChat steps before dispatching dependent work
       title: "Autorun integration goal",
       objective: "Exercise dispatch.autorun for TriChat plus worker lanes",
       status: "active",
-      autonomy_mode: "recommend",
+      autonomy_mode: "execute_bounded",
       acceptance_criteria: ["TriChat steps can finalize before downstream workers are dispatched"],
     });
 
@@ -2281,7 +2419,7 @@ test("plan.dispatch routes ready steps into tool, worker, TriChat, and human exe
       title: "Dispatch integration goal",
       objective: "Exercise plan.dispatch across execution lanes",
       status: "active",
-      autonomy_mode: "recommend",
+      autonomy_mode: "execute_bounded",
       acceptance_criteria: ["Each executor lane is reachable from a durable plan"],
     });
 

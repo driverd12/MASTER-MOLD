@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { type GoalRecord, type PlanRecord, type PlanStepRecord, Storage } from "../storage.js";
-import { evaluatePlanStepReadiness } from "./plan.js";
+import { evaluatePlanStepReadiness, getPlanStepApprovalGateKind } from "./plan.js";
 
 const goalStatusSchema = z.enum([
   "draft",
@@ -32,6 +32,7 @@ type GoalExecutionSnapshot = {
   blocked_count: number;
   failed_count: number;
   pending_count: number;
+  blocked_approval_count: number;
   blocked_human_count: number;
   next_action: string;
 };
@@ -83,6 +84,7 @@ function summarizeGoalExecution(plan: PlanRecord | null, steps: PlanStepRecord[]
       blocked_count: 0,
       failed_count: 0,
       pending_count: 0,
+      blocked_approval_count: 0,
       blocked_human_count: 0,
       next_action: "No active plan exists for this goal.",
     };
@@ -94,16 +96,9 @@ function summarizeGoalExecution(plan: PlanRecord | null, steps: PlanStepRecord[]
     acc[step.status] = (acc[step.status] ?? 0) + 1;
     return acc;
   }, {});
-  const blockedHumanCount = steps.filter((step) => {
-    if (step.status !== "blocked") {
-      return false;
-    }
-    return (
-      step.executor_kind === "human" ||
-      step.metadata.dispatch_gate_type === "human" ||
-      step.metadata.human_approval_required === true
-    );
-  }).length;
+  const blockedApprovalSteps = steps.filter((step) => step.status === "blocked" && getPlanStepApprovalGateKind(step) !== null);
+  const blockedApprovalCount = blockedApprovalSteps.length;
+  const blockedHumanCount = blockedApprovalSteps.filter((step) => getPlanStepApprovalGateKind(step) === "human").length;
   const runningCount = counts.running ?? 0;
   const failedCount = counts.failed ?? 0;
 
@@ -112,8 +107,11 @@ function summarizeGoalExecution(plan: PlanRecord | null, steps: PlanStepRecord[]
     nextAction = "Plan completed; review artifacts and close the goal if acceptance criteria are satisfied.";
   } else if (failedCount > 0) {
     nextAction = "Inspect failed steps and retry or resume only after the blocking issue is fixed.";
-  } else if (blockedHumanCount > 0) {
-    nextAction = "A human approval gate is blocking execution.";
+  } else if (blockedApprovalCount > 0) {
+    nextAction =
+      blockedHumanCount === blockedApprovalCount
+        ? "A human approval gate is blocking execution."
+        : "An approval gate is blocking execution.";
   } else if (runningCount > 0) {
     nextAction = "Execution is in flight; wait for running work to finish or report results.";
   } else if (readyCount > 0) {
@@ -129,6 +127,7 @@ function summarizeGoalExecution(plan: PlanRecord | null, steps: PlanStepRecord[]
     blocked_count: counts.blocked ?? 0,
     failed_count: failedCount,
     pending_count: counts.pending ?? 0,
+    blocked_approval_count: blockedApprovalCount,
     blocked_human_count: blockedHumanCount,
     next_action: nextAction,
   };
@@ -157,6 +156,7 @@ function deriveKernelState(params: {
   failed_goal_count: number;
   failed_task_count: number;
   failed_experiment_count: number;
+  blocked_approval_count: number;
   blocked_human_count: number;
   ready_step_count: number;
   running_step_count: number;
@@ -166,7 +166,7 @@ function deriveKernelState(params: {
   if (params.failed_goal_count > 0 || params.failed_task_count > 0 || params.failed_experiment_count > 0) {
     return "degraded";
   }
-  if (params.blocked_human_count > 0) {
+  if (params.blocked_approval_count > 0) {
     return "blocked";
   }
   if (params.active_session_count === 0 && (params.ready_step_count > 0 || params.pending_task_count > 0)) {
@@ -233,6 +233,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     (acc, summary) => {
       acc.ready_step_count += summary.execution_summary.ready_count;
       acc.running_step_count += summary.execution_summary.running_count;
+      acc.blocked_approval_count += summary.execution_summary.blocked_approval_count;
       acc.blocked_human_count += summary.execution_summary.blocked_human_count;
       acc.failed_step_count += summary.execution_summary.failed_count;
       return acc;
@@ -240,6 +241,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     {
       ready_step_count: 0,
       running_step_count: 0,
+      blocked_approval_count: 0,
       blocked_human_count: 0,
       failed_step_count: 0,
     }
@@ -249,6 +251,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     failed_goal_count: goalCounts.failed ?? 0,
     failed_task_count: taskSummary.counts.failed ?? 0,
     failed_experiment_count: experimentCounts.failed ?? 0,
+    blocked_approval_count: totals.blocked_approval_count,
     blocked_human_count: totals.blocked_human_count,
     ready_step_count: totals.ready_step_count,
     running_step_count: totals.running_step_count,
@@ -260,8 +263,12 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
   if ((taskSummary.counts.failed ?? 0) > 0 && taskSummary.last_failed) {
     attention.push(`Failed task detected: ${taskSummary.last_failed.task_id}`);
   }
-  if (totals.blocked_human_count > 0) {
-    attention.push(`Human approval is blocking ${totals.blocked_human_count} plan step(s).`);
+  if (totals.blocked_approval_count > 0) {
+    attention.push(
+      totals.blocked_human_count === totals.blocked_approval_count
+        ? `Human approval is blocking ${totals.blocked_human_count} plan step(s).`
+        : `Approval gates are blocking ${totals.blocked_approval_count} plan step(s).`
+    );
   }
   if (activeSessions.length === 0 && ((taskSummary.counts.pending ?? 0) > 0 || totals.ready_step_count > 0)) {
     attention.push("Work is queued or ready, but no active agent sessions are available to claim it.");
@@ -284,6 +291,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       active_session_count: activeSessions.length,
       ready_step_count: totals.ready_step_count,
       running_step_count: totals.running_step_count,
+      blocked_approval_count: totals.blocked_approval_count,
       blocked_human_count: totals.blocked_human_count,
       failed_step_count: totals.failed_step_count,
     },

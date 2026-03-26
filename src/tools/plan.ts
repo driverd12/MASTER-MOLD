@@ -239,13 +239,24 @@ type PlanStepReadinessRecord = {
   gate_reason: string | null;
 };
 
-function getStepGateReason(step: PlanStepRecord): string | null {
+export function getPlanStepGateReason(step: PlanStepRecord): string | null {
   const metadata = step.metadata ?? {};
   if (typeof metadata.dispatch_gate_type === "string" && metadata.dispatch_gate_type.trim()) {
     return metadata.dispatch_gate_type.trim();
   }
   if (metadata.human_approval_required === true) {
     return "human_approval_required";
+  }
+  return null;
+}
+
+export function getPlanStepApprovalGateKind(step: PlanStepRecord): "human" | "policy" | null {
+  const gateReason = getPlanStepGateReason(step);
+  if (step.executor_kind === "human" || gateReason === "human" || gateReason === "human_approval_required") {
+    return "human";
+  }
+  if (gateReason === "policy" || gateReason === "policy_approval_required") {
+    return "policy";
   }
   return null;
 }
@@ -261,7 +272,7 @@ export function evaluatePlanStepReadiness(steps: PlanStepRecord[]): PlanStepRead
         title: dependency!.title,
         status: dependency!.status,
       }));
-    const gateReason = getStepGateReason(step);
+    const gateReason = getPlanStepGateReason(step);
     const readyCandidate = step.status === "pending" || step.status === "blocked" || step.status === "ready";
     return {
       step_id: step.step_id,
@@ -493,32 +504,33 @@ export async function planApprove(storage: Storage, input: z.infer<typeof planAp
       if (!step) {
         throw new Error(`Plan step not found: ${input.step_id}`);
       }
-      const gateReason = getStepGateReason(step);
-      const requiresHumanApproval =
-        step.executor_kind === "human" || gateReason === "human" || gateReason === "human_approval_required";
-      if (!requiresHumanApproval) {
-        throw new Error(`Plan step ${input.step_id} is not waiting on human approval`);
+      const gateKind = getPlanStepApprovalGateKind(step);
+      if (!gateKind) {
+        throw new Error(`Plan step ${input.step_id} is not waiting on an approval gate`);
       }
 
       const approvedAt = new Date().toISOString();
       const approvedBy =
         input.approved_by?.trim() || input.source_agent?.trim() || input.source_client?.trim() || "human";
       const approvalSummary = input.summary?.trim() || `Approved step ${step.title}`;
+      const approvalMetadata = {
+        human_approval_required: false,
+        dispatch_gate_type: null,
+        policy_approval_exempt: gateKind === "policy" ? true : step.metadata.policy_approval_exempt,
+        approval: {
+          approved_at: approvedAt,
+          approved_by: approvedBy,
+          summary: approvalSummary,
+          gate_type: gateKind,
+        },
+        ...(input.metadata ?? {}),
+      };
       const updated = storage.updatePlanStep({
         plan_id: input.plan_id,
         step_id: input.step_id,
-        status: "completed",
+        status: gateKind === "human" ? "completed" : "pending",
         summary: approvalSummary,
-        metadata: {
-          human_approval_required: false,
-          dispatch_gate_type: null,
-          approval: {
-            approved_at: approvedAt,
-            approved_by: approvedBy,
-            summary: approvalSummary,
-          },
-          ...(input.metadata ?? {}),
-        },
+        metadata: approvalMetadata,
       });
       const event = storage.appendRuntimeEvent({
         event_type: "plan.step_approved",
@@ -532,6 +544,7 @@ export async function planApprove(storage: Storage, input: z.infer<typeof planAp
           step_id: updated.step.step_id,
           approved_at: approvedAt,
           approved_by: approvedBy,
+          gate_type: gateKind,
         },
         source_client: input.source_client,
         source_model: input.source_model,

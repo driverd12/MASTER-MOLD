@@ -8,7 +8,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { Storage } from "./storage.js";
+import { Storage, type GoalRecord, type PlanRecord, type PlanStepRecord } from "./storage.js";
 import {
   agentClaimNext,
   agentClaimNextSchema,
@@ -397,6 +397,111 @@ function readInteger(value: unknown): number | undefined {
   return Math.round(value);
 }
 
+function readBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+type ExecutionPolicyProfile = "strict" | "bounded" | "aggressive";
+
+function normalizeExecutionPolicyProfile(value: unknown): ExecutionPolicyProfile | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized === "strict" || normalized === "bounded" || normalized === "aggressive" ? normalized : null;
+}
+
+function resolvePlanDispatchPolicyProfile(
+  goal: GoalRecord | null,
+  plan: PlanRecord,
+  step: PlanStepRecord
+): ExecutionPolicyProfile {
+  const stepProfile = normalizeExecutionPolicyProfile(step.metadata.policy_profile);
+  if (stepProfile) {
+    return stepProfile;
+  }
+  const inputProfile = isRecord(step.input) ? normalizeExecutionPolicyProfile(step.input.policy_profile) : null;
+  if (inputProfile) {
+    return inputProfile;
+  }
+  const planProfile = normalizeExecutionPolicyProfile(plan.metadata.policy_profile);
+  if (planProfile) {
+    return planProfile;
+  }
+  const goalProfile = goal ? normalizeExecutionPolicyProfile(goal.metadata.policy_profile) : null;
+  if (goalProfile) {
+    return goalProfile;
+  }
+  if (goal?.autonomy_mode === "execute_bounded") {
+    return "bounded";
+  }
+  return "strict";
+}
+
+function resolvePlanDispatchPolicyGate(
+  goal: GoalRecord | null,
+  plan: PlanRecord,
+  step: PlanStepRecord
+): {
+  required: boolean;
+  profile: ExecutionPolicyProfile;
+  reason: string | null;
+  risk: string | null;
+} {
+  const profile = resolvePlanDispatchPolicyProfile(goal, plan, step);
+  const explicitExempt = readBoolean(step.metadata.policy_approval_exempt);
+  if (explicitExempt === true) {
+    return {
+      required: false,
+      profile,
+      reason: "metadata_exempt",
+      risk: readString(step.metadata.policy_risk) ?? null,
+    };
+  }
+  const explicitRequired = readBoolean(step.metadata.policy_approval_required);
+  const risk = readString(step.metadata.policy_risk) ?? (isRecord(step.input) ? readString(step.input.policy_risk) : undefined) ?? null;
+  if (step.executor_kind === "human") {
+    return {
+      required: false,
+      profile,
+      reason: null,
+      risk,
+    };
+  }
+  if (explicitRequired === true) {
+    return {
+      required: true,
+      profile,
+      reason: "metadata_required",
+      risk,
+    };
+  }
+  if (profile === "aggressive") {
+    return {
+      required: false,
+      profile,
+      reason: null,
+      risk,
+    };
+  }
+  if (profile === "bounded") {
+    const boundedRiskGate = risk === "destructive" || risk === "scope_commit";
+    return {
+      required: boundedRiskGate,
+      profile,
+      reason: boundedRiskGate ? `bounded:${risk}` : null,
+      risk,
+    };
+  }
+  const strictGate = step.step_kind === "mutation" || risk === "destructive" || risk === "scope_commit";
+  return {
+    required: strictGate,
+    profile,
+    reason: strictGate ? (risk ? `strict:${risk}` : "strict:mutation") : null,
+    risk,
+  };
+}
+
 function buildPlanDispatchThreadId(planId: string, stepId: string) {
   return `plan-dispatch-${hashDispatchValue(`${planId}|${stepId}`).slice(0, 24)}`;
 }
@@ -508,6 +613,7 @@ async function planDispatch(input: z.infer<typeof planDispatchSchema>) {
       if (!plan) {
         throw new Error(`Plan not found: ${input.plan_id}`);
       }
+      const goal = plan.goal_id ? storage.getGoalById(plan.goal_id) : null;
 
       const steps = storage.listPlanSteps(input.plan_id);
       const readiness = evaluatePlanStepReadiness(steps);
@@ -591,18 +697,87 @@ async function planDispatch(input: z.infer<typeof planDispatchSchema>) {
           continue;
         }
 
+        const policyGate = resolvePlanDispatchPolicyGate(goal, plan, step);
+
         if (input.dry_run) {
           results.push({
             ...baseResult,
             dispatched: false,
             dry_run: true,
             action: "dry_run",
+            gate_type: policyGate.required ? "policy" : null,
+            policy_profile: policyGate.required ? policyGate.profile : null,
+            policy_reason: policyGate.required ? policyGate.reason : null,
             step_status_after: step.status,
           });
           continue;
         }
 
         try {
+          if (policyGate.required) {
+            const approvalSummary =
+              readString(step.input?.approval_summary) ??
+              `Policy approval required before dispatching step ${step.title}`;
+            const updated = storage.updatePlanStep({
+              plan_id: plan.plan_id,
+              step_id: step.step_id,
+              status: "blocked",
+              metadata: {
+                human_approval_required: true,
+                dispatch_gate_type: "policy",
+                policy_profile: policyGate.profile,
+                policy_gate_reason: policyGate.reason,
+                policy_risk: policyGate.risk,
+                last_dispatch: {
+                  kind: executorKind,
+                  dispatched_at: nowIso,
+                  approval_summary: approvalSummary,
+                  policy_profile: policyGate.profile,
+                  policy_gate_reason: policyGate.reason,
+                  policy_risk: policyGate.risk,
+                },
+              },
+            });
+            const blockedEvent = appendPlanStepRuntimeEvent({
+              event_type: "plan.step_blocked",
+              plan_id: plan.plan_id,
+              goal_id: plan.goal_id,
+              step_id: step.step_id,
+              title: step.title,
+              executor_kind: executorKind,
+              status: updated.step.status,
+              summary: approvalSummary,
+              details: {
+                gate_type: "policy",
+                requires_human_approval: true,
+                policy_profile: policyGate.profile,
+                policy_gate_reason: policyGate.reason,
+                policy_risk: policyGate.risk,
+              },
+              source_client: input.source_client,
+              source_model: input.source_model,
+              source_agent: input.source_agent,
+            });
+            blockedCount += 1;
+            results.push({
+              ...baseResult,
+              dispatched: false,
+              action: "approval_required",
+              gate_type: "policy",
+              requires_human_approval: true,
+              policy_profile: policyGate.profile,
+              policy_reason: policyGate.reason,
+              policy_risk: policyGate.risk,
+              step_status_after: updated.step.status,
+              approval_gate: {
+                kind: "policy",
+                summary: approvalSummary,
+              },
+              event: blockedEvent,
+            });
+            continue;
+          }
+
           if (executorKind === "tool") {
             const toolName = readString(step.tool_name) ?? readString(step.executor_ref);
             if (!toolName) {

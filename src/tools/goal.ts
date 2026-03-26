@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { type GoalRecord, type PlanRecord, type PlanStepRecord, Storage } from "../storage.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
-import { evaluatePlanStepReadiness } from "./plan.js";
+import { evaluatePlanStepReadiness, getPlanStepApprovalGateKind } from "./plan.js";
 
 const goalStatusSchema = z.enum([
   "draft",
@@ -542,22 +542,17 @@ function summarizeGoalExecution(plan: PlanRecord, steps: PlanStepRecord[]) {
     acc[step.status] = (acc[step.status] ?? 0) + 1;
     return acc;
   }, {});
-  const blockedHumanSteps = steps
+  const blockedApprovalSteps = steps
     .filter((step) => {
-      if (step.status === "blocked") {
-        if (step.executor_kind === "human") {
-          return true;
-        }
-        const gateType = readString(step.metadata.dispatch_gate_type);
-        return gateType === "human" || step.metadata.human_approval_required === true;
-      }
-      return false;
+      return step.status === "blocked" && getPlanStepApprovalGateKind(step) !== null;
     })
     .map((step) => ({
       step_id: step.step_id,
       title: step.title,
       status: step.status,
+      gate_type: getPlanStepApprovalGateKind(step),
     }));
+  const blockedHumanSteps = blockedApprovalSteps.filter((step) => step.gate_type === "human");
   const readyStepIds = readiness.filter((entry) => entry.ready).map((entry) => entry.step_id);
   const runningStepIds = steps.filter((step) => step.status === "running").map((step) => step.step_id);
   const failedStepIds = steps.filter((step) => step.status === "failed").map((step) => step.step_id);
@@ -567,8 +562,11 @@ function summarizeGoalExecution(plan: PlanRecord, steps: PlanStepRecord[]) {
     nextAction = "Plan completed; inspect artifacts and mark the goal complete when appropriate.";
   } else if (failedStepIds.length > 0) {
     nextAction = "Inspect failed steps and use plan.resume after fixing the blocking issue.";
-  } else if (blockedHumanSteps.length > 0) {
-    nextAction = "Approve the blocked human gate with plan.approve, then call goal.execute or plan.resume again.";
+  } else if (blockedApprovalSteps.length > 0) {
+    nextAction =
+      blockedApprovalSteps.some((step) => step.gate_type === "policy")
+        ? "Approve the blocked policy gate with plan.approve, then call goal.execute or plan.resume again."
+        : "Approve the blocked human gate with plan.approve, then call goal.execute or plan.resume again.";
   } else if (runningStepIds.length > 0) {
     nextAction = "Wait for running tasks or turns to finish, then call goal.execute again to continue dispatch.";
   } else if (readyStepIds.length > 0) {
@@ -585,6 +583,7 @@ function summarizeGoalExecution(plan: PlanRecord, steps: PlanStepRecord[]) {
     blocked_count: statusCounts.blocked ?? 0,
     failed_count: statusCounts.failed ?? 0,
     pending_count: statusCounts.pending ?? 0,
+    blocked_approval_steps: blockedApprovalSteps,
     blocked_human_steps: blockedHumanSteps,
     ready_step_ids: readyStepIds,
     running_step_ids: runningStepIds,
@@ -991,17 +990,17 @@ async function executeGoalAutorunPass(
     const runningWorkerStep = steps.find(
       (step) => step.status === "running" && (step.executor_kind === "worker" || step.executor_kind === "task")
     );
-    const blockedHumanStep = summary.blocked_human_steps[0] ?? null;
+    const blockedApprovalStep = summary.blocked_approval_steps[0] ?? null;
     const hasRunningTriChat = steps.some((step) => step.status === "running" && step.executor_kind === "trichat");
 
-    if (blockedHumanStep) {
+    if (blockedApprovalStep) {
       skippedCount += 1;
       results.push({
         goal_id: goal.goal_id,
         plan_id: plan.plan_id,
         action: "skipped",
-        reason: "human_gate",
-        blocked_step: blockedHumanStep,
+        reason: blockedApprovalStep.gate_type === "policy" ? "policy_gate" : "human_gate",
+        blocked_step: blockedApprovalStep,
         execution_summary: summary,
       });
       continue;
