@@ -815,6 +815,75 @@ test("goal.autorun can recover paused worker-pool goals when a viable live sessi
   }
 });
 
+test("goal.autorun does not repeat worker-pool recovery replans against the same weak session pool", async () => {
+  const testId = `${Date.now()}-goal-autorun-worker-pool-recovery-fingerprint`;
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "mcp-core-template-goal-autorun-worker-pool-recovery-fingerprint-test-")
+  );
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const createdGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation(testId, "goal.create", () => mutationCounter++),
+      title: "Worker-pool recovery fingerprint goal",
+      objective: "Avoid infinite replanning against the same weak live worker pool",
+      status: "active",
+      autonomy_mode: "execute_destructive_with_approval",
+      acceptance_criteria: ["Recovery replans only repeat when the live worker pool meaningfully changes"],
+      tags: ["agentic", "delivery"],
+    });
+
+    const firstAutorun = await callTool(client, "goal.autorun", {
+      mutation: nextMutation(testId, "goal.autorun.first", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      max_passes: 4,
+    });
+    assert.equal(firstAutorun.results[0].execution.paused_for_worker_pool, true);
+
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open.weak", () => mutationCounter++),
+      session_id: "goal-autorun-recovery-weak",
+      agent_id: "local-imprint",
+      client_kind: "local-imprint",
+      transport_kind: "stdio",
+      workspace_root: REPO_ROOT,
+      status: "active",
+      capabilities: {},
+    });
+
+    const recoveryAttempt = await callTool(client, "goal.autorun", {
+      mutation: nextMutation(testId, "goal.autorun.second", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      max_passes: 4,
+    });
+    assert.equal(recoveryAttempt.executed_count, 1);
+    assert.equal(recoveryAttempt.results[0].reason, "worker_pool_recovery");
+    assert.equal(recoveryAttempt.results[0].execution.paused_for_worker_pool, true);
+    const recoveryPlanId = recoveryAttempt.results[0].execution.plan.plan_id;
+
+    const recoveryPlan = await callTool(client, "plan.get", {
+      plan_id: recoveryPlanId,
+    });
+    assert.ok(recoveryPlan.plan.metadata.worker_pool_recovery_attempt.pool_fingerprint);
+    assert.equal(recoveryAttempt.results[0].execution.generated_plan_reason, "worker_pool_recovery");
+
+    const repeatedAutorun = await callTool(client, "goal.autorun", {
+      mutation: nextMutation(testId, "goal.autorun.third", () => mutationCounter++),
+      goal_id: createdGoal.goal.goal_id,
+      max_passes: 4,
+    });
+    assert.equal(repeatedAutorun.executed_count, 0);
+    assert.equal(repeatedAutorun.skipped_count, 1);
+    assert.equal(repeatedAutorun.results[0].reason, "worker_pool_paused");
+    assert.equal(repeatedAutorun.results[0].plan_id, recoveryPlanId);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("goal.execute prefers a lower-risk existing plan when the active plan is autonomy-blocked", async () => {
   const testId = `${Date.now()}-goal-execute-lower-risk-plan`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-goal-execute-lower-risk-plan-test-"));

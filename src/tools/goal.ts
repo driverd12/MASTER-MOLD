@@ -520,7 +520,31 @@ function hasViableWorkerPoolForRecovery(storage: Storage) {
     });
 }
 
-function shouldRetryPlanningForWorkerPoolRecovery(
+function buildWorkerPoolRecoveryFingerprint(storage: Storage) {
+  const activeSessions = storage.listAgentSessions({
+    active_only: true,
+    limit: 100,
+  });
+  if (activeSessions.length === 0) {
+    return null;
+  }
+
+  return activeSessions
+    .map((session) => {
+      const adaptiveState = summarizeAdaptiveSessionHealth(session).adaptive_state;
+      return [
+        session.session_id,
+        session.agent_id,
+        session.client_kind ?? "",
+        session.status,
+        adaptiveState,
+      ].join(":");
+    })
+    .sort()
+    .join("|");
+}
+
+function resolveWorkerPoolRecoveryFingerprint(
   storage: Storage,
   input: {
     plan_id?: string;
@@ -530,12 +554,26 @@ function shouldRetryPlanningForWorkerPoolRecovery(
   assessment: PlanRiskAssessment
 ) {
   if (input.plan_id || input.create_plan_if_missing === false || assessment.can_auto_execute) {
-    return false;
+    return null;
   }
   if (!isRecord(plan.metadata.worker_pool_pause)) {
-    return false;
+    return null;
   }
-  return hasViableWorkerPoolForRecovery(storage);
+  if (!hasViableWorkerPoolForRecovery(storage)) {
+    return null;
+  }
+
+  const recoveryFingerprint = buildWorkerPoolRecoveryFingerprint(storage);
+  if (!recoveryFingerprint) {
+    return null;
+  }
+  const existingAttempt = isRecord(plan.metadata.worker_pool_recovery_attempt)
+    ? plan.metadata.worker_pool_recovery_attempt
+    : null;
+  if (readString(existingAttempt?.pool_fingerprint) === recoveryFingerprint) {
+    return null;
+  }
+  return recoveryFingerprint;
 }
 
 async function generateGoalExecutionPlanCandidate(
@@ -552,6 +590,7 @@ async function generateGoalExecutionPlanCandidate(
     };
     generation_reason: "missing_plan" | "worker_pool_recovery";
     previous_plan_id?: string;
+    recovery_pool_fingerprint?: string | null;
   }
 ) {
   const generated = await invokeTool("pack.plan.generate", {
@@ -601,6 +640,14 @@ async function generateGoalExecutionPlanCandidate(
       methodology_selection: params.planner_selection,
       goal_execute_generation_reason: params.generation_reason,
       replanned_from_plan_id: params.previous_plan_id ?? null,
+      worker_pool_recovery_attempt:
+        params.generation_reason === "worker_pool_recovery" && params.recovery_pool_fingerprint
+          ? {
+              attempted_at: new Date().toISOString(),
+              pool_fingerprint: params.recovery_pool_fingerprint,
+              source_plan_id: params.previous_plan_id ?? null,
+            }
+          : null,
     },
     ...params.source,
   }).plan;
@@ -989,6 +1036,40 @@ function persistPlanRiskAssessment(
   }).plan;
 }
 
+function persistWorkerPoolRecoveryAttempt(
+  storage: Storage,
+  plan: PlanRecord,
+  recoveryPoolFingerprint: string,
+  source?: {
+    source_client?: string;
+    source_model?: string;
+    source_agent?: string;
+  },
+  sourcePlanId?: string
+) {
+  const existingAttempt = isRecord(plan.metadata.worker_pool_recovery_attempt) ? plan.metadata.worker_pool_recovery_attempt : null;
+  if (
+    readString(existingAttempt?.pool_fingerprint) === recoveryPoolFingerprint &&
+    (readString(existingAttempt?.source_plan_id) ?? null) === (sourcePlanId ?? null)
+  ) {
+    return plan;
+  }
+
+  return storage.updatePlan({
+    plan_id: plan.plan_id,
+    metadata: {
+      worker_pool_recovery_attempt: {
+        attempted_at: new Date().toISOString(),
+        pool_fingerprint: recoveryPoolFingerprint,
+        source_plan_id: sourcePlanId ?? null,
+      },
+    },
+    source_client: source?.source_client,
+    source_model: source?.source_model,
+    source_agent: source?.source_agent,
+  }).plan;
+}
+
 function listGoalAutorunCandidates(storage: Storage, input: Pick<GoalAutorunLikeInput, "goal_id" | "limit">) {
   if (input.goal_id) {
     const goal = storage.getGoalById(input.goal_id);
@@ -1136,7 +1217,9 @@ export async function goalExecute(
       }
       let planAssessment =
         planResolution.assessment ?? assessPlanRisk(goal, plan, storage.listPlanSteps(plan.plan_id));
-      if (shouldRetryPlanningForWorkerPoolRecovery(storage, input, plan, planAssessment)) {
+      const recoveryPoolFingerprint = resolveWorkerPoolRecoveryFingerprint(storage, input, plan, planAssessment);
+      if (recoveryPoolFingerprint) {
+        const recoverySourcePlanId = plan.plan_id;
         plannerSelection = input.hook_name
           ? buildExplicitPlannerSelection(input.hook_name)
           : resolveDefaultPlannerSelection(goal, input.options);
@@ -1148,6 +1231,7 @@ export async function goalExecute(
           source,
           generation_reason: generatedPlanReason,
           previous_plan_id: plan.plan_id,
+          recovery_pool_fingerprint: recoveryPoolFingerprint,
         });
         generatedPlanResult = generatedCandidate.generated_plan_result;
         const rankedCandidates = [
@@ -1172,6 +1256,7 @@ export async function goalExecute(
           plan = bestCandidate.plan;
           planAssessment = bestCandidate.assessment;
         }
+        plan = persistWorkerPoolRecoveryAttempt(storage, plan, recoveryPoolFingerprint, source, recoverySourcePlanId);
       }
       plan = persistPlanRiskAssessment(storage, goal, plan, planAssessment, source);
 
@@ -1465,7 +1550,7 @@ async function executeGoalAutorunPass(
       source_agent: input.source_agent,
     });
     if (!planAssessment.can_auto_execute) {
-      const shouldAttemptRecovery = shouldRetryPlanningForWorkerPoolRecovery(
+      const recoveryPoolFingerprint = resolveWorkerPoolRecoveryFingerprint(
         storage,
         {
           create_plan_if_missing: input.create_plan_if_missing,
@@ -1473,7 +1558,7 @@ async function executeGoalAutorunPass(
         planRecord,
         planAssessment
       );
-      if (shouldAttemptRecovery) {
+      if (recoveryPoolFingerprint) {
         const executed = (await invokeTool("goal.execute", {
           mutation: buildGoalExecuteDerivedMutation(mutation, `autorun-recover:${goal.goal_id}`),
           goal_id: goal.goal_id,
