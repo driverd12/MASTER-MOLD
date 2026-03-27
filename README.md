@@ -286,6 +286,8 @@ The current office/TriChat environment intentionally borrows and reinterprets th
 
 We also reviewed the DAN-prompt gist for stylistic inspiration only. Unsafe jailbreak behavior is intentionally excluded; the only acceptable lift is playful operator-facing mode naming, not guardrail bypassing.
 
+Upstream coverage matrix: [Upstream Implementation Matrix](./docs/UPSTREAM_IMPLEMENTATION_MATRIX.md)
+
 ## Replication Bundle
 
 When GitHub push access is unavailable, export a portable handoff bundle for a stronger server:
@@ -435,6 +437,7 @@ TriChat reliability checks:
 ```bash
 npm run trichat:bridges:test
 npm run trichat:doctor
+npm run production:doctor
 npm run trichat:smoke
 npm run trichat:dogfood
 npm run trichat:soak:gate -- --hours 1 --interval-seconds 60

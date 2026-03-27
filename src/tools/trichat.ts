@@ -2544,6 +2544,41 @@ type AutopilotConfidenceMethod = {
   rationale: string[];
 };
 
+function shouldTreatAutopilotAsIdleObserve(input: {
+  trigger: "interval" | "start" | "run_once";
+  intake: AutopilotGoalIntakeResult;
+  council: Pick<
+    AutopilotCouncilResult,
+    "selected_delegate_agent_id" | "selected_task_objective" | "selected_delegation_briefs"
+  >;
+  execution_mode: TriChatAutopilotTickResult["execution"]["mode"];
+  failure_reason: string | null;
+}): boolean {
+  if (input.trigger === "run_once") {
+    return false;
+  }
+  if (input.intake.objective_source !== "heartbeat" || input.intake.source_task) {
+    return false;
+  }
+  if (!isAutopilotConfidenceFailure(input.failure_reason)) {
+    return false;
+  }
+  if (input.execution_mode !== "none") {
+    return false;
+  }
+  const briefs = dedupeAutopilotDelegationBriefs(input.council.selected_delegation_briefs);
+  const hasDelegation = briefs.some(
+    (brief) =>
+      Boolean(brief.delegate_agent_id) ||
+      Boolean(brief.task_objective) ||
+      brief.success_criteria.length > 0 ||
+      brief.evidence_requirements.length > 0 ||
+      brief.rollback_notes.length > 0
+  );
+  const hasAction = Boolean(input.council.selected_delegate_agent_id) || Boolean(input.council.selected_task_objective) || hasDelegation;
+  return !hasAction;
+}
+
 type AutopilotSafetyGateResult = {
   pass: boolean;
   reason: string | null;
@@ -2839,6 +2874,7 @@ async function runAutopilotTick(
   let selectedDelegateAgentId: string | null = null;
   let selectedDelegationBrief: AutopilotDelegationBrief | null = null;
   let selectedDelegationBriefs: AutopilotDelegationBrief[] = [];
+  let idleObserveTick = false;
 
   try {
     const session = syncAutopilotAgentSession(storage, config, "active", {
@@ -3022,13 +3058,25 @@ async function runAutopilotTick(
     if (!failureReason && executionResult.reason) {
       failureReason = executionResult.reason;
     }
+    idleObserveTick = shouldTreatAutopilotAsIdleObserve({
+      trigger: options.trigger,
+      intake: activeIntake,
+      council,
+      execution_mode: executionResult.mode,
+      failure_reason: failureReason,
+    });
+    if (idleObserveTick) {
+      failureReason = null;
+    }
     await appendAutopilotRunStep(storage, {
       session_key: sessionKey,
       run_id: runId,
       step_name: "execute",
       status: failureReason ? "failed" : "completed",
       summary:
-        executionResult.mode === "direct_command"
+        idleObserveTick
+          ? "execute idle observe; no actionable work identified"
+          : executionResult.mode === "direct_command"
           ? `execute direct commands=${executionResult.commands.length}`
           : executionResult.mode === "tmux_dispatch"
             ? `execute tmux dispatch commands=${executionResult.commands.length} session=${
@@ -3051,13 +3099,15 @@ async function runAutopilotTick(
     });
 
     verifyStatus = resolveAutopilotVerifyStatus(failureReason, executionResult);
-    verifySummary = failureReason
-      ? failureReason
-      : verifyStatus === "passed"
-        ? "execution checks passed"
-        : verifyStatus === "skipped"
-          ? "execution deferred to task queue"
-          : "execution checks failed";
+    verifySummary = idleObserveTick
+      ? "idle observation tick completed; no actionable work identified"
+      : failureReason
+        ? failureReason
+        : verifyStatus === "passed"
+          ? "execution checks passed"
+          : verifyStatus === "skipped"
+            ? "execution deferred to task queue"
+            : "execution checks failed";
     await runAutopilotIdempotent(storage, {
       tool_name: "trichat.turn_orchestrate",
       session_key: sessionKey,
@@ -3117,7 +3167,7 @@ async function runAutopilotTick(
       run_id: runId,
       step_name: "mentorship",
       status: failureReason ? "failed" : "completed",
-      summary: failureReason ? failureReason : "mentorship complete",
+      summary: failureReason ? failureReason : idleObserveTick ? "idle observation recorded" : "mentorship complete",
       details: {
         transcript_entries: mentorshipResult.transcript_entries,
         summarize_note_id: mentorshipResult.summarize_note_id,
@@ -3227,7 +3277,12 @@ async function runAutopilotTick(
       run_id: runId,
       step_name: "complete",
       status: finalStatus === "succeeded" ? "completed" : "failed",
-      summary: finalStatus === "succeeded" ? "autopilot tick complete" : failureReason ?? "autopilot tick failed",
+      summary:
+        finalStatus === "succeeded"
+          ? idleObserveTick
+            ? "autopilot idle observation complete"
+            : "autopilot tick complete"
+          : failureReason ?? "autopilot tick failed",
       details: {
         verify_status: verifyStatus,
         verify_summary: verifySummary,
@@ -3343,6 +3398,7 @@ async function runAutopilotTick(
         last_execution_mode: executionResult.mode,
         last_execution_task_id: executionResult.task_id,
         last_execution_task_ids: executionResult.task_ids,
+        last_idle_observe_tick: idleObserveTick,
       });
     }
     return tickResult;

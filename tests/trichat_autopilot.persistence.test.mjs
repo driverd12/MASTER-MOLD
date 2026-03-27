@@ -422,6 +422,63 @@ test("trichat.autopilot closes one-shot archived run_once sessions after complet
   }
 });
 
+test("trichat.autopilot treats no-work start heartbeats as idle observations instead of failures", async () => {
+  const testId = `${Date.now()}-idle-observe`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-trichat-autopilot-idle-observe-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  try {
+    const session = await openClient(dbPath);
+    try {
+      const started = await callTool(session.client, "trichat.autopilot", {
+        action: "start",
+        mutation: nextMutation(testId, "trichat.autopilot-start-idle-observe", () => mutationCounter++),
+        interval_seconds: 86400,
+        thread_id: `trichat-autopilot-idle-observe-${testId}`,
+        thread_title: `TriChat Autopilot Idle Observe ${testId}`,
+        thread_status: "active",
+        away_mode: "normal",
+        lead_agent_id: "ring-leader",
+        specialist_agent_ids: ["implementation-director", "local-imprint"],
+        run_immediately: true,
+        bridge_dry_run: true,
+        execute_enabled: false,
+        max_rounds: 1,
+        min_success_agents: 1,
+        confidence_threshold: 0.99,
+        adr_policy: "manual",
+      });
+
+      assert.ok(started.initial_tick);
+      assert.equal(started.initial_tick.ok, true);
+      assert.equal(started.initial_tick.reason, null);
+      assert.equal(started.initial_tick.verify_status, "skipped");
+      assert.match(started.initial_tick.verify_summary, /idle observation/i);
+      assert.ok(
+        started.initial_tick.step_status.some(
+          (entry) => entry.name === "execute" && entry.summary.includes("idle observe")
+        )
+      );
+
+      const status = await callTool(session.client, "trichat.autopilot", {
+        action: "status",
+      });
+      assert.equal(status.last_tick.ok, true);
+      assert.equal(status.session.session.metadata.last_idle_observe_tick, true);
+
+      await callTool(session.client, "trichat.autopilot", {
+        action: "stop",
+        mutation: nextMutation(testId, "trichat.autopilot-stop-idle-observe", () => mutationCounter++),
+      });
+    } finally {
+      await session.client.close().catch(() => {});
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("trichat.autopilot refreshes stale replayed source-task claims across server restarts", async () => {
   const testId = `${Date.now()}-stale-claim-refresh`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-trichat-autopilot-stale-claim-test-"));

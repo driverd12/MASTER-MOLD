@@ -48,6 +48,7 @@
     "ring-leader:start": "./scripts/ring_leader_ctl.sh start",
     "ring-leader:stop": "./scripts/ring_leader_ctl.sh stop",
     "ring-leader:run": "./scripts/ring_leader_ctl.sh run_once",
+    "production:doctor": "./scripts/production_readiness.sh",
     "codex:mcp:register": "./scripts/codex_mcp_register.sh"
   },
   "dependencies": {

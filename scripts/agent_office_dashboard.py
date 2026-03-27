@@ -1648,6 +1648,15 @@ def render_help_view(width: int, height: int, theme: str = "night") -> List[str]
         fit_text("- autoresearch-style small-budget loops and org-first delegation discipline", width),
         fit_text("- SuperClaude-inspired confidence checks before high-confidence plans", width),
     ]
+    if len(lines) > height:
+        compacted: List[str] = []
+        blank_budget = max(0, len(lines) - height)
+        for line in lines:
+            if line == "" and blank_budget > 0:
+                blank_budget -= 1
+                continue
+            compacted.append(line)
+        lines = compacted
     return lines[: max(1, height)]
 
 
