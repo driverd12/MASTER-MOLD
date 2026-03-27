@@ -2319,7 +2319,9 @@ test("adaptive worker health recovers after a completion streak while stale fail
     assert.equal(recoveredSessionSummary.adaptive_state, "healthy");
     assert.ok(kernelSummary.overview.adaptive_session_counts.healthy >= 1);
     assert.equal(kernelSummary.state, "active");
-    assert.ok(kernelSummary.attention.some((entry) => /stale failed task remains in history/i.test(entry)));
+    assert.ok(
+      kernelSummary.attention.some((entry) => /(stale|recovered) failed task remains in history/i.test(entry))
+    );
     assert.equal(
       kernelSummary.attention.some((entry) => /adaptive routing marks .* degraded/i.test(entry)),
       false

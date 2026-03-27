@@ -69,6 +69,15 @@ def prime_process_env(argv: List[str]) -> None:
 
 prime_process_env(sys.argv[1:])
 
+
+def default_transport() -> str:
+    explicit = os.environ.get("TRICHAT_MCP_TRANSPORT", "").strip().lower()
+    if explicit in {"stdio", "http"}:
+        return explicit
+    if os.environ.get("MCP_HTTP_BEARER_TOKEN", "").strip():
+        return "http"
+    return "stdio"
+
 DEFAULT_THREAD_ID = "ring-leader-main"
 DEFAULT_VIEW = "office"
 VIEW_ORDER = ["office", "briefing", "lanes", "workers", "help"]
@@ -1541,7 +1550,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-latest", action="store_true", help="Pick the latest active non-smoke thread.")
     parser.add_argument("--view", default=DEFAULT_VIEW, choices=VIEW_ORDER, help="Starting dashboard view.")
     parser.add_argument("--refresh-interval", type=float, default=float(os.environ.get("TRICHAT_OFFICE_REFRESH_SECONDS", "2.0")), help="Refresh interval in seconds.")
-    parser.add_argument("--transport", default=os.environ.get("TRICHAT_MCP_TRANSPORT", "stdio"), choices=["stdio", "http"], help="MCP transport.")
+    parser.add_argument("--transport", default=default_transport(), choices=["stdio", "http"], help="MCP transport.")
     parser.add_argument("--url", default=os.environ.get("TRICHAT_MCP_URL", "http://127.0.0.1:8787/"), help="HTTP MCP URL.")
     parser.add_argument("--origin", default=os.environ.get("TRICHAT_MCP_ORIGIN", "http://127.0.0.1"), help="HTTP origin header.")
     parser.add_argument("--stdio-command", default=os.environ.get("TRICHAT_MCP_STDIO_COMMAND", "node"), help="STDIO MCP command.")

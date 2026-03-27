@@ -15,6 +15,7 @@ WORKER_LABEL="com.mcplayground.imprint.inboxworker"
 MCP_PLIST="${LAUNCH_DIR}/${MCP_LABEL}.plist"
 AUTO_PLIST="${LAUNCH_DIR}/${AUTO_LABEL}.plist"
 WORKER_PLIST="${LAUNCH_DIR}/${WORKER_LABEL}.plist"
+BUS_SOCKET_PATH="${TRICHAT_BUS_SOCKET_PATH:-${REPO_ROOT}/data/trichat.bus.sock}"
 
 MCP_PORT="${MCP_HTTP_PORT:-${ANAMNESIS_MCP_HTTP_PORT:-8787}}"
 MCP_HOST="${MCP_HTTP_HOST:-127.0.0.1}"
@@ -51,6 +52,40 @@ printf '%s' "${HTTP_BEARER_TOKEN}" > "${TOKEN_FILE}"
 chmod 600 "${TOKEN_FILE}" >/dev/null 2>&1 || true
 
 mkdir -p "${LAUNCH_DIR}" "${LOG_DIR}"
+
+terminate_repo_listener() {
+  local pid="$1"
+  [[ -n "${pid}" ]] || return 0
+  local command_line
+  command_line="$(ps -o command= -p "${pid}" 2>/dev/null || true)"
+  if [[ -z "${command_line}" ]]; then
+    return 0
+  fi
+  if [[ "${command_line}" != *"${REPO_ROOT}"* && "${command_line}" != *"dist/server.js"* ]]; then
+    return 0
+  fi
+  kill "${pid}" >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5; do
+    if ! kill -0 "${pid}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  kill -9 "${pid}" >/dev/null 2>&1 || true
+}
+
+if command -v lsof >/dev/null 2>&1; then
+  PORT_PIDS="$(lsof -tiTCP:${MCP_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -n "${PORT_PIDS}" ]]; then
+    while IFS= read -r pid; do
+      terminate_repo_listener "${pid}"
+    done <<< "${PORT_PIDS}"
+  fi
+fi
+
+if [[ -S "${BUS_SOCKET_PATH}" ]]; then
+  rm -f "${BUS_SOCKET_PATH}" >/dev/null 2>&1 || true
+fi
 
 cat >"${MCP_PLIST}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

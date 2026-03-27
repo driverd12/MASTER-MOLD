@@ -790,7 +790,7 @@ const DEFAULT_AUTOPILOT_CONFIG: TriChatAutopilotConfig = {
   max_consecutive_errors: 3,
   lock_key: null,
   lock_lease_seconds: 600,
-  adr_policy: "every_success",
+  adr_policy: "high_impact",
 };
 
 const autopilotRuntime: {
@@ -3456,6 +3456,17 @@ async function runAutopilotTick(
     }
     return tickResult;
   } finally {
+    if (shouldCloseAutopilotSessionAfterTick(config, options)) {
+      try {
+        closeAutopilotAgentSession(
+          storage,
+          config,
+          finalStatus === "succeeded" ? "run_once complete" : failureReason ?? "run_once finished"
+        );
+      } catch {
+        // keep one-shot cleanup from destabilizing the tick result.
+      }
+    }
     if (releaseTickLock) {
       try {
         await releaseLock(storage, {
@@ -6312,22 +6323,16 @@ async function runAutopilotGovernance(
       skipped_reason: "skipped due to failed tick",
     };
   }
-  if (input.config.adr_policy === "manual") {
+  const adrDecision = shouldPersistAutopilotAdr({
+    config: input.config,
+    intake: input.intake,
+    execution: input.execution,
+  });
+  if (!adrDecision.persist) {
     return {
       adr_id: null,
       adr_path: null,
-      skipped_reason: "manual policy",
-    };
-  }
-  if (
-    input.config.adr_policy === "high_impact" &&
-    input.execution.mode !== "direct_command" &&
-    input.execution.mode !== "tmux_dispatch"
-  ) {
-    return {
-      adr_id: null,
-      adr_path: null,
-      skipped_reason: "high-impact policy and no direct or tmux execution",
+      skipped_reason: adrDecision.reason,
     };
   }
 
@@ -6365,6 +6370,7 @@ async function runAutopilotGovernance(
       `Selected agent: ${input.council.selected_agent ?? "n/a"}`,
       `Selected strategy: ${input.council.selected_strategy || "n/a"}`,
       `Execution mode: ${input.execution.mode}`,
+      `Command classification: ${adrDecision.command_classification}`,
       `Execution commands: ${input.execution.commands.join(" || ") || "none"}`,
       `Verification: ${input.verify_status} (${input.verify_summary})`,
       `Rollback: revert workspace changes and replay task queue from ${input.intake.project_dir}`,
@@ -6646,6 +6652,64 @@ function resolveAutopilotVerifyStatus(
     return "skipped";
   }
   return "skipped";
+}
+
+function classifyAutopilotExecutionCommands(commands: string[]): AutopilotCommandPlan["classification"] {
+  const destructive = commands.some((command) =>
+    AUTOPILOT_DESTRUCTIVE_PATTERNS.some((pattern) => pattern.test(command))
+  );
+  const write =
+    destructive ||
+    commands.some((command) => AUTOPILOT_WRITE_PATTERNS.some((pattern) => pattern.test(command)));
+  return destructive ? "destructive" : write ? "write" : "read";
+}
+
+function shouldPersistAutopilotAdr(input: {
+  config: TriChatAutopilotConfig;
+  intake: AutopilotGoalIntakeResult;
+  execution: AutopilotExecutionResult;
+}): {
+  persist: boolean;
+  reason: string | null;
+  command_classification: AutopilotCommandPlan["classification"];
+} {
+  const commandClassification = classifyAutopilotExecutionCommands(input.execution.commands);
+  if (input.config.adr_policy === "manual") {
+    return {
+      persist: false,
+      reason: "manual policy",
+      command_classification: commandClassification,
+    };
+  }
+  if (input.execution.mode !== "direct_command" && input.execution.mode !== "tmux_dispatch") {
+    return {
+      persist: false,
+      reason: "high-impact policy and no direct or tmux execution",
+      command_classification: commandClassification,
+    };
+  }
+  if (input.config.adr_policy === "every_success") {
+    return {
+      persist: true,
+      reason: null,
+      command_classification: commandClassification,
+    };
+  }
+  if (commandClassification === "read") {
+    return {
+      persist: false,
+      reason:
+        input.intake.objective_source === "heartbeat" && !input.intake.source_task
+          ? "high-impact policy and routine read-only heartbeat"
+          : "high-impact policy and read-only execution",
+      command_classification: commandClassification,
+    };
+  }
+  return {
+    persist: true,
+    reason: null,
+    command_classification: commandClassification,
+  };
 }
 
 async function runAutopilotOverlapSkip(
@@ -6987,6 +7051,24 @@ function buildAutopilotAgentSessionSpec(config: TriChatAutopilotConfig) {
       execution_role: "ring-leader",
     },
   };
+}
+
+function shouldCloseAutopilotSessionAfterTick(
+  config: TriChatAutopilotConfig,
+  options: { trigger: "interval" | "start" | "run_once" }
+) {
+  if (options.trigger !== "run_once") {
+    return false;
+  }
+  const runtimeSessionId = buildAutopilotAgentSessionId(autopilotRuntime.config);
+  const tickSessionId = buildAutopilotAgentSessionId(config);
+  if (!autopilotRuntime.running) {
+    return true;
+  }
+  if (config.thread_status !== "active") {
+    return true;
+  }
+  return runtimeSessionId !== tickSessionId;
 }
 
 function syncAutopilotAgentSession(

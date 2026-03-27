@@ -563,8 +563,8 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       adaptive_none_count: 0,
     }
   );
-  const staleTaskFailures =
-    taskFailuresAreStale(taskSummary) || taskFailuresRecoveredByActiveSessions(taskSummary, activeSessions);
+  const taskFailuresRecovered = taskFailuresRecoveredByActiveSessions(taskSummary, activeSessions);
+  const staleTaskFailures = taskFailuresAreStale(taskSummary) || taskFailuresRecovered;
 
   const state = deriveKernelState({
     failed_goal_count: goalCounts.failed ?? 0,
@@ -616,8 +616,10 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
   const activeSessionLearningCoverageCount = activeSessionAgentIds.length - uncoveredActiveSessionAgents.length;
   if ((taskSummary.counts.failed ?? 0) > 0 && taskSummary.last_failed) {
     attention.push(
-      staleTaskFailures
-        ? `Stale failed task remains in history: ${taskSummary.last_failed.task_id}`
+      taskFailuresRecovered
+        ? `Recovered failed task remains in history: ${taskSummary.last_failed.task_id}`
+        : staleTaskFailures
+          ? `Stale failed task remains in history: ${taskSummary.last_failed.task_id}`
         : `Failed task detected: ${taskSummary.last_failed.task_id}`
     );
   }

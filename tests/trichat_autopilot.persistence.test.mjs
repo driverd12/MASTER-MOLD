@@ -372,6 +372,56 @@ test("trichat.autopilot routes source task claims and reports through the durabl
   }
 });
 
+test("trichat.autopilot closes one-shot archived run_once sessions after completion", async () => {
+  const testId = `${Date.now()}-run-once-close`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-trichat-autopilot-runonce-close-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const threadId = `trichat-autopilot-runonce-close-${testId}`;
+  const sessionId = `trichat-autopilot:${threadId}`;
+  let mutationCounter = 0;
+
+  try {
+    const session = await openClient(dbPath);
+    try {
+      const runOnce = await callTool(session.client, "trichat.autopilot", {
+        action: "run_once",
+        mutation: nextMutation(testId, "trichat.autopilot-run_once-close", () => mutationCounter++),
+        interval_seconds: 86400,
+        thread_id: threadId,
+        thread_title: `TriChat Autopilot One Shot ${testId}`,
+        thread_status: "archived",
+        away_mode: "normal",
+        bridge_dry_run: true,
+        execute_enabled: false,
+        max_rounds: 1,
+        min_success_agents: 1,
+        confidence_threshold: 0.1,
+        adr_policy: "manual",
+      });
+
+      assert.equal(runOnce.tick.ok, true);
+
+      const fetchedSession = await callTool(session.client, "agent.session_get", {
+        session_id: sessionId,
+      });
+      assert.equal(fetchedSession.found, true);
+      assert.equal(fetchedSession.session.status, "closed");
+      assert.equal(typeof fetchedSession.session.ended_at, "string");
+      assert.equal(fetchedSession.session.metadata.close_reason, "run_once complete");
+
+      const activeSessions = await callTool(session.client, "agent.session_list", {
+        active_only: true,
+        limit: 20,
+      });
+      assert.equal(activeSessions.sessions.some((entry) => entry.session_id === sessionId), false);
+    } finally {
+      await session.client.close().catch(() => {});
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("trichat.autopilot refreshes stale replayed source-task claims across server restarts", async () => {
   const testId = `${Date.now()}-stale-claim-refresh`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-trichat-autopilot-stale-claim-test-"));

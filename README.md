@@ -215,6 +215,12 @@ node ./scripts/trichat_roster.mjs
 node ./scripts/mcp_tool_call.mjs --tool trichat.roster --args '{}' --transport stdio --stdio-command node --stdio-args dist/server.js --cwd .
 ```
 
+Clean stale probe threads, requeue eligible old autopilot failures, and prune untracked routine autopilot ADR residue:
+
+```bash
+npm run ring-leader:cleanup
+```
+
 ## Agent Office Dashboard
 
 Launch the animated office monitor directly:
@@ -249,6 +255,28 @@ npm run trichat:app:install
 ```
 
 By default the app opens the tmux-backed Agent Office dashboard and generates its own built-in office mascot icon if you do not pass `--icon`.
+
+## Replication Bundle
+
+When GitHub push access is unavailable, export a portable handoff bundle for a stronger server:
+
+```bash
+npm run replication:export
+```
+
+The export includes:
+
+- a `git bundle` for the current branch and commit
+- `.env.example`
+- `config/trichat_agents.json`
+- `bootstrap-server.sh`
+- `replication-manifest.json`
+
+On the target server:
+
+```bash
+./bootstrap-server.sh /path/to/target /path/to/MCPlayground---Core-Template-<timestamp>.bundle
+```
 
 ## Configuration
 

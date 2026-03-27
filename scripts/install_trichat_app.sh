@@ -112,6 +112,10 @@ case "${TERMINAL_MODE}" in
 esac
 
 REPO_ROOT="$(cd "${REPO_ROOT}" && pwd)"
+eval "$("${REPO_ROOT}/scripts/export_dotenv_env.sh" "${REPO_ROOT}")"
+if [[ "${TRANSPORT}" == "stdio" && -n "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
+  TRANSPORT="http"
+fi
 INSTALL_DIR="$(mkdir -p "${INSTALL_DIR}" && cd "${INSTALL_DIR}" && pwd)"
 APP_PATH="${INSTALL_DIR}/${APP_NAME}.app"
 

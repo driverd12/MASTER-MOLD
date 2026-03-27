@@ -103,6 +103,94 @@ test("trichat.autopilot can execute council commands via tmux backend", async ()
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
+test("trichat.autopilot high-impact governance skips repo ADRs for routine read-only tmux ticks", async () => {
+  const testId = `${Date.now()}-readonly-adr-skip`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-trichat-autopilot-readonly-adr-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const bridgePath = path.join(tempDir, "mock_readonly_adr_bridge.js");
+  let mutationCounter = 0;
+
+  fs.writeFileSync(
+    bridgePath,
+    [
+      "#!/usr/bin/env node",
+      "const agent = process.argv[2] || 'agent';",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  let payload = {};",
+      "  try { payload = JSON.parse(String(input || '{}').trim() || '{}'); } catch { payload = {}; }",
+      "  const protocolVersion = payload.protocol_version || 'trichat-bridge-v1';",
+      "  const requestId = payload.request_id || `req-${Date.now()}`;",
+      "  const threadId = payload.thread_id || 'thread';",
+      "  if (payload.op === 'ping') {",
+      "    process.stdout.write(`${JSON.stringify({ kind: 'trichat.adapter.pong', protocol_version: protocolVersion, request_id: requestId, agent_id: agent, thread_id: threadId, content: 'pong' })}\\n`);",
+      "    return;",
+      "  }",
+      "  const response = {",
+      "    strategy: `${agent} routine read-only heartbeat`,",
+      "    commands: ['echo audit', 'echo verify', 'echo summary'],",
+      "    confidence: 0.9,",
+      "    mentorship_note: `${agent} keeps governance bounded for read-only work`",
+      "  };",
+      "  process.stdout.write(`${JSON.stringify({ kind: 'trichat.adapter.response', protocol_version: protocolVersion, request_id: requestId, agent_id: agent, thread_id: threadId, content: JSON.stringify(response) })}\\n`);",
+      "});",
+    ].join("\n"),
+    "utf8"
+  );
+  fs.chmodSync(bridgePath, 0o755);
+
+  const bridgeCmd = (agent) => `node ${JSON.stringify(bridgePath)} ${agent}`;
+  const session = await openClient(dbPath, {
+    TRICHAT_TMUX_DRY_RUN: "1",
+    TRICHAT_CODEX_CMD: bridgeCmd("codex"),
+    TRICHAT_CURSOR_CMD: bridgeCmd("cursor"),
+    TRICHAT_IMPRINT_CMD: bridgeCmd("local-imprint"),
+  });
+
+  const adrDir = path.join(REPO_ROOT, "docs", "adrs");
+  const matchingAdrPrefix = `trichat-autopilot-readonly-${testId}`;
+  const before = fs.readdirSync(adrDir).filter((entry) => entry.includes(matchingAdrPrefix));
+
+  try {
+    const result = await callTool(session.client, "trichat.autopilot", {
+      action: "run_once",
+      mutation: nextMutation(testId, "trichat.autopilot-run_once-readonly-adr-skip", () => mutationCounter++),
+      interval_seconds: 86400,
+      thread_id: matchingAdrPrefix,
+      thread_title: `TriChat Autopilot Readonly ${testId}`,
+      thread_status: "archived",
+      away_mode: "normal",
+      max_rounds: 1,
+      min_success_agents: 1,
+      bridge_timeout_seconds: 8,
+      bridge_dry_run: false,
+      execute_enabled: true,
+      command_allowlist: ["echo "],
+      execute_backend: "tmux",
+      tmux_session_name: `trichat-autopilot-readonly-${testId}`,
+      tmux_worker_count: 2,
+      tmux_max_queue_per_worker: 4,
+      tmux_auto_scale_workers: true,
+      tmux_sync_after_dispatch: true,
+      confidence_threshold: 0.1,
+      adr_policy: "high_impact",
+    });
+
+    assert.equal(result.tick.ok, true);
+    assert.equal(result.tick.execution.mode, "tmux_dispatch");
+    assert.equal(result.tick.governance.adr_id, null);
+    assert.match(String(result.tick.governance.skipped_reason || ""), /read-only/i);
+
+    const after = fs.readdirSync(adrDir).filter((entry) => entry.includes(matchingAdrPrefix));
+    assert.deepEqual(after, before);
+  } finally {
+    await session.client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("trichat.autopilot blocks protected db artifact commands and falls back safely", async () => {
   const testId = `${Date.now()}-dbguard`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-trichat-autopilot-dbguard-"));
@@ -529,7 +617,7 @@ test("trichat.autopilot preserves a source leaf delegation brief when the counci
     ].join(" | ");
     assert.match(
       preservedBriefText,
-      /delegation-handoff slice|implementation slice|delegated slice|dashboard updated successfully|no errors in console/i
+      /delegation-handoff slice|implementation slice|delegated slice|delegated dashboard slice|dashboard updated successfully|no errors in console/i
     );
     assert.match(preservedBriefText, /changed files|verification command|verification result/i);
     assert.match(preservedBriefText, /dashboard delegation slice|spill|beyond delegated slice/i);
