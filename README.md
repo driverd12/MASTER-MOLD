@@ -248,6 +248,13 @@ This dashboard is MCP-backed and reads live state from:
 
 The office scene keeps working agents at their desks, moves active chatter to the coffee and water cooler strip, shows resets in the lounge, and parks long-idle agents on the sofa in sleep mode. Action badges reflect real MCP/tmux signals such as desk work, briefing, chatting, break/reset, blocked, offline, and sleep.
 
+Recent polish added:
+
+- a stylized night-shift office banner with a built-in mascot and richer ASCII sprite poses
+- animated per-agent states for desk work, supervision, chatter, break, blocked, offline, and sleep
+- a `t` hotkey to cycle dashboard themes (`night`, `sunrise`, `mono`)
+- confidence-check surfacing in the briefing board so ring-leader confidence is explainable, not just numeric
+
 Install the single-click macOS app launcher in `/Applications`:
 
 ```bash
@@ -255,6 +262,29 @@ npm run trichat:app:install
 ```
 
 By default the app opens the tmux-backed Agent Office dashboard and generates its own built-in office mascot icon if you do not pass `--icon`.
+
+Keyboard controls inside the TUI:
+
+- `1` office
+- `2` briefing
+- `3` lanes
+- `4` workers
+- `h` help
+- `r` refresh
+- `p` pause
+- `t` cycle theme
+- `q` quit
+
+## Borrowed Wins
+
+The current office/TriChat environment intentionally borrows and reinterprets the strongest open-source ideas from:
+
+- [RALPH TUI](https://github.com/subsy/ralph-tui): multi-pane operator UX, persistent dashboard feel, session-oriented monitoring, and a more playful terminal surface
+- [Get Shit Done](https://github.com/gsd-build/get-shit-done): bounded work packets, single-owner delegation, and orchestration that stays simple while the system grows complex
+- [autoresearch](https://github.com/karpathy/autoresearch): small-budget experiment loops, org-first task shaping, and disciplined overnight continuation
+- [SuperClaude Framework](https://github.com/SuperClaude-Org/SuperClaude_Framework): confidence-before-action methodology and explicit mode/check thinking before implementation
+
+We also reviewed the DAN-prompt gist for stylistic inspiration only. Unsafe jailbreak behavior is intentionally excluded; the only acceptable lift is playful operator-facing mode naming, not guardrail bypassing.
 
 ## Replication Bundle
 

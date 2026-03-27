@@ -81,6 +81,7 @@ def default_transport() -> str:
 DEFAULT_THREAD_ID = "ring-leader-main"
 DEFAULT_VIEW = "office"
 VIEW_ORDER = ["office", "briefing", "lanes", "workers", "help"]
+THEME_ORDER = ["night", "sunrise", "mono"]
 DESK_STATES = {"working", "idle", "blocked", "offline", "supervising"}
 STATE_LABELS = {
     "working": "WORK",
@@ -100,6 +101,33 @@ ROLE_RANK = {
     "verifier": 3,
     "planner": 4,
     "reliability-critic": 5,
+}
+THEME_LABELS = {
+    "night": "Night Shift",
+    "sunrise": "Sunrise Sprint",
+    "mono": "Mono Focus",
+}
+THEME_SKYLINES = {
+    "night": [
+        " .     *        .       .          _..._        *       .   ",
+        "     .       .       .          .:::::::.           .      ",
+        "  .      .        .          .::'  ___  `::.    .       .  ",
+    ],
+    "sunrise": [
+        "   \\   /        .       .      .-''''-.     .      .      ",
+        "    .-.      .       .        /  .-.  \\        .          ",
+        " -- ( ) --        .        . |  /   \\  |   .       .      ",
+    ],
+    "mono": [
+        "  . . . . . . . . . . . . . . . . . . . . . . . . . . .  ",
+        "  ----------- focused operator floor ------------          ",
+        "  . . . . . . . . . . . . . . . . . . . . . . . . . . .  ",
+    ],
+}
+THEME_MASCOT = {
+    "night": ["      .------.      ", "      | >  < |      ", "      | [__] |      ", "      '------'      "],
+    "sunrise": ["      .------.      ", "      | ^  ^ |      ", "      | [__] |      ", "      '------'      "],
+    "mono": ["      .------.      ", "      | o  o |      ", "      | [__] |      ", "      '------'      "],
 }
 
 
@@ -201,6 +229,50 @@ def dedupe(items: Iterable[str]) -> List[str]:
         seen.add(item)
         ordered.append(item)
     return ordered
+
+
+def normalize_theme(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in THEME_ORDER else THEME_ORDER[0]
+
+
+def next_theme(value: str) -> str:
+    normalized = normalize_theme(value)
+    index = THEME_ORDER.index(normalized)
+    return THEME_ORDER[(index + 1) % len(THEME_ORDER)]
+
+
+def theme_label(theme: str) -> str:
+    return THEME_LABELS.get(normalize_theme(theme), THEME_LABELS[THEME_ORDER[0]])
+
+
+def build_scene_banner(theme: str, width: int, frame: int) -> List[str]:
+    width = max(24, width)
+    normalized = normalize_theme(theme)
+    skyline = THEME_SKYLINES[normalized]
+    mascot = THEME_MASCOT[normalized]
+    shimmer = "." if frame % 2 == 0 else "*"
+    marquee = fit_text(
+        f"AGENT OFFICE :: {theme_label(normalized)} :: sprites, tmux lanes, MCP telemetry, and bounded delegation",
+        width,
+    )
+    lines = [marquee]
+    lines.extend(fit_text(line.replace(".", shimmer, 1), width) for line in skyline)
+    lines.extend(fit_text(line, width) for line in mascot)
+    return lines
+
+
+def build_view_tabs(active_view: str, width: int, theme: str) -> str:
+    tabs = []
+    for index, view in enumerate(VIEW_ORDER[:-1], start=1):
+        label = view.upper()
+        if view == active_view:
+            tabs.append(f"[{index}:{label}*]")
+        else:
+            tabs.append(f"[{index}:{label}]")
+    tabs.append("[H:HELP]")
+    tabs.append(f"[T:{theme_label(theme)}]")
+    return fit_text(" ".join(tabs), width)
 
 
 class McpToolCaller:
@@ -407,6 +479,23 @@ def primary_delegation_brief(latest_decision: Dict[str, Any], latest_turn: Dict[
     if briefs:
         return as_dict(briefs[0])
     return {}
+
+
+def build_spawn_path(latest_decision: Dict[str, Any], latest_turn: Dict[str, Any], session_metadata: Dict[str, Any]) -> str:
+    lead = normalize_agent_id(session_metadata.get("lead_agent_id") or latest_turn.get("lead_agent_id") or "ring-leader")
+    selected = normalize_agent_id(
+        latest_decision.get("selected_agent") or latest_turn.get("selected_agent") or session_metadata.get("last_selected_agent_id")
+    )
+    brief = primary_delegation_brief(latest_decision, latest_turn, session_metadata)
+    delegate = normalize_agent_id(brief.get("delegate_agent_id") or session_metadata.get("last_selected_delegate_agent_id"))
+    chain = [part for part in [lead, selected, delegate] if part]
+    if not chain:
+        return "n/a"
+    compacted: List[str] = []
+    for part in chain:
+        if part not in compacted:
+            compacted.append(part)
+    return " -> ".join(compacted)
 
 
 def add_parent_chain(agent_id: str, catalog: Dict[str, DashboardAgent], bucket: List[str]) -> None:
@@ -824,66 +913,99 @@ def state_counts(presences: List[OfficePresence]) -> Dict[str, int]:
 
 
 def sprite_lines(presence: OfficePresence, frame: int) -> Tuple[str, str]:
-    hat = {
-        "lead": " ^_^ ",
-        "director": " *^* ",
-        "leaf": " ._. ",
-        "support": " ~^~ ",
-    }.get(presence.agent.tier, " .-. ")
+    brow = {
+        "lead": " .^^^^. ",
+        "director": " .-**-. ",
+        "leaf": " .-..-. ",
+        "support": " .~~~~. ",
+    }.get(presence.agent.tier, " .----. ")
+    if presence.state == "working":
+        face = " |o  o| " if frame % 2 else " |o  O| "
+    elif presence.state == "supervising":
+        face = " |>  <| "
+    elif presence.state == "talking":
+        face = " |^  ^| "
+    elif presence.state == "break":
+        face = " |u  u| "
+    elif presence.state == "sleeping":
+        face = " |-  -| "
+    elif presence.state == "blocked":
+        face = " |x  x| "
+    elif presence.state == "offline":
+        face = " |.  .| "
+    else:
+        face = " |.  o| " if frame % 2 else " |o  .| "
+    return brow, face
+
+
+def sprite_scene_lines(presence: OfficePresence, frame: int) -> List[str]:
+    top, face = sprite_lines(presence, frame)
     token = presence.agent.token
     if presence.state == "working":
-        body = f" <{token}) " if frame % 2 else f" ({token}> "
+        arms = f" |[{token}]|__"
+        feet = "  /||\\  "
     elif presence.state == "supervising":
-        body = f" ({token})! "
+        arms = f" |[{token}]|>>"
+        feet = "  /||\\  "
+    elif presence.state == "talking":
+        arms = f" |[{token}]|~~"
+        feet = "  /||\\  "
     elif presence.state == "break":
-        body = f" ({token})~ "
+        arms = f" |[{token}]|~~"
+        feet = "  _/\\_  "
     elif presence.state == "sleeping":
-        body = f" ({token})_ "
+        arms = f" |[{token}]|zZ"
+        feet = "  _/\\_  "
     elif presence.state == "blocked":
-        body = f" ({token})x "
+        arms = f" |[{token}]|!!"
+        feet = "  /||\\  "
     elif presence.state == "offline":
-        body = f" [{token}]  "
-    elif presence.state == "idle":
-        body = f" ({token})z "
+        arms = f" |[{token}]|.."
+        feet = "   __   "
     else:
-        body = f" \\{token}/ "
-    return hat, body
+        arms = f" |[{token}]|.."
+        feet = "  /||\\  "
+    return [top, face, arms, feet]
 
 
 def render_agent_card(presence: OfficePresence, width: int, frame: int) -> List[str]:
-    width = max(22, width)
+    width = max(24, width)
     inner = width - 2
+    tier = presence.agent.tier.upper()[:4]
     title_left = f"{presence.agent.token} {presence.agent.display_name}"
-    title = fit_text(title_left, max(0, inner - 6))
+    title = fit_text(title_left, max(0, inner - 10))
     status = STATE_LABELS.get(presence.state, presence.state[:5].upper())
-    top = "." + ("-" * inner) + "."
-    bottom = "'" + ("-" * inner) + "'"
-
-    sprite_a, sprite_b = sprite_lines(presence, frame)
+    top = "+" + ("=" * inner) + "+"
+    bottom = "+" + ("=" * inner) + "+"
+    sprite = sprite_scene_lines(presence, frame)
     monitor = "[==]" if presence.state == "working" else "[!!]" if presence.state == "blocked" else "[--]" if presence.state == "offline" else "[..]"
     companion = {
         "cooler": "coffee + chat",
         "lounge": "stretch + water",
-        "sofa": "nap pod",
+        "sofa": "sofa + blanket",
     }.get(presence.location, "pc + mug")
     mood = {
         "working": "typing hard",
         "supervising": "briefing team",
+        "talking": "syncing live",
         "break": "between tasks",
         "sleeping": "offline dreaming",
         "blocked": "needs help",
         "offline": "bridge down",
         "idle": "light idle",
-        "talking": "away at cooler",
     }.get(presence.state, "holding steady")
     badges = " ".join(f"[{tag}]" for tag in presence.actions) or "[ready]"
+    role_line = compact_single_line(f"{tier} :: {presence.agent.role} :: {presence.location}", inner)
 
     return [
         top,
         "|" + fit_text(f"{title}{status.rjust(max(0, inner - len(title)))}", inner) + "|",
+        "|" + fit_text(role_line, inner) + "|",
         "|" + fit_text(f"{monitor} {companion}", inner) + "|",
-        "|" + fit_text(sprite_a, inner) + "|",
-        "|" + fit_text(sprite_b, inner) + "|",
+        "|" + fit_text(sprite[0], inner) + "|",
+        "|" + fit_text(sprite[1], inner) + "|",
+        "|" + fit_text(sprite[2], inner) + "|",
+        "|" + fit_text(sprite[3], inner) + "|",
         "|" + fit_text(badges, inner) + "|",
         "|" + fit_text(compact_single_line(f"{mood} :: {presence.activity}", inner), inner) + "|",
         bottom,
@@ -919,12 +1041,12 @@ def render_lounge_line(presences: List[OfficePresence], width: int, frame: int) 
         tokens: List[str] = []
         for presence in group:
             _, body = sprite_lines(presence, frame)
-            tokens.append(compact_single_line(f"{body.strip()} {presence.agent.display_name}", 22))
+            tokens.append(compact_single_line(f"{body.strip()} {presence.agent.display_name}", 24))
         lines.append(fit_text(f"{label}: {'  '.join(tokens)}", width))
     return lines
 
 
-def render_office_view(snapshot: DashboardSnapshot, width: int, height: int, frame: int) -> List[str]:
+def render_office_view(snapshot: DashboardSnapshot, width: int, height: int, frame: int, theme: str = "night") -> List[str]:
     agents = select_display_agents(snapshot.roster, snapshot.workboard)
     presences = derive_presence_map(
         agents,
@@ -945,13 +1067,12 @@ def render_office_view(snapshot: DashboardSnapshot, width: int, height: int, fra
     available_width = max(40, width)
     columns = 3 if available_width >= 94 else 2 if available_width >= 62 else 1
     gap = 2
-    card_width = max(22, min(30, (available_width - (gap * (columns - 1))) // columns))
+    card_width = max(24, min(32, (available_width - (gap * (columns - 1))) // columns))
     cards = [render_agent_card(presence, card_width, frame) for presence in presences]
-    lines = [
-        fit_text("PIXEL OFFICE :: Ring leader, directors, leaf agents, and support lanes", available_width),
-        fit_text(banner, available_width),
-        "",
-    ]
+    lines = build_scene_banner(theme, available_width, frame)
+    lines.append(fit_text(banner, available_width))
+    lines.append(fit_text("Desk row :: ring leader, directors, leaf SMEs, and support mentors on one live floor", available_width))
+    lines.append("")
     lines.extend(render_card_grid(cards, columns=columns, gap=gap))
     lines.append("")
     lines.extend(render_lounge_line(presences, available_width, frame))
@@ -985,6 +1106,9 @@ def render_briefing_view(snapshot: DashboardSnapshot, width: int, height: int) -
     learning_signal = as_dict(last_tick.get("learning_signal"))
     if not learning_signal:
         learning_signal = as_dict(autopilot_session_metadata.get("last_learning_signal"))
+    confidence_method = as_dict(last_tick.get("confidence_method"))
+    if not confidence_method:
+        confidence_method = as_dict(autopilot_session_metadata.get("last_confidence_method"))
     current_task_id = (
         str(autopilot_session_metadata.get("current_task_id") or "").strip()
         or str(autopilot_session_metadata.get("last_source_task_id") or "").strip()
@@ -1002,6 +1126,7 @@ def render_briefing_view(snapshot: DashboardSnapshot, width: int, height: int) -
         220,
     )
     delegation_brief = primary_delegation_brief(latest_decision, latest, autopilot_session_metadata)
+    spawn_path = build_spawn_path(latest_decision, latest, autopilot_session_metadata)
     execution_task_ids = dedupe(
         as_list(as_dict(last_tick.get("execution")).get("task_ids"))
         + as_list(autopilot_session_metadata.get("last_execution_task_ids"))
@@ -1058,6 +1183,8 @@ def render_briefing_view(snapshot: DashboardSnapshot, width: int, height: int) -
             fit_text(
                 "Ring leader :: "
                 f"tick_ok={'yes' if last_tick.get('ok') else 'no'} "
+                f"confidence={float(last_tick.get('council_confidence') or 0):.2f} "
+                f"substance={float(last_tick.get('plan_substance') or 0):.2f} "
                 f"prefer={parse_any_int(learning_signal.get('matched_prefer'))} "
                 f"avoid={parse_any_int(learning_signal.get('matched_avoid'))} "
                 f"adj={adjustment:+.2f}",
@@ -1067,6 +1194,31 @@ def render_briefing_view(snapshot: DashboardSnapshot, width: int, height: int) -
         rationale = as_list(learning_signal.get("rationale"))
         if rationale:
             lines.extend(wrap_lines(f"Learning signal: {rationale[0]}", width, 2))
+        if confidence_method:
+            checks = as_dict(confidence_method.get("checks"))
+            lines.extend(
+                wrap_lines(
+                    "Confidence method: "
+                    f"mode={confidence_method.get('mode') or 'gsd-confidence'} "
+                    f"score={float(confidence_method.get('score') or 0):.2f} "
+                    f"adj={float(confidence_method.get('confidence_adjustment') or 0):+.2f}",
+                    width,
+                    2,
+                )
+            )
+            if checks:
+                lines.extend(
+                    wrap_lines(
+                        "Checks: "
+                        f"owner={float(checks.get('owner_clarity') or 0):.2f} "
+                        f"action={float(checks.get('actionability') or 0):.2f} "
+                        f"evidence={float(checks.get('evidence_bar') or 0):.2f} "
+                        f"rollback={float(checks.get('rollback_ready') or 0):.2f} "
+                        f"anti_echo={float(checks.get('anti_echo') or 0):.2f}",
+                        width,
+                        2,
+                    )
+                )
         lines.append("")
     attention = as_list(kernel.get("attention"))[:2]
     if attention:
@@ -1081,6 +1233,8 @@ def render_briefing_view(snapshot: DashboardSnapshot, width: int, height: int) -
         lines.append("")
         lines.append(fit_text("Selected strategy:", width))
         lines.extend(wrap_lines(strategy, width, 4))
+    lines.append("")
+    lines.append(fit_text(f"Spawn path: {spawn_path}", width))
     if current_objective:
         lines.append("")
         lines.append(fit_text("Current objective:", width))
@@ -1262,11 +1416,11 @@ def render_workers_view(snapshot: DashboardSnapshot, width: int, height: int) ->
     return lines[: max(1, height)]
 
 
-def render_help_view(width: int, height: int) -> List[str]:
+def render_help_view(width: int, height: int, theme: str = "night") -> List[str]:
     lines = [
         fit_text("HELP", width),
         fit_text("1 Office   2 Briefing   3 Lanes   4 Workers   h Help", width),
-        fit_text("r Refresh  p Pause      q Quit", width),
+        fit_text("r Refresh  p Pause      t Theme   q Quit", width),
         "",
         fit_text("The office scene is driven by MCP tools:", width),
         fit_text("- trichat.roster", width),
@@ -1283,11 +1437,18 @@ def render_help_view(width: int, height: int) -> List[str]:
         fit_text("- trichat.autopilot(status)", width),
         "",
         fit_text("Agents can stack action badges: desk/code, brief/multi, chat/coffee, break/reset, or sleep/nap.", width),
+        fit_text(f"Current theme: {theme_label(theme)}", width),
+        "",
+        fit_text("Built-in methodology wins:", width),
+        fit_text("- Ralph-style live operator surface, tabs, and persistent tmux war room", width),
+        fit_text("- GSD-style bounded work packets with one owner, evidence, and rollback", width),
+        fit_text("- autoresearch-style small-budget loops and org-first delegation discipline", width),
+        fit_text("- SuperClaude-inspired confidence checks before high-confidence plans", width),
     ]
     return lines[: max(1, height)]
 
 
-def render_view(snapshot: DashboardSnapshot, view: str, width: int, height: int, frame: int) -> List[str]:
+def render_view(snapshot: DashboardSnapshot, view: str, width: int, height: int, frame: int, theme: str = "night") -> List[str]:
     if view == "briefing":
         return render_briefing_view(snapshot, width, height)
     if view == "lanes":
@@ -1295,8 +1456,8 @@ def render_view(snapshot: DashboardSnapshot, view: str, width: int, height: int,
     if view == "workers":
         return render_workers_view(snapshot, width, height)
     if view == "help":
-        return render_help_view(width, height)
-    return render_office_view(snapshot, width, height, frame)
+        return render_help_view(width, height, theme=theme)
+    return render_office_view(snapshot, width, height, frame, theme=theme)
 
 
 def color_for_state(state: str) -> int:
@@ -1313,18 +1474,20 @@ def color_for_state(state: str) -> int:
     return mapping.get(state, 2)
 
 
-def init_colors() -> None:
+def init_colors(theme: str = "night") -> None:
     if not curses.has_colors():
         return
     curses.start_color()
     curses.use_default_colors()
-    curses.init_pair(1, curses.COLOR_CYAN, -1)
-    curses.init_pair(2, curses.COLOR_WHITE, -1)
-    curses.init_pair(3, curses.COLOR_GREEN, -1)
-    curses.init_pair(4, curses.COLOR_YELLOW, -1)
-    curses.init_pair(5, curses.COLOR_MAGENTA, -1)
-    curses.init_pair(6, curses.COLOR_RED, -1)
-    curses.init_pair(7, curses.COLOR_BLUE, -1)
+    normalized = normalize_theme(theme)
+    palettes = {
+        "night": (curses.COLOR_CYAN, curses.COLOR_WHITE, curses.COLOR_GREEN, curses.COLOR_YELLOW, curses.COLOR_MAGENTA, curses.COLOR_RED, curses.COLOR_BLUE, curses.COLOR_CYAN),
+        "sunrise": (curses.COLOR_YELLOW, curses.COLOR_WHITE, curses.COLOR_GREEN, curses.COLOR_CYAN, curses.COLOR_MAGENTA, curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_MAGENTA),
+        "mono": (curses.COLOR_WHITE, curses.COLOR_WHITE, curses.COLOR_WHITE, curses.COLOR_WHITE, curses.COLOR_WHITE, curses.COLOR_WHITE, curses.COLOR_WHITE, curses.COLOR_WHITE),
+    }
+    selected = palettes[normalized]
+    for index, color in enumerate(selected, start=1):
+        curses.init_pair(index, color, -1)
 
 
 def safe_addstr(screen: Any, y: int, x: int, text: str, attr: int = 0) -> None:
@@ -1413,6 +1576,7 @@ class OfficeDashboardApp:
         )
         self.thread_id = args.thread_id or (pick_resume_thread(self.caller) if args.resume_latest else DEFAULT_THREAD_ID)
         self.view = args.view if args.view in VIEW_ORDER else DEFAULT_VIEW
+        self.theme = normalize_theme(args.theme)
         self.paused = False
         self.last_error = ""
         self.snapshot: Optional[DashboardSnapshot] = None
@@ -1446,7 +1610,7 @@ class OfficeDashboardApp:
             autopilot={},
             errors=[self.last_error] if self.last_error else [],
         )
-        lines = render_view(snapshot, self.view, self.args.width, self.args.height, frame=0)
+        lines = render_view(snapshot, self.view, self.args.width, self.args.height, frame=0, theme=self.theme)
         print("\n".join(lines))
         if self.last_error:
             print(f"\nERROR: {self.last_error}")
@@ -1459,7 +1623,7 @@ class OfficeDashboardApp:
         curses.curs_set(0)
         screen.nodelay(True)
         screen.timeout(120)
-        init_colors()
+        init_colors(self.theme)
         self.refresh()
         next_refresh_at = time.monotonic() + max(0.5, float(self.args.refresh_interval))
         while True:
@@ -1490,6 +1654,9 @@ class OfficeDashboardApp:
                 next_refresh_at = time.monotonic() + max(0.5, float(self.args.refresh_interval))
             elif normalized == "p":
                 self.paused = not self.paused
+            elif normalized == "t":
+                self.theme = next_theme(self.theme)
+                init_colors(self.theme)
 
     def _render(self, screen: Any, width: int, height: int, frame: int) -> None:
         screen.erase()
@@ -1511,19 +1678,21 @@ class OfficeDashboardApp:
         header = (
             f"Agent Office Dashboard [{self.view}] "
             f"thread={self.thread_id} refresh={self.args.refresh_interval:.1f}s "
-            f"{'PAUSED' if self.paused else 'LIVE'}"
+            f"theme={theme_label(self.theme)} {'PAUSED' if self.paused else 'LIVE'}"
         )
-        help_line = "1 office  2 briefing  3 lanes  4 workers  h help  r refresh  p pause  q quit"
-        safe_addstr(screen, 0, 0, fit_text(header, width), curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(screen, 1, 0, fit_text(help_line, width), curses.color_pair(2))
+        tabs_line = build_view_tabs(self.view, width, self.theme)
+        help_line = "r refresh  p pause  t theme  q quit"
+        safe_addstr(screen, 0, 0, fit_text(header, width), curses.color_pair(8) | curses.A_BOLD)
+        safe_addstr(screen, 1, 0, tabs_line, curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(screen, 2, 0, fit_text(help_line, width), curses.color_pair(2))
         if self.last_error:
-            safe_addstr(screen, 2, 0, fit_text(f"Last error: {self.last_error}", width), curses.color_pair(6) | curses.A_BOLD)
+            safe_addstr(screen, 3, 0, fit_text(f"Last error: {self.last_error}", width), curses.color_pair(6) | curses.A_BOLD)
         else:
             stale = human_duration(time.time() - snapshot.fetched_at)
-            safe_addstr(screen, 2, 0, fit_text(f"Telemetry age: {stale}", width), curses.color_pair(2))
+            safe_addstr(screen, 3, 0, fit_text(f"Telemetry age: {stale}", width), curses.color_pair(2))
 
-        lines = render_view(snapshot, self.view, max(20, width - 1), max(1, height - 4), frame)
-        for index, line in enumerate(lines[: max(0, height - 4)]):
+        lines = render_view(snapshot, self.view, max(20, width - 1), max(1, height - 5), frame, theme=self.theme)
+        for index, line in enumerate(lines[: max(0, height - 5)]):
             attr = curses.color_pair(2)
             if "[::]" in line or "[OO]" in line:
                 attr = curses.color_pair(1)
@@ -1539,7 +1708,7 @@ class OfficeDashboardApp:
                 attr = curses.color_pair(7)
             elif "CHAT" in line:
                 attr = curses.color_pair(5)
-            safe_addstr(screen, index + 4, 0, fit_text(line, width), attr)
+            safe_addstr(screen, index + 5, 0, fit_text(line, width), attr)
         screen.refresh()
 
 
@@ -1557,6 +1726,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stdio-args", default=os.environ.get("TRICHAT_MCP_STDIO_ARGS", "dist/server.js"), help="STDIO MCP args.")
     parser.add_argument("--mcp-retries", type=int, default=1, help="Retry count for MCP calls.")
     parser.add_argument("--mcp-retry-delay", type=float, default=0.2, help="Base retry delay for MCP calls.")
+    parser.add_argument("--theme", default=os.environ.get("TRICHAT_OFFICE_THEME", "night"), choices=THEME_ORDER, help="Dashboard theme.")
     parser.add_argument("--once", action="store_true", help="Render once to stdout without curses.")
     parser.add_argument("--width", type=int, default=118, help="Plain render width when --once is used.")
     parser.add_argument("--height", type=int, default=44, help="Plain render height when --once is used.")

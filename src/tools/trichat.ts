@@ -675,6 +675,7 @@ type TriChatAutopilotTickResult = {
     top_avoid: string[];
     rationale: string[];
   };
+  confidence_method: AutopilotConfidenceMethod;
   emergency_brake_triggered: boolean;
   incident_id: string | null;
   verify_status: "passed" | "failed" | "skipped" | "error";
@@ -2516,6 +2517,7 @@ type AutopilotCouncilResult = {
     top_avoid: string[];
     rationale: string[];
   };
+  confidence_method: AutopilotConfidenceMethod;
 };
 
 type AutopilotCommandPlan = {
@@ -2526,6 +2528,20 @@ type AutopilotCommandPlan = {
   blocked_by: Record<string, string>;
   classification: "read" | "write" | "destructive";
   destructive: boolean;
+};
+
+type AutopilotConfidenceMethod = {
+  mode: "gsd-confidence";
+  score: number;
+  confidence_adjustment: number;
+  checks: {
+    owner_clarity: number;
+    actionability: number;
+    evidence_bar: number;
+    rollback_ready: number;
+    anti_echo: number;
+  };
+  rationale: string[];
 };
 
 type AutopilotSafetyGateResult = {
@@ -2936,6 +2952,7 @@ async function runAutopilotTick(
         selected_strategy: council.selected_strategy,
         plan_substance: council.plan_substance,
         learning_signal: council.learning_signal,
+        confidence_method: council.confidence_method,
         selected_delegation_brief: council.selected_delegation_brief,
         selected_delegation_briefs: council.selected_delegation_briefs,
         decision_summary: council.decision_summary,
@@ -3276,6 +3293,7 @@ async function runAutopilotTick(
       plan_substance: council.plan_substance,
       success_agents: successAgents,
       learning_signal: council.learning_signal,
+      confidence_method: council.confidence_method,
       emergency_brake_triggered: emergencyBrakeTriggered,
       incident_id: incidentId,
       verify_status: verifyStatus,
@@ -3313,6 +3331,7 @@ async function runAutopilotTick(
         last_tick_at: tickResult.completed_at,
         last_tick_reason: tickResult.reason,
         last_learning_signal: tickResult.learning_signal,
+        last_confidence_method: tickResult.confidence_method,
         last_learning_entry_count: tickResult.mentorship.learning_entry_count,
         last_source_task_id: sourceTaskId,
         last_source_task_objective: sourceTaskObjective,
@@ -3368,6 +3387,19 @@ async function runAutopilotTick(
         confidence_adjustment: 0,
         top_prefer: [],
         top_avoid: [],
+        rationale: [],
+      },
+      confidence_method: {
+        mode: "gsd-confidence",
+        score: 0,
+        confidence_adjustment: 0,
+        checks: {
+          owner_clarity: 0,
+          actionability: 0,
+          evidence_bar: 0,
+          rollback_ready: 0,
+          anti_echo: 0,
+        },
         rationale: [],
       },
       emergency_brake_triggered: false,
@@ -3441,6 +3473,7 @@ async function runAutopilotTick(
         last_tick_at: tickResult.completed_at,
         last_tick_reason: reason,
         last_learning_signal: tickResult.learning_signal,
+        last_confidence_method: tickResult.confidence_method,
         last_learning_entry_count: tickResult.mentorship.learning_entry_count,
         last_source_task_id: sourceTaskId,
         last_source_task_objective: sourceTaskObjective,
@@ -3822,8 +3855,17 @@ async function runAutopilotCouncil(
     selected_delegation_briefs: delegationSelection.delegation_briefs,
     plan_substance: planSubstance,
   });
+  const confidenceMethod = buildAutopilotConfidenceMethod({
+    objective: input.intake.objective,
+    selected_agent: selectedAgent,
+    selected_strategy: selectedStrategy,
+    selected_task_objective: delegationSelection.task_objective,
+    selected_delegation_briefs: delegationSelection.delegation_briefs,
+    command_plan: councilCommandPlan,
+  });
   const adjustedConfidence = scoreAutopilotCouncilConfidence({
-    confidence_seed: confidenceSeed + learningSignal.confidence_adjustment,
+    confidence_seed:
+      confidenceSeed + learningSignal.confidence_adjustment + confidenceMethod.confidence_adjustment,
     success_agents: successAgents.size,
     min_success_agents: input.config.min_success_agents,
     plan_substance: planSubstance,
@@ -3843,6 +3885,7 @@ async function runAutopilotCouncil(
     selected_delegation_brief: delegationSelection.delegation_brief,
     selected_delegation_briefs: delegationSelection.delegation_briefs,
     learning_signal: learningSignal,
+    confidence_method: confidenceMethod,
   };
 }
 
@@ -4768,6 +4811,91 @@ function scoreAutopilotPlanSubstance(input: {
     score -= 0.18;
   }
   return clamp(score, 0.05, 0.99);
+}
+
+function buildAutopilotConfidenceMethod(input: {
+  objective: string;
+  selected_agent: string | null;
+  selected_strategy: string;
+  selected_task_objective: string | null;
+  selected_delegation_briefs: AutopilotDelegationBrief[];
+  command_plan: Pick<AutopilotCommandPlan, "classification" | "allowed_commands" | "commands" | "source">;
+}): AutopilotConfidenceMethod {
+  const briefs = dedupeAutopilotDelegationBriefs(input.selected_delegation_briefs);
+  const explicitOwners = briefs.filter((brief) => Boolean(brief.delegate_agent_id)).length;
+  const explicitObjectives =
+    briefs.filter((brief) => Boolean(brief.task_objective)).length + (input.selected_task_objective ? 1 : 0);
+  const evidenceCount = briefs.reduce((total, brief) => total + brief.evidence_requirements.length, 0);
+  const rollbackCount = briefs.reduce((total, brief) => total + brief.rollback_notes.length, 0);
+  const objectiveEcho = calculateAutopilotObjectiveEchoRatio(input.selected_strategy, input.objective);
+  const strategySpecificity = tokenizeAutopilotPlanningText(input.selected_strategy).length;
+  const hasCommands = input.command_plan.allowed_commands.length > 0;
+  const ownerClarity =
+    explicitOwners > 0 ? Math.min(1, 0.72 + explicitOwners * 0.12) : hasCommands ? 0.66 : input.selected_agent ? 0.32 : 0.12;
+  const actionability =
+    hasCommands ? Math.min(1, 0.7 + input.command_plan.allowed_commands.length * 0.08) : explicitObjectives > 0 ? 0.76 : 0.16;
+  const evidenceBar =
+    evidenceCount > 0
+      ? Math.min(1, 0.48 + evidenceCount * 0.12)
+      : hasCommands && input.command_plan.classification === "read"
+        ? 0.58
+        : 0.18;
+  const rollbackReady =
+    input.command_plan.classification === "read"
+      ? rollbackCount > 0
+        ? 0.82
+        : 0.62
+      : rollbackCount > 0
+        ? Math.min(1, 0.46 + rollbackCount * 0.16)
+        : 0.14;
+  const antiEcho =
+    objectiveEcho <= 0.32
+      ? Math.min(1, 0.72 + Math.min(strategySpecificity, 8) * 0.03)
+      : objectiveEcho <= 0.55
+        ? 0.64
+        : objectiveEcho <= 0.72
+          ? 0.42
+          : 0.16;
+  const score = clamp((ownerClarity + actionability + evidenceBar + rollbackReady + antiEcho) / 5, 0.05, 0.99);
+  let confidenceAdjustment = 0;
+  if (score >= 0.84) {
+    confidenceAdjustment += 0.05;
+  } else if (score >= 0.7) {
+    confidenceAdjustment += 0.02;
+  } else if (score < 0.4) {
+    confidenceAdjustment -= 0.08;
+  } else if (score < 0.55) {
+    confidenceAdjustment -= 0.04;
+  }
+  const rationale: string[] = [];
+  if (ownerClarity < 0.55) {
+    rationale.push("Owner clarity is weak; name who owns the next bounded slice.");
+  }
+  if (evidenceBar < 0.55) {
+    rationale.push("Evidence bar is thin; require concrete proof before raising confidence.");
+  }
+  if (rollbackReady < 0.5 && input.command_plan.classification !== "read") {
+    rationale.push("Rollback readiness is weak for non-read work.");
+  }
+  if (antiEcho < 0.5) {
+    rationale.push("Strategy echoes the objective too closely; add concrete novelty or lower confidence.");
+  }
+  if (rationale.length === 0) {
+    rationale.push("Confidence checks passed: owner, action, evidence, rollback, and non-echo all look serviceable.");
+  }
+  return {
+    mode: "gsd-confidence",
+    score,
+    confidence_adjustment: clamp(confidenceAdjustment, -0.12, 0.08),
+    checks: {
+      owner_clarity: clamp(ownerClarity, 0.05, 1),
+      actionability: clamp(actionability, 0.05, 1),
+      evidence_bar: clamp(evidenceBar, 0.05, 1),
+      rollback_ready: clamp(rollbackReady, 0.05, 1),
+      anti_echo: clamp(antiEcho, 0.05, 1),
+    },
+    rationale: rationale.slice(0, 3),
+  };
 }
 
 const AUTOPILOT_AGENT_LEARNING_PROMPT_LIMIT = 4;
@@ -6782,6 +6910,19 @@ async function runAutopilotOverlapSkip(
       top_avoid: [],
       rationale: [],
     },
+    confidence_method: {
+      mode: "gsd-confidence",
+      score: 0,
+      confidence_adjustment: 0,
+      checks: {
+        owner_clarity: 0,
+        actionability: 0,
+        evidence_bar: 0,
+        rollback_ready: 0,
+        anti_echo: 0,
+      },
+      rationale: [],
+    },
     emergency_brake_triggered: false,
     incident_id: null,
     verify_status: "skipped",
@@ -7597,6 +7738,9 @@ function buildAutopilotCouncilPrompt(input: {
     `{"strategy":"...","commands":["..."],"confidence":0.0-1.0,"mentorship_note":"teach local llama what to retain","delegate_agent_id":"optional-specialist","task_objective":"optional bounded task","success_criteria":["..."],"evidence_requirements":["..."],"rollback_notes":["..."],"delegations":[{"delegate_agent_id":"owner","task_objective":"bounded task","success_criteria":["..."],"evidence_requirements":["..."],"rollback_notes":["..."]}]}`,
     hierarchyInstruction,
     "Prefer concrete commands, bounded delegation, and safety-aware reasoning.",
+    "Program the org, not the loop: route work to the right agent/tool instead of inventing self-improvement-only tasks.",
+    "Use small-budget progress loops: prefer the smallest compare/build/verify pass that can materially change confidence.",
+    "Before confidence above 0.72, silently pass these checks: owner clarity, actionability, evidence bar, rollback readiness, and non-echo novelty.",
     "If more than one bounded assignment is warranted, use delegations with one owner per item and keep the items non-overlapping.",
     "When you emit delegations, also mirror the highest-priority item into delegate_agent_id/task_objective/success_criteria/evidence_requirements/rollback_notes for backward compatibility.",
     "If no command is safe, return empty commands and explain in strategy.",

@@ -240,6 +240,18 @@ def build_local_prompt(context: BridgeContext) -> str:
         if compact(str(entry), 220)
     ][:4]
     learning_guardrail = compact(str(context.payload.get("learning_guardrail") or ""), 220)
+    confidence_checks = [
+        "owner clarity",
+        "actionability",
+        "evidence bar",
+        "rollback readiness",
+        "non-echo novelty",
+    ]
+    method_lines = [
+        "- Program the org, not the loop: route work to the right agent or tool instead of inventing self-improvement-only tasks.",
+        "- Use small-budget progress loops: prefer the smallest compare/build/verify pass that can change confidence quickly.",
+        f"- Before confidence above 0.72, silently pass these checks: {', '.join(confidence_checks)}.",
+    ]
     if context.response_mode == "plain":
         plain_lines = [
             f"You are {context.agent_id}, the {role} for workspace: {context.workspace}.",
@@ -250,6 +262,7 @@ def build_local_prompt(context: BridgeContext) -> str:
         ]
         if reports_to:
             plain_lines.append(f"- Report ownership and progress back through {reports_to}.")
+        plain_lines.extend(method_lines[:2])
         plain_lines.append(f"User message: {context.objective}")
         return "\n".join(plain_lines) + "\n"
     hierarchy_lines: list[str] = []
@@ -290,6 +303,7 @@ def build_local_prompt(context: BridgeContext) -> str:
         "- Use GSD-style instruction writing: crisp owner, bounded task, explicit evidence, explicit stop condition.",
         "- Never claim completion or high confidence without named evidence.",
         "- If your strategy mostly repeats the objective without a clear owner, evidence, or rollback note, lower confidence below 0.55.",
+        *method_lines,
         *hierarchy_lines,
         *(
             ["Recent learned patterns:"] + [f"- {note}" for note in learning_notes]

@@ -286,9 +286,10 @@ class AgentOfficeDashboardTests(unittest.TestCase):
         )
         lines = MODULE.render_office_view(snapshot, width=100, height=40, frame=0)
         joined = "\n".join(lines)
+        self.assertIn("AGENT OFFICE :: Night Shift", joined)
         self.assertIn("Coffee [::]", joined)
         self.assertIn("Water [OO]", joined)
-        self.assertIn("Sofa [__]", joined)
+        self.assertIn(".------.", joined)
 
     def test_briefing_view_surfaces_learning_and_ring_leader_signal(self) -> None:
         snapshot = MODULE.DashboardSnapshot(
@@ -362,12 +363,26 @@ class AgentOfficeDashboardTests(unittest.TestCase):
                 },
                 "last_tick": {
                     "ok": True,
+                    "council_confidence": 0.86,
+                    "plan_substance": 0.78,
                     "learning_signal": {
                         "matched_prefer": 1,
                         "matched_avoid": 0,
                         "confidence_adjustment": 0.04,
                         "rationale": ["Aligned with learned prefers: bounded delegation"],
-                    }
+                    },
+                    "confidence_method": {
+                        "mode": "gsd-confidence",
+                        "score": 0.83,
+                        "confidence_adjustment": 0.05,
+                        "checks": {
+                            "owner_clarity": 0.9,
+                            "actionability": 0.82,
+                            "evidence_bar": 0.8,
+                            "rollback_ready": 0.74,
+                            "anti_echo": 0.88,
+                        },
+                    },
                 }
             },
             errors=[],
@@ -376,10 +391,19 @@ class AgentOfficeDashboardTests(unittest.TestCase):
         joined = "\n".join(lines)
         self.assertIn("Learning :: active=4", joined)
         self.assertIn("Ring leader :: tick_ok=yes", joined)
+        self.assertIn("Confidence method:", joined)
+        self.assertIn("Spawn path: ring-leader -> code-smith", joined)
         self.assertIn("Current objective:", joined)
         self.assertIn("Delegation brief:", joined)
         self.assertIn("Execution backlog:", joined)
         self.assertIn("Most learned agents:", joined)
+
+    def test_help_view_mentions_theme_and_methodology(self) -> None:
+        lines = MODULE.render_help_view(width=120, height=30, theme="sunrise")
+        joined = "\n".join(lines)
+        self.assertIn("t Theme", joined)
+        self.assertIn("Current theme: Sunrise Sprint", joined)
+        self.assertIn("SuperClaude-inspired confidence checks", joined)
 
 
 if __name__ == "__main__":

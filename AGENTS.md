@@ -12,6 +12,7 @@ Build and harden a robust MCP server with real agentic tooling so a local ring l
 - Prefer director-to-leaf delegation chains before skipping straight to leaf SMEs.
 - Use GSD-style work packets: one owner, bounded objective, explicit success criteria, explicit evidence requirements, explicit rollback notes, and an explicit stop condition.
 - Do not treat vague plans, prompt echoes, or empty tool invocations as success. Lower confidence when evidence is thin or the plan is underspecified.
+- Use the ring leader confidence checklist before high-confidence moves: owner clarity, actionability, evidence bar, rollback readiness, and non-echo novelty.
 - Make agents smarter through bounded learning from real outcomes: capture durable per-agent lessons, reuse only the highest-signal task-relevant lessons, and never let learning turn into recursive self-improvement work.
 - Preserve continuity in MCP artifacts, memory, and local repo guidance whenever strategy or long-term goals meaningfully evolve.
 - Keep the office TUI cute, informative, and operationally honest: sprite states should reflect real MCP/tmux/telemetry signals, not fake activity.
@@ -21,6 +22,7 @@ Build and harden a robust MCP server with real agentic tooling so a local ring l
 - The primary local operator UI is the tmux-backed Agent Office dashboard.
 - Launch path should be one-click from `/Applications` via the installed Agent Office app.
 - Office sprites should communicate real states like desk work, briefing, chatting, break/reset, blocked, offline, and sleeping.
+- The office UX should keep borrowing the best open-source wins from projects like Ralph TUI, GSD, autoresearch, and SuperClaude, while explicitly excluding unsafe jailbreak behavior.
 
 ## Reliability Direction
 

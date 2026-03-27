@@ -852,6 +852,9 @@ test("trichat.autopilot records bounded learning and injects it into later bridg
     assert.ok(second.tick.learning_signal.matched_prefer >= 1);
     assert.equal(second.tick.learning_signal.matched_avoid, 0);
     assert.ok(second.tick.learning_signal.confidence_adjustment > 0);
+    assert.equal(second.tick.confidence_method.mode, "gsd-confidence");
+    assert.ok(second.tick.confidence_method.score > 0);
+    assert.ok(second.tick.confidence_method.checks.owner_clarity > 0);
   } finally {
     await session.client.close().catch(() => {});
   }

@@ -27,6 +27,7 @@ need_cmd npm
 SESSION_NAME="${TRICHAT_OFFICE_TMUX_SESSION_NAME:-agent-office}"
 THREAD_ID="${TRICHAT_OFFICE_THREAD_ID:-ring-leader-main}"
 REFRESH_SECONDS="${TRICHAT_OFFICE_REFRESH_SECONDS:-2.0}"
+THEME="${TRICHAT_OFFICE_THEME:-night}"
 TRANSPORT="${TRICHAT_MCP_TRANSPORT:-}"
 if [[ -z "${TRANSPORT}" ]]; then
   if [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
@@ -45,6 +46,7 @@ DASHBOARD_BASE=(
   "--repo-root" "${REPO_ROOT}"
   "--thread-id" "${THREAD_ID}"
   "--refresh-interval" "${REFRESH_SECONDS}"
+  "--theme" "${THEME}"
   "--transport" "${TRANSPORT}"
   "--url" "${URL}"
   "--origin" "${ORIGIN}"
@@ -96,8 +98,13 @@ tmux set-option -t "${SESSION_NAME}" mouse on
 tmux set-option -t "${SESSION_NAME}" renumber-windows on
 tmux set-option -t "${SESSION_NAME}" destroy-unattached off
 tmux set-option -t "${SESSION_NAME}" status-interval 5
-tmux set-option -t "${SESSION_NAME}" status-left "#[bold]Agent Office"
-tmux set-option -t "${SESSION_NAME}" status-right "#[fg=green]#S #[fg=cyan]%H:%M"
+tmux set-option -t "${SESSION_NAME}" status-style "bg=colour234,fg=colour252"
+tmux set-option -t "${SESSION_NAME}" window-status-style "fg=colour244,bg=default"
+tmux set-option -t "${SESSION_NAME}" window-status-current-style "fg=colour222,bg=colour236,bold"
+tmux set-option -t "${SESSION_NAME}" pane-border-style "fg=colour239"
+tmux set-option -t "${SESSION_NAME}" pane-active-border-style "fg=colour81"
+tmux set-option -t "${SESSION_NAME}" status-left "#[fg=colour215,bold]o[ ]o #[fg=colour222,bold]Agent Office #[fg=colour110]${THEME}"
+tmux set-option -t "${SESSION_NAME}" status-right "#[fg=colour114]tmux #[fg=colour81]#S #[fg=colour250]%H:%M"
 tmux select-window -t "${SESSION_NAME}:office"
 
 if [[ "${DETACH}" == "1" ]]; then
