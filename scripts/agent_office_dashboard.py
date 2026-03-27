@@ -1278,6 +1278,10 @@ def render_briefing_view(snapshot: DashboardSnapshot, width: int, height: int) -
     kernel = snapshot.kernel
     kernel_overview = as_dict(kernel.get("overview"))
     kernel_tasks = as_dict(as_dict(kernel.get("tasks")).get("counts"))
+    kernel_worker_fabric = as_dict(kernel.get("worker_fabric"))
+    kernel_model_router = as_dict(kernel.get("model_router"))
+    kernel_evals = as_dict(kernel.get("evals"))
+    kernel_org_programs = as_dict(kernel.get("org_programs"))
     learning = snapshot.learning
     learning_top_agents = as_list(learning.get("top_agents"))
     kernel_learning = as_dict(kernel.get("learning"))
@@ -1354,6 +1358,35 @@ def render_briefing_view(snapshot: DashboardSnapshot, width: int, height: int) -
             f"prefer={parse_any_int(learning.get('prefer_count'))} "
             f"avoid={parse_any_int(learning.get('avoid_count'))} "
             f"coverage={parse_any_int(learning_coverage.get('covered_agent_count'))}/{parse_any_int(learning_coverage.get('active_session_agent_count'))}",
+            width,
+        ),
+        fit_text(
+            "Fabric :: "
+            f"hosts={parse_any_int(kernel_worker_fabric.get('host_count'))} "
+            f"healthy={parse_any_int(as_dict(kernel_worker_fabric.get('health_counts')).get('healthy'))} "
+            f"degraded={parse_any_int(as_dict(kernel_worker_fabric.get('health_counts')).get('degraded'))} "
+            f"default={kernel_worker_fabric.get('default_host_id') or 'n/a'}",
+            width,
+        ),
+        fit_text(
+            "Router :: "
+            f"backends={parse_any_int(kernel_model_router.get('backend_count'))} "
+            f"enabled={parse_any_int(kernel_model_router.get('enabled_backend_count'))} "
+            f"default={kernel_model_router.get('default_backend_id') or 'n/a'} "
+            f"strategy={kernel_model_router.get('strategy') or 'n/a'}",
+            width,
+        ),
+        fit_text(
+            "Evals :: "
+            f"suites={parse_any_int(kernel_evals.get('suite_count'))} "
+            f"cases={parse_any_int(kernel_evals.get('total_case_count'))} "
+            f"router_cases={parse_any_int(kernel_evals.get('router_case_count'))}",
+            width,
+        ),
+        fit_text(
+            "Org :: "
+            f"roles={parse_any_int(kernel_org_programs.get('role_count'))} "
+            f"active_versions={parse_any_int(kernel_org_programs.get('active_version_count'))}",
             width,
         ),
         "",
@@ -1498,6 +1531,23 @@ def render_lanes_view(snapshot: DashboardSnapshot, width: int, height: int) -> L
         ),
         "",
     ]
+    host_load = as_list(tmux_dashboard.get("host_load"))
+    if host_load:
+        lines.append(fit_text("Hosts:", width))
+        for host_raw in host_load[:4]:
+            host = as_dict(host_raw)
+            lines.append(
+                fit_text(
+                    f"  {host.get('host_id') or 'host'} "
+                    f"health={host.get('health_state') or 'n/a'} "
+                    f"score={float(host.get('health_score') or 0):.2f} "
+                    f"workers={parse_any_int(host.get('worker_count'))} "
+                    f"queue={parse_any_int(host.get('active_queue'))} "
+                    f"load={parse_any_int(host.get('active_load'))}",
+                    width,
+                )
+            )
+        lines.append("")
     workers = as_list(tmux_dashboard.get("worker_load"))
     if not workers:
         lines.append(fit_text("No worker lanes reported yet.", width))

@@ -12,7 +12,7 @@ It separates:
 
 ## Current Baseline
 
-The runtime now has a real execution substrate for distributed-style task routing, isolated task execution, and durable benchmark evidence.
+The runtime now has a real execution and scheduling substrate for distributed-style task routing, isolated task execution, durable benchmark/eval evidence, measured model routing, versioned org programs, and compiled task DAGs.
 
 Already implemented and verified:
 
@@ -32,12 +32,24 @@ Already implemented and verified:
   - durable benchmark suite registration
   - isolated benchmark execution on real hosts
   - run timeline evidence and artifact persistence
+- `model.router`
+  - durable backend registry
+  - measured route scoring across latency, quality, context fit, cost, and host health
+- `eval.*`
+  - eval suites that compose real benchmark and router cases
+- `org.program`
+  - versioned role doctrine with promotion and rollback surfaces
+- `task.compile`
+  - durable plan compilation with owner contracts, evidence requirements, and rollback notes
 
 Verified by tests:
 
 - `worker.fabric can register a remote host and expose host-aware worker slots`
 - `trichat.tmux_controller dispatches onto a configured remote host with isolation metadata`
 - `benchmark.run executes a real isolated suite and records durable run evidence`
+- `model.router persists backend state and routes by measured quality`
+- `eval suite upsert/list/run composes benchmark and router cases against real state`
+- `org.program and task.compile promote role doctrine into a durable plan`
 
 ## Roadmap Overview
 
@@ -50,7 +62,7 @@ flowchart TD
 
 ## Phase 1: Execution Substrate
 
-Status: in progress
+Status: partially shipped
 
 ### 1. Distributed Worker Fabric
 
@@ -63,13 +75,17 @@ Already real:
 - host-aware tmux lane assignment
 - remote execution through SSH-wrapped commands
 
-Still needed:
+Already real:
 
 - persistent host heartbeat and health scoring
-- per-host capability profiles for GPU, RAM, disk, toolchain, and latency
+- per-host telemetry for queue depth, CPU, GPU, RAM, disk, and thermal pressure
+- operator-visible host state in kernel summary and tmux dashboard payloads
+
+Still needed:
+
 - worker lease renewal across remote hosts
 - explicit remote bootstrap/install flow for new worker machines
-- operator-visible host state in the office dashboard
+- richer multi-host tabs in the office dashboard
 
 Definition of done:
 
@@ -100,7 +116,7 @@ Definition of done:
 
 ### 3. Real Benchmark and Eval Foundation
 
-Status: shipped foundation
+Status: shipped foundation and expanded into evals
 
 Already real:
 
@@ -110,7 +126,7 @@ Already real:
 
 Still needed:
 
-- named benchmark packs for delegation, tool-use, code-fix, research, recovery, and routing quality
+- broader named benchmark packs for delegation, tool-use, code-fix, research, recovery, and routing quality
 - historical leaderboards and baseline comparisons
 - automatic regression alerting when new org/program changes reduce win rate
 
@@ -120,15 +136,20 @@ Definition of done:
 
 ## Phase 2: Scheduling Substrate
 
-Status: planned
+Status: foundation shipped
 
 ### 4. Resource-Aware Scheduling
 
-Still needed:
+Already real:
 
 - live CPU, GPU, RAM, disk, queue depth, and thermal telemetry per host
 - host scoring that combines capability, health, and current load
 - routing policy for preferred host tags, hard requirements, and burst fallback
+
+Still needed:
+
+- live telemetry collection helpers for remote hosts
+- scheduler feedback loop tied to real lease pressure and queue aging
 
 Definition of done:
 
@@ -136,12 +157,17 @@ Definition of done:
 
 ### 5. True Model Router
 
+Already real:
+
+- runtime backend registry for `Ollama`, `MLX`, `llama.cpp`, `vLLM`, `OpenAI`, and custom backends
+- measured latency, context-length, throughput, and win-rate telemetry per backend/model
+- routing policy by task archetype and quality preference
+
 Still needed:
 
-- runtime backend registry for `Ollama`, `MLX`, `llama.cpp`, `vLLM`, and optional frontier fallback
-- measured latency, context-length, throughput, and win-rate telemetry per backend/model
-- routing policy by task archetype: planning, coding, research, critique, verification
+- automatic backend heartbeat collectors
 - fallback and circuit-breaker behavior for flaky or overloaded model backends
+- tighter coupling between eval outcomes and router weight updates
 
 Definition of done:
 
@@ -149,13 +175,17 @@ Definition of done:
 
 ## Phase 3: Intelligence Substrate
 
-Status: planned
+Status: foundation shipped
 
 ### 6. First-Class Eval System
 
-Still needed:
+Already real:
 
 - benchmark suites promoted into a broader eval namespace
+- router-case evals that validate real backend selection behavior
+
+Still needed:
+
 - stable seed tasks and goldens for:
   - delegation quality
   - tool correctness
@@ -167,19 +197,27 @@ Still needed:
 
 ### 7. True Task Compiler
 
-Still needed:
+Already real:
 
 - goal-to-DAG compiler for owners, dependencies, evidence contracts, rollback contracts, and merge gates
-- automatic plan slicing into parallel specialist workstreams
+
+Still needed:
+
+- automatic plan slicing into richer parallel specialist workstreams
 - planner output validation against policy and worker availability
+- compile-time host/model hints based on task shape
 
 ### 8. Versioned Org Programming
 
-Still needed:
+Already real:
 
 - versioned role programs for ring leader, directors, SMEs, and leaves
+- promotion and rollback surfaces for role doctrine
+
+Still needed:
+
 - benchmark-backed promotion flow for new doctrine versions
-- rollback to last-known-good role programs when a change regresses performance
+- automatic use of active role programs inside all bridge prompts and planner hooks
 
 ## Phase 4: Trust and Operations
 
@@ -206,6 +244,11 @@ Still needed:
 
 ### 11. Richer Command Center
 
+Already real:
+
+- host resource panels in the tmux dashboard payload and office briefing
+- kernel summaries for worker fabric, model router, eval suites, and org programs
+
 Still needed:
 
 - multi-host tabs
@@ -213,7 +256,6 @@ Still needed:
 - per-agent transcript panes
 - backend/model badges
 - queue provenance
-- host resource panels
 - eval scoreboards
 
 ## Recommended Build Order

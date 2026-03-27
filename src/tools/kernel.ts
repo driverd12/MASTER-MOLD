@@ -1,5 +1,20 @@
 import { z } from "zod";
-import { type AgentSessionRecord, type GoalRecord, type PlanRecord, type PlanStepRecord, type TaskSummaryRecord, Storage } from "../storage.js";
+import {
+  type AgentSessionRecord,
+  type EvalSuiteRecord,
+  type EvalSuitesStateRecord,
+  type GoalRecord,
+  type ModelRouterBackendRecord,
+  type ModelRouterStateRecord,
+  type OrgProgramRoleRecord,
+  type OrgProgramsStateRecord,
+  type PlanRecord,
+  type PlanStepRecord,
+  type TaskSummaryRecord,
+  type WorkerFabricHostRecord,
+  type WorkerFabricStateRecord,
+  Storage,
+} from "../storage.js";
 import { getAdaptiveWorkerProfile, summarizeAdaptiveSessionHealth, summarizeAdaptiveWorkerProfile } from "./agent_session.js";
 import { buildAgentLearningOverview } from "./agent_learning.js";
 import { evaluatePlanStepReadiness, getPlanStepApprovalGateKind } from "./plan.js";
@@ -80,6 +95,87 @@ type AdaptiveSessionSnapshot = {
     medium: ReturnType<typeof summarizeAdaptiveWorkerProfile>;
     high: ReturnType<typeof summarizeAdaptiveWorkerProfile>;
   };
+};
+
+type HostFabricSummary = {
+  enabled: boolean;
+  strategy: WorkerFabricStateRecord["strategy"] | null;
+  default_host_id: string | null;
+  host_count: number;
+  enabled_host_count: number;
+  worker_count: number;
+  active_worker_count: number;
+  health_counts: Record<"healthy" | "degraded" | "offline", number>;
+  transport_counts: Record<"local" | "ssh", number>;
+  hosts: Array<{
+    host_id: string;
+    transport: WorkerFabricHostRecord["transport"];
+    enabled: boolean;
+    worker_count: number;
+    health_state: WorkerFabricHostRecord["telemetry"]["health_state"];
+    health_score: number;
+    queue_depth: number;
+    active_tasks: number;
+    heartbeat_at: string | null;
+    tags: string[];
+  }>;
+};
+
+type ModelRouterSummary = {
+  enabled: boolean;
+  strategy: ModelRouterStateRecord["strategy"] | null;
+  default_backend_id: string | null;
+  backend_count: number;
+  enabled_backend_count: number;
+  provider_counts: Record<string, number>;
+  locality_counts: Record<"local" | "remote", number>;
+  backends: Array<{
+    backend_id: string;
+    provider: ModelRouterBackendRecord["provider"];
+    model_id: string;
+    host_id: string | null;
+    locality: ModelRouterBackendRecord["locality"];
+    enabled: boolean;
+    context_window: number;
+    latency_ms_p50: number | null;
+    throughput_tps: number | null;
+    success_rate: number | null;
+    win_rate: number | null;
+    heartbeat_at: string | null;
+    tags: string[];
+  }>;
+};
+
+type EvalSummary = {
+  enabled: boolean;
+  suite_count: number;
+  total_case_count: number;
+  benchmark_case_count: number;
+  router_case_count: number;
+  suites: Array<{
+    suite_id: string;
+    title: string;
+    case_count: number;
+    benchmark_case_count: number;
+    router_case_count: number;
+    tags: string[];
+  }>;
+};
+
+type OrgProgramSummary = {
+  enabled: boolean;
+  role_count: number;
+  active_role_count: number;
+  version_count: number;
+  active_version_count: number;
+  status_counts: Record<"candidate" | "active" | "archived", number>;
+  roles: Array<{
+    role_id: string;
+    title: string;
+    lane: string | null;
+    version_count: number;
+    active_version_id: string | null;
+  }>;
 };
 
 function countByStatus<T extends { status: string }>(records: T[]) {
@@ -395,6 +491,237 @@ function summarizeAdaptiveSession(session: AgentSessionRecord): AdaptiveSessionS
   };
 }
 
+function summarizeWorkerFabric(storage: Storage): HostFabricSummary {
+  const state = storage.getWorkerFabricState();
+  if (!state) {
+    return {
+      enabled: false,
+      strategy: null,
+      default_host_id: null,
+      host_count: 0,
+      enabled_host_count: 0,
+      worker_count: 0,
+      active_worker_count: 0,
+      health_counts: {
+        healthy: 0,
+        degraded: 0,
+        offline: 0,
+      },
+      transport_counts: {
+        local: 0,
+        ssh: 0,
+      },
+      hosts: [],
+    };
+  }
+
+  const hosts = [...state.hosts].sort((left, right) => left.host_id.localeCompare(right.host_id));
+  const enabledHosts = hosts.filter((host) => host.enabled);
+  const healthCounts = hosts.reduce<Record<"healthy" | "degraded" | "offline", number>>(
+    (acc, host) => {
+      acc[host.telemetry.health_state] += 1;
+      return acc;
+    },
+    {
+      healthy: 0,
+      degraded: 0,
+      offline: 0,
+    }
+  );
+  const transportCounts = hosts.reduce<Record<"local" | "ssh", number>>(
+    (acc, host) => {
+      acc[host.transport] += 1;
+      return acc;
+    },
+    {
+      local: 0,
+      ssh: 0,
+    }
+  );
+
+  return {
+    enabled: state.enabled,
+    strategy: state.strategy,
+    default_host_id: state.default_host_id,
+    host_count: hosts.length,
+    enabled_host_count: enabledHosts.length,
+    worker_count: hosts.reduce((sum, host) => sum + host.worker_count, 0),
+    active_worker_count: enabledHosts.reduce((sum, host) => sum + host.worker_count, 0),
+    health_counts: healthCounts,
+    transport_counts: transportCounts,
+    hosts: hosts.map((host) => ({
+      host_id: host.host_id,
+      transport: host.transport,
+      enabled: host.enabled,
+      worker_count: host.worker_count,
+      health_state: host.telemetry.health_state,
+      health_score: host.telemetry.health_state === "offline" ? 0 : host.telemetry.health_state === "degraded" ? 0.55 : 1,
+      queue_depth: host.telemetry.queue_depth,
+      active_tasks: host.telemetry.active_tasks,
+      heartbeat_at: host.telemetry.heartbeat_at,
+      tags: host.tags,
+    })),
+  };
+}
+
+function summarizeModelRouter(storage: Storage): ModelRouterSummary {
+  const state = storage.getModelRouterState();
+  if (!state) {
+    return {
+      enabled: false,
+      strategy: null,
+      default_backend_id: null,
+      backend_count: 0,
+      enabled_backend_count: 0,
+      provider_counts: {},
+      locality_counts: {
+        local: 0,
+        remote: 0,
+      },
+      backends: [],
+    };
+  }
+
+  const backends = [...state.backends].sort((left, right) => left.backend_id.localeCompare(right.backend_id));
+  const providerCounts = backends.reduce<Record<string, number>>((acc, backend) => {
+    acc[backend.provider] = (acc[backend.provider] ?? 0) + 1;
+    return acc;
+  }, {});
+  const localityCounts = backends.reduce<Record<"local" | "remote", number>>(
+    (acc, backend) => {
+      acc[backend.locality] += 1;
+      return acc;
+    },
+    {
+      local: 0,
+      remote: 0,
+    }
+  );
+
+  return {
+    enabled: state.enabled,
+    strategy: state.strategy,
+    default_backend_id: state.default_backend_id,
+    backend_count: backends.length,
+    enabled_backend_count: backends.filter((backend) => backend.enabled).length,
+    provider_counts: providerCounts,
+    locality_counts: localityCounts,
+    backends: backends.map((backend) => ({
+      backend_id: backend.backend_id,
+      provider: backend.provider,
+      model_id: backend.model_id,
+      host_id: backend.host_id,
+      locality: backend.locality,
+      enabled: backend.enabled,
+      context_window: backend.context_window,
+      latency_ms_p50: backend.latency_ms_p50,
+      throughput_tps: backend.throughput_tps,
+      success_rate: backend.success_rate,
+      win_rate: backend.win_rate,
+      heartbeat_at: backend.heartbeat_at,
+      tags: backend.tags,
+    })),
+  };
+}
+
+function summarizeEvalSuites(storage: Storage): EvalSummary {
+  const state: EvalSuitesStateRecord | null = storage.getEvalSuitesState();
+  if (!state) {
+    return {
+      enabled: false,
+      suite_count: 0,
+      total_case_count: 0,
+      benchmark_case_count: 0,
+      router_case_count: 0,
+      suites: [],
+    };
+  }
+
+  const suites = [...state.suites].sort((left, right) => left.title.localeCompare(right.title));
+  const caseCounts = suites.reduce(
+    (acc, suite) => {
+      acc.total_case_count += suite.cases.length;
+      acc.benchmark_case_count += suite.cases.filter((entry) => entry.kind === "benchmark_suite").length;
+      acc.router_case_count += suite.cases.filter((entry) => entry.kind === "router_case").length;
+      return acc;
+    },
+    {
+      total_case_count: 0,
+      benchmark_case_count: 0,
+      router_case_count: 0,
+    }
+  );
+
+  return {
+    enabled: state.enabled,
+    suite_count: suites.length,
+    total_case_count: caseCounts.total_case_count,
+    benchmark_case_count: caseCounts.benchmark_case_count,
+    router_case_count: caseCounts.router_case_count,
+    suites: suites.map((suite) => ({
+      suite_id: suite.suite_id,
+      title: suite.title,
+      case_count: suite.cases.length,
+      benchmark_case_count: suite.cases.filter((entry) => entry.kind === "benchmark_suite").length,
+      router_case_count: suite.cases.filter((entry) => entry.kind === "router_case").length,
+      tags: suite.tags,
+    })),
+  };
+}
+
+function summarizeOrgPrograms(storage: Storage): OrgProgramSummary {
+  const state: OrgProgramsStateRecord | null = storage.getOrgProgramsState();
+  if (!state) {
+    return {
+      enabled: false,
+      role_count: 0,
+      active_role_count: 0,
+      version_count: 0,
+      active_version_count: 0,
+      status_counts: {
+        candidate: 0,
+        active: 0,
+        archived: 0,
+      },
+      roles: [],
+    };
+  }
+
+  const roles = [...state.roles].sort((left, right) => left.role_id.localeCompare(right.role_id));
+  const statusCounts = roles.reduce<Record<"candidate" | "active" | "archived", number>>(
+    (acc, role) => {
+      for (const version of role.versions) {
+        acc[version.status] += 1;
+      }
+      return acc;
+    },
+    {
+      candidate: 0,
+      active: 0,
+      archived: 0,
+    }
+  );
+
+  return {
+    enabled: state.enabled,
+    role_count: roles.length,
+    active_role_count: roles.filter((role) => role.active_version_id !== null).length,
+    version_count: roles.reduce((sum, role) => sum + role.versions.length, 0),
+    active_version_count: roles.reduce(
+      (sum, role) => sum + role.versions.filter((version) => version.status === "active").length,
+      0
+    ),
+    status_counts: statusCounts,
+    roles: roles.map((role) => ({
+      role_id: role.role_id,
+      title: role.title,
+      lane: role.lane,
+      version_count: role.versions.length,
+      active_version_id: role.active_version_id,
+    })),
+  };
+}
+
 function deriveKernelState(params: {
   failed_goal_count: number;
   failed_task_count: number;
@@ -482,6 +809,10 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
   const recentArtifacts = storage.listArtifacts({
     limit: artifactLimit,
   });
+  const workerFabricSummary = summarizeWorkerFabric(storage);
+  const modelRouterSummary = summarizeModelRouter(storage);
+  const evalSummary = summarizeEvalSuites(storage);
+  const orgProgramSummary = summarizeOrgPrograms(storage);
   const goalSummaries = openGoals.map((goal) => {
     const plan = resolveGoalPlan(storage, goal);
     const steps = plan ? storage.listPlanSteps(plan.plan_id) : [];
@@ -693,6 +1024,26 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       `Open plans contain ${totals.adaptive_none_count} worker step(s) with no dispatchable adaptive lane guidance.`
     );
   }
+  if (workerFabricSummary.host_count === 0) {
+    attention.push("No worker fabric hosts are configured yet.");
+  } else if (workerFabricSummary.enabled_host_count === 0) {
+    attention.push("Worker fabric hosts exist, but none are enabled.");
+  } else if (workerFabricSummary.health_counts.healthy === 0 && workerFabricSummary.host_count > 0) {
+    attention.push("Worker fabric has no healthy hosts available.");
+  }
+  if (modelRouterSummary.backend_count === 0) {
+    attention.push("No model router backends are configured yet.");
+  } else if (modelRouterSummary.enabled_backend_count === 0) {
+    attention.push("Model router backends exist, but none are enabled.");
+  }
+  if (evalSummary.suite_count === 0) {
+    attention.push("No eval suites are configured yet.");
+  }
+  if (orgProgramSummary.role_count === 0) {
+    attention.push("No org-program roles are configured yet.");
+  } else if (orgProgramSummary.active_version_count === 0) {
+    attention.push("Org-program roles exist, but none have an active version yet.");
+  }
   if (attention.length === 0 && state === "active") {
     attention.push("Kernel is progressing normally.");
   }
@@ -715,6 +1066,32 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
         fallback_degraded: totals.adaptive_fallback_degraded_count,
         none: totals.adaptive_none_count,
       },
+      worker_fabric: {
+        host_count: workerFabricSummary.host_count,
+        enabled_host_count: workerFabricSummary.enabled_host_count,
+        healthy_host_count: workerFabricSummary.health_counts.healthy,
+        degraded_host_count: workerFabricSummary.health_counts.degraded,
+        offline_host_count: workerFabricSummary.health_counts.offline,
+        worker_count: workerFabricSummary.worker_count,
+        active_worker_count: workerFabricSummary.active_worker_count,
+      },
+      model_router: {
+        backend_count: modelRouterSummary.backend_count,
+        enabled_backend_count: modelRouterSummary.enabled_backend_count,
+        provider_counts: modelRouterSummary.provider_counts,
+      },
+      eval_suites: {
+        suite_count: evalSummary.suite_count,
+        total_case_count: evalSummary.total_case_count,
+        benchmark_case_count: evalSummary.benchmark_case_count,
+        router_case_count: evalSummary.router_case_count,
+      },
+      org_programs: {
+        role_count: orgProgramSummary.role_count,
+        active_role_count: orgProgramSummary.active_role_count,
+        version_count: orgProgramSummary.version_count,
+        active_version_count: orgProgramSummary.active_version_count,
+      },
       ready_step_count: totals.ready_step_count,
       running_step_count: totals.running_step_count,
       blocked_approval_count: totals.blocked_approval_count,
@@ -734,6 +1111,10 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     open_goals: goalSummaries,
     active_sessions: activeSessions,
     adaptive_sessions: adaptiveSessions,
+    worker_fabric: workerFabricSummary,
+    model_router: modelRouterSummary,
+    evals: evalSummary,
+    org_programs: orgProgramSummary,
     learning: {
       ...learningOverview,
       active_session_coverage: {

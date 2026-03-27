@@ -715,6 +715,25 @@ export type TaskAutoRetryStateRecord = {
 
 export type WorkerFabricTransport = "local" | "ssh";
 
+export type WorkerFabricHostHealthState = "healthy" | "degraded" | "offline";
+export type WorkerFabricThermalPressure = "nominal" | "fair" | "serious" | "critical";
+
+export type WorkerFabricHostTelemetryRecord = {
+  heartbeat_at: string | null;
+  health_state: WorkerFabricHostHealthState;
+  queue_depth: number;
+  active_tasks: number;
+  latency_ms: number | null;
+  cpu_utilization: number | null;
+  ram_available_gb: number | null;
+  ram_total_gb: number | null;
+  gpu_utilization: number | null;
+  gpu_memory_available_gb: number | null;
+  gpu_memory_total_gb: number | null;
+  disk_free_gb: number | null;
+  thermal_pressure: WorkerFabricThermalPressure | null;
+};
+
 export type WorkerFabricHostRecord = {
   host_id: string;
   enabled: boolean;
@@ -725,13 +744,14 @@ export type WorkerFabricHostRecord = {
   shell: string;
   capabilities: Record<string, unknown>;
   tags: string[];
+  telemetry: WorkerFabricHostTelemetryRecord;
   metadata: Record<string, unknown>;
   updated_at: string;
 };
 
 export type WorkerFabricStateRecord = {
   enabled: boolean;
-  strategy: "balanced" | "prefer_local" | "prefer_capacity";
+  strategy: "balanced" | "prefer_local" | "prefer_capacity" | "resource_aware";
   default_host_id: string | null;
   hosts: WorkerFabricHostRecord[];
   updated_at: string;
@@ -771,6 +791,112 @@ export type BenchmarkSuiteRecord = {
 export type BenchmarkSuitesStateRecord = {
   enabled: boolean;
   suites: BenchmarkSuiteRecord[];
+  updated_at: string;
+};
+
+export type ModelRouterProvider = "ollama" | "mlx" | "llama.cpp" | "vllm" | "openai" | "custom";
+export type ModelRouterStrategy =
+  | "balanced"
+  | "prefer_speed"
+  | "prefer_quality"
+  | "prefer_cost"
+  | "prefer_context_fit";
+export type ModelRouterTaskKind = "planning" | "coding" | "research" | "verification" | "chat" | "tool_use";
+export type ModelRouterBackendRecord = {
+  backend_id: string;
+  enabled: boolean;
+  provider: ModelRouterProvider;
+  model_id: string;
+  endpoint: string | null;
+  host_id: string | null;
+  locality: "local" | "remote";
+  context_window: number;
+  throughput_tps: number | null;
+  latency_ms_p50: number | null;
+  success_rate: number | null;
+  win_rate: number | null;
+  cost_per_1k_input: number | null;
+  max_output_tokens: number | null;
+  tags: string[];
+  capabilities: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  heartbeat_at: string | null;
+  updated_at: string;
+};
+
+export type ModelRouterStateRecord = {
+  enabled: boolean;
+  strategy: ModelRouterStrategy;
+  default_backend_id: string | null;
+  backends: ModelRouterBackendRecord[];
+  updated_at: string;
+};
+
+export type EvalSuiteCaseKind = "benchmark_suite" | "router_case";
+
+export type EvalSuiteCaseRecord = {
+  case_id: string;
+  title: string;
+  kind: EvalSuiteCaseKind;
+  benchmark_suite_id: string | null;
+  task_kind: ModelRouterTaskKind | null;
+  context_tokens: number | null;
+  latency_budget_ms: number | null;
+  expected_backend_id: string | null;
+  expected_backend_tags: string[];
+  required_tags: string[];
+  preferred_tags: string[];
+  required: boolean;
+  weight: number;
+  metadata: Record<string, unknown>;
+};
+
+export type EvalSuiteRecord = {
+  suite_id: string;
+  created_at: string;
+  updated_at: string;
+  title: string;
+  objective: string;
+  aggregate_metric_name: string;
+  aggregate_metric_direction: ExperimentMetricDirection;
+  cases: EvalSuiteCaseRecord[];
+  tags: string[];
+  metadata: Record<string, unknown>;
+};
+
+export type EvalSuitesStateRecord = {
+  enabled: boolean;
+  suites: EvalSuiteRecord[];
+  updated_at: string;
+};
+
+export type OrgProgramVersionStatus = "candidate" | "active" | "archived";
+
+export type OrgProgramVersionRecord = {
+  version_id: string;
+  created_at: string;
+  summary: string;
+  doctrine: string;
+  delegation_contract: string;
+  evaluation_standard: string;
+  status: OrgProgramVersionStatus;
+  metadata: Record<string, unknown>;
+};
+
+export type OrgProgramRoleRecord = {
+  role_id: string;
+  title: string;
+  description: string | null;
+  lane: string | null;
+  active_version_id: string | null;
+  versions: OrgProgramVersionRecord[];
+  metadata: Record<string, unknown>;
+  updated_at: string;
+};
+
+export type OrgProgramsStateRecord = {
+  enabled: boolean;
+  roles: OrgProgramRoleRecord[];
   updated_at: string;
 };
 
@@ -2443,6 +2569,15 @@ export class Storage {
         }
         const transportRaw = String(item.transport ?? "local").trim().toLowerCase();
         const transport: WorkerFabricTransport = transportRaw === "ssh" ? "ssh" : "local";
+        const telemetry = parseLooseObject(item.telemetry);
+        const thermalRaw = String(telemetry.thermal_pressure ?? "").trim().toLowerCase();
+        const thermalPressure: WorkerFabricThermalPressure | null =
+          thermalRaw === "nominal" || thermalRaw === "fair" || thermalRaw === "serious" || thermalRaw === "critical"
+            ? thermalRaw
+            : null;
+        const healthRaw = String(telemetry.health_state ?? "").trim().toLowerCase();
+        const healthState: WorkerFabricHostHealthState =
+          healthRaw === "offline" || healthRaw === "degraded" ? healthRaw : "healthy";
         return {
           host_id: hostId,
           enabled: parseBoolean(item.enabled, true),
@@ -2453,6 +2588,26 @@ export class Storage {
           shell: String(item.shell ?? "/bin/zsh").trim() || "/bin/zsh",
           capabilities: parseLooseObject(item.capabilities),
           tags: dedupeNonEmpty(Array.isArray(item.tags) ? item.tags : []),
+          telemetry: {
+            heartbeat_at: asNullableString(telemetry.heartbeat_at),
+            health_state: healthState,
+            queue_depth: parseBoundedInt(telemetry.queue_depth, 0, 0, 100_000),
+            active_tasks: parseBoundedInt(telemetry.active_tasks, 0, 0, 100_000),
+            latency_ms: telemetry.latency_ms === undefined ? null : parseBoundedFloat(telemetry.latency_ms, 0, 0, 10_000_000),
+            cpu_utilization: telemetry.cpu_utilization === undefined ? null : parseBoundedFloat(telemetry.cpu_utilization, 0, 0, 1),
+            ram_available_gb:
+              telemetry.ram_available_gb === undefined ? null : parseBoundedFloat(telemetry.ram_available_gb, 0, 0, 1_000_000),
+            ram_total_gb:
+              telemetry.ram_total_gb === undefined ? null : parseBoundedFloat(telemetry.ram_total_gb, 0, 0, 1_000_000),
+            gpu_utilization: telemetry.gpu_utilization === undefined ? null : parseBoundedFloat(telemetry.gpu_utilization, 0, 0, 1),
+            gpu_memory_available_gb:
+              telemetry.gpu_memory_available_gb === undefined ? null : parseBoundedFloat(telemetry.gpu_memory_available_gb, 0, 0, 1_000_000),
+            gpu_memory_total_gb:
+              telemetry.gpu_memory_total_gb === undefined ? null : parseBoundedFloat(telemetry.gpu_memory_total_gb, 0, 0, 1_000_000),
+            disk_free_gb:
+              telemetry.disk_free_gb === undefined ? null : parseBoundedFloat(telemetry.disk_free_gb, 0, 0, 1_000_000),
+            thermal_pressure: thermalPressure,
+          },
           metadata: parseLooseObject(item.metadata),
           updated_at: normalizeIsoTimestamp(asNullableString(item.updated_at) ?? undefined, String(row.updated_at ?? "")),
         } satisfies WorkerFabricHostRecord;
@@ -2462,7 +2617,9 @@ export class Storage {
 
     const strategyRaw = String(config.strategy ?? "balanced").trim().toLowerCase();
     const strategy =
-      strategyRaw === "prefer_local" || strategyRaw === "prefer_capacity" ? strategyRaw : "balanced";
+      strategyRaw === "prefer_local" || strategyRaw === "prefer_capacity" || strategyRaw === "resource_aware"
+        ? strategyRaw
+        : "balanced";
 
     return {
       enabled: Number(row.enabled ?? 0) === 1,
@@ -2481,7 +2638,9 @@ export class Storage {
   }): WorkerFabricStateRecord {
     const now = new Date().toISOString();
     const strategy =
-      params.strategy === "prefer_local" || params.strategy === "prefer_capacity" ? params.strategy : "balanced";
+      params.strategy === "prefer_local" || params.strategy === "prefer_capacity" || params.strategy === "resource_aware"
+        ? params.strategy
+        : "balanced";
     const normalizedHosts = (params.hosts ?? [])
       .map((host) => {
         const hostId = String(host.host_id ?? "").trim();
@@ -2490,6 +2649,15 @@ export class Storage {
           return null;
         }
         const transport: WorkerFabricTransport = host.transport === "ssh" ? "ssh" : "local";
+        const telemetry = parseLooseObject(host.telemetry);
+        const thermalRaw = String(telemetry.thermal_pressure ?? "").trim().toLowerCase();
+        const thermalPressure: WorkerFabricThermalPressure | null =
+          thermalRaw === "nominal" || thermalRaw === "fair" || thermalRaw === "serious" || thermalRaw === "critical"
+            ? thermalRaw
+            : null;
+        const healthRaw = String(telemetry.health_state ?? "").trim().toLowerCase();
+        const healthState: WorkerFabricHostHealthState =
+          healthRaw === "offline" || healthRaw === "degraded" ? healthRaw : "healthy";
         return {
           host_id: hostId,
           enabled: Boolean(host.enabled),
@@ -2500,6 +2668,26 @@ export class Storage {
           shell: String(host.shell ?? "/bin/zsh").trim() || "/bin/zsh",
           capabilities: parseLooseObject(host.capabilities),
           tags: dedupeNonEmpty(host.tags ?? []),
+          telemetry: {
+            heartbeat_at: asNullableString(telemetry.heartbeat_at),
+            health_state: healthState,
+            queue_depth: parseBoundedInt(telemetry.queue_depth, 0, 0, 100_000),
+            active_tasks: parseBoundedInt(telemetry.active_tasks, 0, 0, 100_000),
+            latency_ms: telemetry.latency_ms === undefined ? null : parseBoundedFloat(telemetry.latency_ms, 0, 0, 10_000_000),
+            cpu_utilization: telemetry.cpu_utilization === undefined ? null : parseBoundedFloat(telemetry.cpu_utilization, 0, 0, 1),
+            ram_available_gb:
+              telemetry.ram_available_gb === undefined ? null : parseBoundedFloat(telemetry.ram_available_gb, 0, 0, 1_000_000),
+            ram_total_gb:
+              telemetry.ram_total_gb === undefined ? null : parseBoundedFloat(telemetry.ram_total_gb, 0, 0, 1_000_000),
+            gpu_utilization: telemetry.gpu_utilization === undefined ? null : parseBoundedFloat(telemetry.gpu_utilization, 0, 0, 1),
+            gpu_memory_available_gb:
+              telemetry.gpu_memory_available_gb === undefined ? null : parseBoundedFloat(telemetry.gpu_memory_available_gb, 0, 0, 1_000_000),
+            gpu_memory_total_gb:
+              telemetry.gpu_memory_total_gb === undefined ? null : parseBoundedFloat(telemetry.gpu_memory_total_gb, 0, 0, 1_000_000),
+            disk_free_gb:
+              telemetry.disk_free_gb === undefined ? null : parseBoundedFloat(telemetry.disk_free_gb, 0, 0, 1_000_000),
+            thermal_pressure: thermalPressure,
+          },
           metadata: parseLooseObject(host.metadata),
           updated_at: now,
         } satisfies WorkerFabricHostRecord;
@@ -2711,6 +2899,487 @@ export class Storage {
            updated_at = excluded.updated_at`
       )
       .run("benchmark.suites", normalized.enabled ? 1 : 0, configJson, now);
+
+    return normalized;
+  }
+
+  getModelRouterState(): ModelRouterStateRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT enabled, config_json, updated_at
+         FROM daemon_configs
+         WHERE daemon_key = ?`
+      )
+      .get("model.router") as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+
+    const config = parseJsonObject(row.config_json);
+    const strategyRaw = String(config.strategy ?? "balanced").trim().toLowerCase();
+    const strategy: ModelRouterStrategy =
+      strategyRaw === "prefer_speed" ||
+      strategyRaw === "prefer_quality" ||
+      strategyRaw === "prefer_cost" ||
+      strategyRaw === "prefer_context_fit"
+        ? strategyRaw
+        : "balanced";
+    const backends = (Array.isArray(config.backends) ? config.backends : [])
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const item = entry as Record<string, unknown>;
+        const backendId = String(item.backend_id ?? "").trim();
+        const modelId = String(item.model_id ?? "").trim();
+        if (!backendId || !modelId) {
+          return null;
+        }
+        const providerRaw = String(item.provider ?? "custom").trim().toLowerCase();
+        const provider: ModelRouterProvider =
+          providerRaw === "ollama" ||
+          providerRaw === "mlx" ||
+          providerRaw === "llama.cpp" ||
+          providerRaw === "vllm" ||
+          providerRaw === "openai"
+            ? providerRaw
+            : "custom";
+        return {
+          backend_id: backendId,
+          enabled: parseBoolean(item.enabled, true),
+          provider,
+          model_id: modelId,
+          endpoint: asNullableString(item.endpoint),
+          host_id: asNullableString(item.host_id),
+          locality: String(item.locality ?? "local").trim().toLowerCase() === "remote" ? "remote" : "local",
+          context_window: parseBoundedInt(item.context_window, 8192, 256, 10_000_000),
+          throughput_tps: item.throughput_tps === undefined ? null : parseBoundedFloat(item.throughput_tps, 0, 0, 1_000_000),
+          latency_ms_p50: item.latency_ms_p50 === undefined ? null : parseBoundedFloat(item.latency_ms_p50, 0, 0, 10_000_000),
+          success_rate: item.success_rate === undefined ? null : clampMetricRate(item.success_rate),
+          win_rate: item.win_rate === undefined ? null : clampMetricRate(item.win_rate),
+          cost_per_1k_input:
+            item.cost_per_1k_input === undefined ? null : parseBoundedFloat(item.cost_per_1k_input, 0, 0, 1_000_000),
+          max_output_tokens:
+            item.max_output_tokens === undefined ? null : parseBoundedInt(item.max_output_tokens, 0, 0, 10_000_000),
+          tags: dedupeNonEmpty(Array.isArray(item.tags) ? item.tags : []),
+          capabilities: parseLooseObject(item.capabilities),
+          metadata: parseLooseObject(item.metadata),
+          heartbeat_at: asNullableString(item.heartbeat_at),
+          updated_at: normalizeIsoTimestamp(asNullableString(item.updated_at) ?? undefined, String(row.updated_at ?? "")),
+        } satisfies ModelRouterBackendRecord;
+      })
+      .filter((entry): entry is ModelRouterBackendRecord => Boolean(entry))
+      .sort((left, right) => left.backend_id.localeCompare(right.backend_id));
+
+    const defaultBackendIdRaw = asNullableString(config.default_backend_id);
+    const defaultBackendId =
+      defaultBackendIdRaw && backends.some((backend) => backend.backend_id === defaultBackendIdRaw) ? defaultBackendIdRaw : null;
+
+    return {
+      enabled: Number(row.enabled ?? 0) === 1,
+      strategy,
+      default_backend_id: defaultBackendId,
+      backends,
+      updated_at: String(row.updated_at ?? ""),
+    };
+  }
+
+  setModelRouterState(params: {
+    enabled: boolean;
+    strategy?: ModelRouterStrategy;
+    default_backend_id?: string | null;
+    backends: ModelRouterBackendRecord[];
+  }): ModelRouterStateRecord {
+    const now = new Date().toISOString();
+    const strategy: ModelRouterStrategy =
+      params.strategy === "prefer_speed" ||
+      params.strategy === "prefer_quality" ||
+      params.strategy === "prefer_cost" ||
+      params.strategy === "prefer_context_fit"
+        ? params.strategy
+        : "balanced";
+    const backends = (params.backends ?? [])
+      .map((backend) => {
+        const backendId = String(backend.backend_id ?? "").trim();
+        const modelId = String(backend.model_id ?? "").trim();
+        if (!backendId || !modelId) {
+          return null;
+        }
+        const provider: ModelRouterProvider =
+          backend.provider === "ollama" ||
+          backend.provider === "mlx" ||
+          backend.provider === "llama.cpp" ||
+          backend.provider === "vllm" ||
+          backend.provider === "openai"
+            ? backend.provider
+            : "custom";
+        return {
+          backend_id: backendId,
+          enabled: Boolean(backend.enabled),
+          provider,
+          model_id: modelId,
+          endpoint: asNullableString(backend.endpoint),
+          host_id: asNullableString(backend.host_id),
+          locality: backend.locality === "remote" ? "remote" : "local",
+          context_window: parseBoundedInt(backend.context_window, 8192, 256, 10_000_000),
+          throughput_tps:
+            backend.throughput_tps === undefined || backend.throughput_tps === null ? null : parseBoundedFloat(backend.throughput_tps, 0, 0, 1_000_000),
+          latency_ms_p50:
+            backend.latency_ms_p50 === undefined || backend.latency_ms_p50 === null ? null : parseBoundedFloat(backend.latency_ms_p50, 0, 0, 10_000_000),
+          success_rate: backend.success_rate === undefined || backend.success_rate === null ? null : clampMetricRate(backend.success_rate),
+          win_rate: backend.win_rate === undefined || backend.win_rate === null ? null : clampMetricRate(backend.win_rate),
+          cost_per_1k_input:
+            backend.cost_per_1k_input === undefined || backend.cost_per_1k_input === null
+              ? null
+              : parseBoundedFloat(backend.cost_per_1k_input, 0, 0, 1_000_000),
+          max_output_tokens:
+            backend.max_output_tokens === undefined || backend.max_output_tokens === null
+              ? null
+              : parseBoundedInt(backend.max_output_tokens, 0, 0, 10_000_000),
+          tags: dedupeNonEmpty(backend.tags ?? []),
+          capabilities: parseLooseObject(backend.capabilities),
+          metadata: parseLooseObject(backend.metadata),
+          heartbeat_at: asNullableString(backend.heartbeat_at),
+          updated_at: now,
+        } satisfies ModelRouterBackendRecord;
+      })
+      .filter((entry): entry is ModelRouterBackendRecord => Boolean(entry))
+      .sort((left, right) => left.backend_id.localeCompare(right.backend_id));
+    const defaultBackendIdRaw = params.default_backend_id?.trim() || null;
+    const defaultBackendId =
+      defaultBackendIdRaw && backends.some((backend) => backend.backend_id === defaultBackendIdRaw) ? defaultBackendIdRaw : null;
+
+    const normalized: ModelRouterStateRecord = {
+      enabled: Boolean(params.enabled),
+      strategy,
+      default_backend_id: defaultBackendId,
+      backends,
+      updated_at: now,
+    };
+
+    this.db
+      .prepare(
+        `INSERT INTO daemon_configs (daemon_key, enabled, config_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(daemon_key) DO UPDATE SET
+           enabled = excluded.enabled,
+           config_json = excluded.config_json,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        "model.router",
+        normalized.enabled ? 1 : 0,
+        stableStringify({
+          strategy: normalized.strategy,
+          default_backend_id: normalized.default_backend_id,
+          backends: normalized.backends,
+        }),
+        now
+      );
+
+    return normalized;
+  }
+
+  getEvalSuitesState(): EvalSuitesStateRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT enabled, config_json, updated_at
+         FROM daemon_configs
+         WHERE daemon_key = ?`
+      )
+      .get("eval.suites") as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+
+    const config = parseJsonObject(row.config_json);
+    const suites = (Array.isArray(config.suites) ? config.suites : [])
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const item = entry as Record<string, unknown>;
+        const suiteId = String(item.suite_id ?? "").trim();
+        const title = String(item.title ?? "").trim();
+        const objective = String(item.objective ?? "").trim();
+        if (!suiteId || !title || !objective) {
+          return null;
+        }
+        const cases = (Array.isArray(item.cases) ? item.cases : [])
+          .map((caseEntry, index) => {
+            if (!caseEntry || typeof caseEntry !== "object") {
+              return null;
+            }
+            const caseItem = caseEntry as Record<string, unknown>;
+            const kindRaw = String(caseItem.kind ?? "benchmark_suite").trim().toLowerCase();
+            const kind: EvalSuiteCaseKind = kindRaw === "router_case" ? "router_case" : "benchmark_suite";
+            const taskKindRaw = String(caseItem.task_kind ?? "").trim().toLowerCase();
+            const taskKind: ModelRouterTaskKind | null =
+              taskKindRaw === "planning" ||
+              taskKindRaw === "coding" ||
+              taskKindRaw === "research" ||
+              taskKindRaw === "verification" ||
+              taskKindRaw === "chat" ||
+              taskKindRaw === "tool_use"
+                ? taskKindRaw
+                : null;
+            return {
+              case_id: String(caseItem.case_id ?? `case-${index + 1}`).trim() || `case-${index + 1}`,
+              title: String(caseItem.title ?? `Case ${index + 1}`).trim() || `Case ${index + 1}`,
+              kind,
+              benchmark_suite_id: asNullableString(caseItem.benchmark_suite_id),
+              task_kind: taskKind,
+              context_tokens:
+                caseItem.context_tokens === undefined ? null : parseBoundedInt(caseItem.context_tokens, 0, 0, 10_000_000),
+              latency_budget_ms:
+                caseItem.latency_budget_ms === undefined ? null : parseBoundedFloat(caseItem.latency_budget_ms, 0, 0, 10_000_000),
+              expected_backend_id: asNullableString(caseItem.expected_backend_id),
+              expected_backend_tags: dedupeNonEmpty(Array.isArray(caseItem.expected_backend_tags) ? caseItem.expected_backend_tags : []),
+              required_tags: dedupeNonEmpty(Array.isArray(caseItem.required_tags) ? caseItem.required_tags : []),
+              preferred_tags: dedupeNonEmpty(Array.isArray(caseItem.preferred_tags) ? caseItem.preferred_tags : []),
+              required: parseBoolean(caseItem.required, true),
+              weight: parseBoundedFloat(caseItem.weight, 1, 0, 1000),
+              metadata: parseLooseObject(caseItem.metadata),
+            } satisfies EvalSuiteCaseRecord;
+          })
+          .filter((caseEntry): caseEntry is EvalSuiteCaseRecord => Boolean(caseEntry));
+        return {
+          suite_id: suiteId,
+          created_at: normalizeIsoTimestamp(asNullableString(item.created_at) ?? undefined, String(row.updated_at ?? "")),
+          updated_at: normalizeIsoTimestamp(asNullableString(item.updated_at) ?? undefined, String(row.updated_at ?? "")),
+          title,
+          objective,
+          aggregate_metric_name: String(item.aggregate_metric_name ?? "suite_success_rate").trim() || "suite_success_rate",
+          aggregate_metric_direction:
+            String(item.aggregate_metric_direction ?? "maximize").trim().toLowerCase() === "minimize" ? "minimize" : "maximize",
+          cases,
+          tags: dedupeNonEmpty(Array.isArray(item.tags) ? item.tags : []),
+          metadata: parseLooseObject(item.metadata),
+        } satisfies EvalSuiteRecord;
+      })
+      .filter((entry): entry is EvalSuiteRecord => Boolean(entry))
+      .sort((left, right) => left.title.localeCompare(right.title));
+
+    return {
+      enabled: Number(row.enabled ?? 0) === 1,
+      suites,
+      updated_at: String(row.updated_at ?? ""),
+    };
+  }
+
+  setEvalSuitesState(params: { enabled: boolean; suites: EvalSuiteRecord[] }): EvalSuitesStateRecord {
+    const now = new Date().toISOString();
+    const suites = (params.suites ?? [])
+      .map((suite) => {
+        const suiteId = String(suite.suite_id ?? "").trim();
+        const title = String(suite.title ?? "").trim();
+        const objective = String(suite.objective ?? "").trim();
+        if (!suiteId || !title || !objective) {
+          return null;
+        }
+        const cases = (suite.cases ?? [])
+          .map((caseEntry, index) => ({
+            case_id: String(caseEntry.case_id ?? `case-${index + 1}`).trim() || `case-${index + 1}`,
+            title: String(caseEntry.title ?? `Case ${index + 1}`).trim() || `Case ${index + 1}`,
+            kind: caseEntry.kind === "router_case" ? "router_case" : "benchmark_suite",
+            benchmark_suite_id: asNullableString(caseEntry.benchmark_suite_id),
+            task_kind: caseEntry.task_kind ?? null,
+            context_tokens:
+              caseEntry.context_tokens === undefined || caseEntry.context_tokens === null
+                ? null
+                : parseBoundedInt(caseEntry.context_tokens, 0, 0, 10_000_000),
+            latency_budget_ms:
+              caseEntry.latency_budget_ms === undefined || caseEntry.latency_budget_ms === null
+                ? null
+                : parseBoundedFloat(caseEntry.latency_budget_ms, 0, 0, 10_000_000),
+            expected_backend_id: asNullableString(caseEntry.expected_backend_id),
+            expected_backend_tags: dedupeNonEmpty(caseEntry.expected_backend_tags ?? []),
+            required_tags: dedupeNonEmpty(caseEntry.required_tags ?? []),
+            preferred_tags: dedupeNonEmpty(caseEntry.preferred_tags ?? []),
+            required: Boolean(caseEntry.required),
+            weight: parseBoundedFloat(caseEntry.weight, 1, 0, 1000),
+            metadata: parseLooseObject(caseEntry.metadata),
+          } satisfies EvalSuiteCaseRecord))
+          .filter((caseEntry): caseEntry is EvalSuiteCaseRecord => Boolean(caseEntry));
+        return {
+          suite_id: suiteId,
+          created_at: normalizeIsoTimestamp(asNullableString(suite.created_at) ?? undefined, now),
+          updated_at: now,
+          title,
+          objective,
+          aggregate_metric_name: String(suite.aggregate_metric_name ?? "suite_success_rate").trim() || "suite_success_rate",
+          aggregate_metric_direction: suite.aggregate_metric_direction === "minimize" ? "minimize" : "maximize",
+          cases,
+          tags: dedupeNonEmpty(suite.tags ?? []),
+          metadata: parseLooseObject(suite.metadata),
+        } satisfies EvalSuiteRecord;
+      })
+      .filter((entry): entry is EvalSuiteRecord => Boolean(entry))
+      .sort((left, right) => left.title.localeCompare(right.title));
+
+    const normalized: EvalSuitesStateRecord = {
+      enabled: Boolean(params.enabled),
+      suites,
+      updated_at: now,
+    };
+
+    this.db
+      .prepare(
+        `INSERT INTO daemon_configs (daemon_key, enabled, config_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(daemon_key) DO UPDATE SET
+           enabled = excluded.enabled,
+           config_json = excluded.config_json,
+           updated_at = excluded.updated_at`
+      )
+      .run("eval.suites", normalized.enabled ? 1 : 0, stableStringify({ suites: normalized.suites }), now);
+
+    return normalized;
+  }
+
+  getOrgProgramsState(): OrgProgramsStateRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT enabled, config_json, updated_at
+         FROM daemon_configs
+         WHERE daemon_key = ?`
+      )
+      .get("org.programs") as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+
+    const config = parseJsonObject(row.config_json);
+    const roles = (Array.isArray(config.roles) ? config.roles : [])
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const item = entry as Record<string, unknown>;
+        const roleId = String(item.role_id ?? "").trim();
+        const title = String(item.title ?? "").trim();
+        if (!roleId || !title) {
+          return null;
+        }
+        const versions = (Array.isArray(item.versions) ? item.versions : [])
+          .map((versionEntry) => {
+            if (!versionEntry || typeof versionEntry !== "object") {
+              return null;
+            }
+            const versionItem = versionEntry as Record<string, unknown>;
+            const versionId = String(versionItem.version_id ?? "").trim();
+            const summary = String(versionItem.summary ?? "").trim();
+            const doctrine = String(versionItem.doctrine ?? "").trim();
+            const delegationContract = String(versionItem.delegation_contract ?? "").trim();
+            const evaluationStandard = String(versionItem.evaluation_standard ?? "").trim();
+            if (!versionId || !summary || !doctrine || !delegationContract || !evaluationStandard) {
+              return null;
+            }
+            const statusRaw = String(versionItem.status ?? "candidate").trim().toLowerCase();
+            const status: OrgProgramVersionStatus =
+              statusRaw === "active" || statusRaw === "archived" ? statusRaw : "candidate";
+            return {
+              version_id: versionId,
+              created_at: normalizeIsoTimestamp(asNullableString(versionItem.created_at) ?? undefined, String(row.updated_at ?? "")),
+              summary,
+              doctrine,
+              delegation_contract: delegationContract,
+              evaluation_standard: evaluationStandard,
+              status,
+              metadata: parseLooseObject(versionItem.metadata),
+            } satisfies OrgProgramVersionRecord;
+          })
+          .filter((version): version is OrgProgramVersionRecord => Boolean(version))
+          .sort((left, right) => left.created_at.localeCompare(right.created_at));
+        const activeVersionIdRaw = asNullableString(item.active_version_id);
+        const activeVersionId =
+          activeVersionIdRaw && versions.some((version) => version.version_id === activeVersionIdRaw) ? activeVersionIdRaw : null;
+        return {
+          role_id: roleId,
+          title,
+          description: asNullableString(item.description),
+          lane: asNullableString(item.lane),
+          active_version_id: activeVersionId,
+          versions,
+          metadata: parseLooseObject(item.metadata),
+          updated_at: normalizeIsoTimestamp(asNullableString(item.updated_at) ?? undefined, String(row.updated_at ?? "")),
+        } satisfies OrgProgramRoleRecord;
+      })
+      .filter((entry): entry is OrgProgramRoleRecord => Boolean(entry))
+      .sort((left, right) => left.role_id.localeCompare(right.role_id));
+
+    return {
+      enabled: Number(row.enabled ?? 0) === 1,
+      roles,
+      updated_at: String(row.updated_at ?? ""),
+    };
+  }
+
+  setOrgProgramsState(params: { enabled: boolean; roles: OrgProgramRoleRecord[] }): OrgProgramsStateRecord {
+    const now = new Date().toISOString();
+    const roles = (params.roles ?? [])
+      .map((role) => {
+        const roleId = String(role.role_id ?? "").trim();
+        const title = String(role.title ?? "").trim();
+        if (!roleId || !title) {
+          return null;
+        }
+        const versions = (role.versions ?? [])
+          .map((version) => {
+            const versionId = String(version.version_id ?? "").trim();
+            const summary = String(version.summary ?? "").trim();
+            const doctrine = String(version.doctrine ?? "").trim();
+            const delegationContract = String(version.delegation_contract ?? "").trim();
+            const evaluationStandard = String(version.evaluation_standard ?? "").trim();
+            if (!versionId || !summary || !doctrine || !delegationContract || !evaluationStandard) {
+              return null;
+            }
+            return {
+              version_id: versionId,
+              created_at: normalizeIsoTimestamp(asNullableString(version.created_at) ?? undefined, now),
+              summary,
+              doctrine,
+              delegation_contract: delegationContract,
+              evaluation_standard: evaluationStandard,
+              status: version.status === "active" || version.status === "archived" ? version.status : "candidate",
+              metadata: parseLooseObject(version.metadata),
+            } satisfies OrgProgramVersionRecord;
+          })
+          .filter((version): version is OrgProgramVersionRecord => Boolean(version))
+          .sort((left, right) => left.created_at.localeCompare(right.created_at));
+        const activeVersionIdRaw = role.active_version_id?.trim() || null;
+        const activeVersionId =
+          activeVersionIdRaw && versions.some((version) => version.version_id === activeVersionIdRaw) ? activeVersionIdRaw : null;
+        return {
+          role_id: roleId,
+          title,
+          description: asNullableString(role.description),
+          lane: asNullableString(role.lane),
+          active_version_id: activeVersionId,
+          versions,
+          metadata: parseLooseObject(role.metadata),
+          updated_at: now,
+        } satisfies OrgProgramRoleRecord;
+      })
+      .filter((entry): entry is OrgProgramRoleRecord => Boolean(entry))
+      .sort((left, right) => left.role_id.localeCompare(right.role_id));
+
+    const normalized: OrgProgramsStateRecord = {
+      enabled: Boolean(params.enabled),
+      roles,
+      updated_at: now,
+    };
+
+    this.db
+      .prepare(
+        `INSERT INTO daemon_configs (daemon_key, enabled, config_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(daemon_key) DO UPDATE SET
+           enabled = excluded.enabled,
+           config_json = excluded.config_json,
+           updated_at = excluded.updated_at`
+      )
+      .run("org.programs", normalized.enabled ? 1 : 0, stableStringify({ roles: normalized.roles }), now);
 
     return normalized;
   }

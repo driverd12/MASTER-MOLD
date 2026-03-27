@@ -30,6 +30,7 @@ import { ensureWorkspaceFingerprint } from "./workspace_fingerprint.js";
 import { buildIsolatedExecutionPlan, buildRemoteExecutionCommand } from "../execution_isolation.js";
 import {
   buildWorkerFabricSlots,
+  computeHostHealthScore,
   resolveEffectiveWorkerFabric,
   resolveTaskExecutionRouting,
   type WorkerFabricSlot,
@@ -931,6 +932,20 @@ type TriChatTmuxDashboardPayload = {
   queue_depth: number;
   queue_age_seconds: number | null;
   queue_oldest_task_id: string | null;
+  host_load: Array<{
+    host_id: string;
+    transport: "local" | "ssh";
+    worker_count: number;
+    active_queue: number;
+    active_load: number;
+    health_state: string;
+    health_score: number;
+    cpu_utilization: number | null;
+    gpu_utilization: number | null;
+    ram_available_gb: number | null;
+    gpu_memory_available_gb: number | null;
+    thermal_pressure: string | null;
+  }>;
   worker_load: Array<{
     worker_id: string;
     host_id: string;
@@ -10775,6 +10790,21 @@ function fallbackTmuxWorkerSlots(state: TriChatTmuxControllerStateRecord): Worke
     shell: state.shell,
     tags: ["local", "default"],
     capabilities: {},
+    telemetry: {
+      heartbeat_at: null,
+      health_state: "healthy",
+      queue_depth: 0,
+      active_tasks: 0,
+      latency_ms: null,
+      cpu_utilization: null,
+      ram_available_gb: null,
+      ram_total_gb: null,
+      gpu_utilization: null,
+      gpu_memory_available_gb: null,
+      gpu_memory_total_gb: null,
+      disk_free_gb: null,
+      thermal_pressure: null,
+    },
     metadata: {},
   }));
 }
@@ -10908,12 +10938,56 @@ function buildTmuxDashboard(
     latestFailure?.completed_at ?? latestFailure?.dispatched_at ?? latestFailure?.created_at ?? null;
   const snapshots = workerSnapshots ?? buildTmuxWorkerSnapshots(state);
   const laneSignals = buildTmuxWorkerLaneSignals(state, snapshots, workerSlots);
+  const hostLoadMap = new Map<
+    string,
+    {
+      host_id: string;
+      transport: "local" | "ssh";
+      worker_count: number;
+      active_queue: number;
+      active_load: number;
+      health_state: string;
+      health_score: number;
+      cpu_utilization: number | null;
+      gpu_utilization: number | null;
+      ram_available_gb: number | null;
+      gpu_memory_available_gb: number | null;
+      thermal_pressure: string | null;
+    }
+  >();
+  for (const slot of workerSlots ?? []) {
+    const existing = hostLoadMap.get(slot.host_id) ?? {
+      host_id: slot.host_id,
+      transport: slot.transport,
+      worker_count: 0,
+      active_queue: 0,
+      active_load: 0,
+      health_state: slot.telemetry.health_state,
+      health_score: computeHostHealthScore(slot.telemetry),
+      cpu_utilization: slot.telemetry.cpu_utilization,
+      gpu_utilization: slot.telemetry.gpu_utilization,
+      ram_available_gb: slot.telemetry.ram_available_gb,
+      gpu_memory_available_gb: slot.telemetry.gpu_memory_available_gb,
+      thermal_pressure: slot.telemetry.thermal_pressure,
+    };
+    existing.worker_count += 1;
+    hostLoadMap.set(slot.host_id, existing);
+  }
+  for (const snapshot of snapshots) {
+    const hostSummary = hostLoadMap.get(snapshot.host_id);
+    if (!hostSummary) {
+      continue;
+    }
+    hostSummary.active_queue += snapshot.active_queue;
+    hostSummary.active_load += snapshot.active_load;
+  }
 
   return {
     generated_at: new Date().toISOString(),
     queue_depth: queueCandidates.length,
     queue_age_seconds: queueAgeSeconds,
     queue_oldest_task_id: queueOldestTaskId,
+    host_load: [...hostLoadMap.values()].sort((left, right) => left.host_id.localeCompare(right.host_id)),
     worker_load: snapshots.map((snapshot) => ({
       lane_state: laneSignals.get(snapshot.worker_id)?.lane_state ?? "unknown",
       lane_signal: laneSignals.get(snapshot.worker_id)?.lane_signal ?? null,
@@ -11693,7 +11767,7 @@ function materializeTmuxInputTasks(
 function assignQueuedTmuxTasks(
   state: TriChatTmuxControllerStateRecord,
   workerSlots?: WorkerFabricSlot[],
-  fabricStrategy: "balanced" | "prefer_local" | "prefer_capacity" = "balanced",
+  fabricStrategy: "balanced" | "prefer_local" | "prefer_capacity" | "resource_aware" = "balanced",
   defaultHostId: string | null = null
 ): TriChatTmuxAssignmentResult {
   const tasks = state.tasks.map((task) => ({ ...task, metadata: { ...(task.metadata ?? {}) } }));

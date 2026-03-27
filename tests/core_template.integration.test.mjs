@@ -1648,6 +1648,224 @@ test("kernel.summary reports operator-facing state across goals, tasks, sessions
   }
 });
 
+test("kernel.summary reports execution substrate summaries from durable host, router, eval, and org program state", async () => {
+  const testId = `${Date.now()}-kernel-substrate-summary`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-kernel-substrate-summary-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    const benchmarkSuite = await callTool(client, "benchmark.suite_upsert", {
+      mutation: nextMutation(testId, "benchmark.suite_upsert", () => mutationCounter++),
+      title: "Kernel substrate benchmark",
+      objective: "Provide a real benchmark suite for eval coverage",
+      project_dir: tempDir,
+      isolation_mode: "git_worktree",
+      aggregate_metric_name: "suite_success_rate",
+      aggregate_metric_direction: "maximize",
+      cases: [
+        {
+          case_id: "smoke",
+          title: "Smoke command",
+          command: "test -f README.md",
+        },
+      ],
+      tags: ["kernel", "substrate"],
+    });
+
+    await callTool(client, "worker.fabric", {
+      action: "configure",
+      mutation: nextMutation(testId, "worker.fabric.configure", () => mutationCounter++),
+      enabled: true,
+      strategy: "resource_aware",
+      default_host_id: "pve1",
+    });
+    await callTool(client, "worker.fabric", {
+      action: "upsert_host",
+      mutation: nextMutation(testId, "worker.fabric.upsert.remote", () => mutationCounter++),
+      host: {
+        host_id: "pve1",
+        transport: "ssh",
+        ssh_destination: "root@10.0.0.50",
+        workspace_root: "/srv/agentic/MCPlayground---Core-Template",
+        worker_count: 2,
+        shell: "/bin/bash",
+        capabilities: {
+          gpu_memory_gb: 80,
+          ram_gb: 128,
+        },
+        tags: ["remote", "gpu"],
+        telemetry: {
+          heartbeat_at: "2026-03-27T00:01:00.000Z",
+          health_state: "degraded",
+          queue_depth: 4,
+          active_tasks: 2,
+          cpu_utilization: 0.88,
+          gpu_utilization: 0.61,
+          gpu_memory_available_gb: 58,
+          gpu_memory_total_gb: 80,
+          thermal_pressure: "serious",
+        },
+      },
+    });
+    await callTool(client, "worker.fabric", {
+      action: "upsert_host",
+      mutation: nextMutation(testId, "worker.fabric.upsert.local", () => mutationCounter++),
+      host: {
+        host_id: "local",
+        transport: "local",
+        workspace_root: REPO_ROOT,
+        worker_count: 1,
+        shell: "/bin/zsh",
+        capabilities: {
+          ram_gb: 64,
+        },
+        tags: ["local", "ssd"],
+        telemetry: {
+          heartbeat_at: "2026-03-27T00:00:00.000Z",
+          health_state: "healthy",
+          queue_depth: 1,
+          active_tasks: 1,
+          cpu_utilization: 0.35,
+          ram_available_gb: 34,
+          ram_total_gb: 64,
+          thermal_pressure: "nominal",
+        },
+      },
+    });
+
+    await callTool(client, "model.router", {
+      action: "configure",
+      mutation: nextMutation(testId, "model.router.configure", () => mutationCounter++),
+      enabled: true,
+      strategy: "prefer_quality",
+      default_backend_id: "local-backend",
+    });
+    await callTool(client, "model.router", {
+      action: "upsert_backend",
+      mutation: nextMutation(testId, "model.router.upsert.local", () => mutationCounter++),
+      backend: {
+        backend_id: "local-backend",
+        provider: "ollama",
+        model_id: "llama3.2:3b",
+        locality: "local",
+        context_window: 8192,
+        latency_ms_p50: 120,
+        throughput_tps: 25,
+        success_rate: 0.94,
+        win_rate: 0.91,
+        tags: ["chat", "planning"],
+        heartbeat_at: "2026-03-27T00:02:00.000Z",
+      },
+    });
+    await callTool(client, "model.router", {
+      action: "upsert_backend",
+      mutation: nextMutation(testId, "model.router.upsert.remote", () => mutationCounter++),
+      backend: {
+        backend_id: "remote-backend",
+        provider: "vllm",
+        model_id: "qwen2.5-coder",
+        locality: "remote",
+        host_id: "pve1",
+        context_window: 32768,
+        latency_ms_p50: 55,
+        throughput_tps: 80,
+        success_rate: 0.97,
+        win_rate: 0.95,
+        tags: ["coding", "verification"],
+        heartbeat_at: "2026-03-27T00:03:00.000Z",
+      },
+    });
+
+    const evalSuite = await callTool(client, "eval.suite_upsert", {
+      mutation: nextMutation(testId, "eval.suite_upsert", () => mutationCounter++),
+      title: "Kernel substrate eval",
+      objective: "Score the new execution substrate summaries",
+      aggregate_metric_name: "suite_success_rate",
+      aggregate_metric_direction: "maximize",
+      cases: [
+        {
+          case_id: "benchmark-suite",
+          title: "Benchmark suite case",
+          kind: "benchmark_suite",
+          benchmark_suite_id: benchmarkSuite.suite.suite_id,
+          weight: 2,
+        },
+        {
+          case_id: "router-case",
+          title: "Router case",
+          kind: "router_case",
+          task_kind: "coding",
+          expected_backend_id: "remote-backend",
+          required_tags: ["coding"],
+          preferred_tags: ["verification"],
+          weight: 1,
+        },
+      ],
+      tags: ["kernel", "eval"],
+    });
+
+    await callTool(client, "org.program", {
+      action: "upsert_role",
+      mutation: nextMutation(testId, "org.program.upsert", () => mutationCounter++),
+      role_id: "ring-leader",
+      title: "Ring Leader",
+      lane: "orchestrator",
+      enabled: true,
+      version: {
+        summary: "v1 ring-leader doctrine",
+        doctrine: "Delegate, sequence, and verify with bounded confidence.",
+        delegation_contract: "Each directive must be bounded, owned, and evidence-backed.",
+        evaluation_standard: "Promote only when benchmarks and evals remain green.",
+        status: "active",
+      },
+    });
+
+    const summary = await callTool(client, "kernel.summary", {
+      goal_limit: 5,
+      session_limit: 5,
+      experiment_limit: 5,
+      artifact_limit: 5,
+      event_limit: 5,
+    });
+
+    assert.equal(summary.worker_fabric.host_count, 2);
+    assert.equal(summary.worker_fabric.enabled_host_count, 2);
+    assert.equal(summary.worker_fabric.default_host_id, "pve1");
+    assert.equal(summary.worker_fabric.health_counts.healthy, 1);
+    assert.equal(summary.worker_fabric.health_counts.degraded, 1);
+    assert.equal(summary.worker_fabric.health_counts.offline, 0);
+    assert.equal(summary.overview.worker_fabric.host_count, 2);
+    assert.equal(summary.overview.worker_fabric.enabled_host_count, 2);
+    assert.equal(summary.overview.worker_fabric.healthy_host_count, 1);
+    assert.equal(summary.overview.worker_fabric.degraded_host_count, 1);
+    assert.equal(summary.model_router.backend_count, 2);
+    assert.equal(summary.model_router.enabled_backend_count, 2);
+    assert.equal(summary.model_router.default_backend_id, "local-backend");
+    assert.equal(summary.overview.model_router.backend_count, 2);
+    assert.equal(summary.overview.model_router.enabled_backend_count, 2);
+    assert.equal(summary.evals.suite_count, 1);
+    assert.equal(summary.evals.total_case_count, 2);
+    assert.equal(summary.evals.benchmark_case_count, 1);
+    assert.equal(summary.evals.router_case_count, 1);
+    assert.equal(summary.overview.eval_suites.suite_count, 1);
+    assert.equal(summary.overview.eval_suites.total_case_count, 2);
+    assert.equal(summary.org_programs.role_count, 1);
+    assert.equal(summary.org_programs.active_version_count, 1);
+    assert.equal(summary.overview.org_programs.role_count, 1);
+    assert.equal(summary.overview.org_programs.active_version_count, 1);
+    assert.ok(summary.worker_fabric.hosts.some((host) => host.host_id === "pve1" && host.health_state === "degraded"));
+    assert.ok(summary.model_router.backends.some((backend) => backend.backend_id === "remote-backend" && backend.provider === "vllm"));
+    assert.ok(summary.evals.suites.some((suite) => suite.suite_id === evalSuite.suite.suite_id && suite.router_case_count === 1));
+    assert.ok(summary.org_programs.roles.some((role) => role.role_id === "ring-leader" && role.active_version_id !== null));
+    assert.equal(summary.attention.some((entry) => /No worker fabric hosts|No model router backends|No eval suites|No org-program roles/i.test(entry)), false);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("agent session lifecycle persists across open, heartbeat, list, and close", async () => {
   const testId = `${Date.now()}-agent-session`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-agent-session-test-"));

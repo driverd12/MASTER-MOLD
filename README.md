@@ -121,6 +121,14 @@ Methodology automation: [Automated GSD + autoresearch Pipeline](./docs/AUTOMATED
 
 Execution roadmap: [Bleeding-Edge Execution Roadmap](./docs/BLEEDING_EDGE_EXECUTION_ROADMAP.md)
 
+Execution substrate additions now shipped in core:
+
+- `worker.fabric` for host registry, telemetry, and resource-aware lane routing
+- `model.router` for measured backend selection across local and remote model runtimes
+- `benchmark.*` and `eval.*` for isolated execution scoring and router-aware eval suites
+- `task.compile` for durable DAG-style plan compilation with owner/evidence/rollback contracts
+- `org.program` for versioned ring leader, director, SME, and leaf operating doctrine
+
 Practical entrypoint:
 - use `playbook.run` to instantiate a GSD/autoresearch workflow and immediately enter `goal.execute`
 - let `agent.report_result` feed artifacts, experiment observations, evidence gates, and bounded `goal.autorun` continuation back into the kernel

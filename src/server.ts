@@ -92,6 +92,7 @@ import {
   benchmarkSuiteUpsert,
   benchmarkSuiteUpsertSchema,
 } from "./tools/benchmark.js";
+import { evalRun, evalRunSchema, evalSuiteList, evalSuiteListSchema, evalSuiteUpsert, evalSuiteUpsertSchema } from "./tools/eval.js";
 import { eventPublish, eventPublishSchema, eventSummary, eventSummarySchema, eventTail, eventTailSchema } from "./tools/event.js";
 import {
   goalAutorun,
@@ -192,6 +193,9 @@ import {
   initializeTaskAutoRetryDaemon,
 } from "./tools/task.js";
 import { workerFabric, workerFabricSchema } from "./tools/worker_fabric.js";
+import { modelRouter, modelRouterSchema } from "./tools/model_router.js";
+import { orgProgram, orgProgramSchema } from "./tools/org_program.js";
+import { taskCompile, taskCompileSchema } from "./tools/task_compiler.js";
 import {
   trichatChaos,
   trichatChaosSchema,
@@ -1798,6 +1802,18 @@ registerTool("benchmark.run", "Execute a benchmark suite against a real host wit
   benchmarkRun(storage, input)
 );
 
+registerTool("eval.suite_upsert", "Create or update a durable eval suite that composes benchmark and router cases.", evalSuiteUpsertSchema, (input) =>
+  evalSuiteUpsert(storage, input)
+);
+
+registerTool("eval.suite_list", "List durable eval suites.", evalSuiteListSchema, (input) =>
+  evalSuiteList(storage, input)
+);
+
+registerTool("eval.run", "Execute a durable eval suite against real benchmark suites and model-router decisions.", evalRunSchema, (input) =>
+  evalRun(storage, input)
+);
+
 registerTool("playbook.list", "List built-in workflow playbooks inspired by external agent methodologies.", playbookListSchema, (input) =>
   playbookList(storage, input)
 );
@@ -2106,6 +2122,18 @@ registerTool("task.auto_retry", "Manage failed-task auto-retry daemon with deter
 );
 registerTool("worker.fabric", "Manage the distributed worker fabric across local and remote execution hosts.", workerFabricSchema, (input) =>
   workerFabric(storage, input)
+);
+
+registerTool("model.router", "Manage and route across measured local and remote model backends.", modelRouterSchema, (input) =>
+  modelRouter(storage, input)
+);
+
+registerTool("org.program", "Version and promote role programs for ring leader, directors, SMEs, and leaf agents.", orgProgramSchema, (input) =>
+  orgProgram(storage, input)
+);
+
+registerTool("task.compile", "Compile an objective into a durable DAG-style plan with explicit owners, evidence contracts, and rollback notes.", taskCompileSchema, (input) =>
+  taskCompile(storage, input)
 );
 
 registerTool("trichat.thread_open", "Create or update a durable tri-chat thread.", trichatThreadOpenSchema, (input) =>
