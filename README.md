@@ -119,6 +119,8 @@ More detail: [Architecture Pitch](./docs/ARCHITECTURE_PITCH.md)
 
 Methodology automation: [Automated GSD + autoresearch Pipeline](./docs/AUTOMATED_GSD_AUTORESEARCH_PIPELINE.md)
 
+Execution roadmap: [Bleeding-Edge Execution Roadmap](./docs/BLEEDING_EDGE_EXECUTION_ROADMAP.md)
+
 Practical entrypoint:
 - use `playbook.run` to instantiate a GSD/autoresearch workflow and immediately enter `goal.execute`
 - let `agent.report_result` feed artifacts, experiment observations, evidence gates, and bounded `goal.autorun` continuation back into the kernel

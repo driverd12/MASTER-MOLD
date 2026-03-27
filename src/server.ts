@@ -84,6 +84,14 @@ import {
   experimentRun,
   experimentRunSchema,
 } from "./tools/experiment.js";
+import {
+  benchmarkRun,
+  benchmarkRunSchema,
+  benchmarkSuiteList,
+  benchmarkSuiteListSchema,
+  benchmarkSuiteUpsert,
+  benchmarkSuiteUpsertSchema,
+} from "./tools/benchmark.js";
 import { eventPublish, eventPublishSchema, eventSummary, eventSummarySchema, eventTail, eventTailSchema } from "./tools/event.js";
 import {
   goalAutorun,
@@ -183,6 +191,7 @@ import {
   taskAutoRetrySchema,
   initializeTaskAutoRetryDaemon,
 } from "./tools/task.js";
+import { workerFabric, workerFabricSchema } from "./tools/worker_fabric.js";
 import {
   trichatChaos,
   trichatChaosSchema,
@@ -1779,6 +1788,15 @@ registerTool("experiment.run", "Create a durable experiment candidate run and op
 registerTool("experiment.judge", "Judge a durable experiment run, compute improvement, and optionally promote the best candidate.", experimentJudgeSchema, (input) =>
   experimentJudge(storage, input)
 );
+registerTool("benchmark.suite_upsert", "Create or update a durable benchmark suite definition.", benchmarkSuiteUpsertSchema, (input) =>
+  benchmarkSuiteUpsert(storage, input)
+);
+registerTool("benchmark.suite_list", "List durable benchmark suite definitions.", benchmarkSuiteListSchema, (input) =>
+  benchmarkSuiteList(storage, input)
+);
+registerTool("benchmark.run", "Execute a benchmark suite against a real host with isolated workspaces and durable evidence.", benchmarkRunSchema, (input) =>
+  benchmarkRun(storage, input)
+);
 
 registerTool("playbook.list", "List built-in workflow playbooks inspired by external agent methodologies.", playbookListSchema, (input) =>
   playbookList(storage, input)
@@ -2085,6 +2103,9 @@ registerTool("task.retry", "Requeue a failed task for retry with optional delay.
 
 registerTool("task.auto_retry", "Manage failed-task auto-retry daemon with deterministic backoff.", taskAutoRetrySchema, (input) =>
   taskAutoRetryControl(storage, input)
+);
+registerTool("worker.fabric", "Manage the distributed worker fabric across local and remote execution hosts.", workerFabricSchema, (input) =>
+  workerFabric(storage, input)
 );
 
 registerTool("trichat.thread_open", "Create or update a durable tri-chat thread.", trichatThreadOpenSchema, (input) =>

@@ -27,6 +27,13 @@ import { appendTranscript, summarizeTranscript } from "./transcript.js";
 import { agentClaimNext, agentReportResult } from "./agent_session.js";
 import { taskCreate } from "./task.js";
 import { ensureWorkspaceFingerprint } from "./workspace_fingerprint.js";
+import { buildIsolatedExecutionPlan, buildRemoteExecutionCommand } from "../execution_isolation.js";
+import {
+  buildWorkerFabricSlots,
+  resolveEffectiveWorkerFabric,
+  resolveTaskExecutionRouting,
+  type WorkerFabricSlot,
+} from "./worker_fabric.js";
 import {
   getTriChatActiveAgentIds,
   getTriChatAgent,
@@ -448,6 +455,9 @@ const trichatTmuxTaskInputSchema = z.object({
   command: z.string().min(1),
   priority: z.number().int().min(1).max(100).optional(),
   complexity: z.number().int().min(1).max(100).optional(),
+  project_dir: z.string().min(1).optional(),
+  host_id: z.string().min(1).optional(),
+  isolation_mode: z.enum(["git_worktree", "copy", "none"]).optional(),
   thread_id: z.string().min(1).optional(),
   turn_id: z.string().min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -885,6 +895,7 @@ type TriChatTmuxTaskInput = z.infer<typeof trichatTmuxTaskInputSchema>;
 
 type TriChatTmuxWorkerSnapshot = {
   worker_id: string;
+  host_id: string;
   active_queue: number;
   active_load: number;
   recent_task_ids: string[];
@@ -922,6 +933,7 @@ type TriChatTmuxDashboardPayload = {
   queue_oldest_task_id: string | null;
   worker_load: Array<{
     worker_id: string;
+    host_id: string;
     active_queue: number;
     active_load: number;
     lane_state: TriChatTmuxLaneState;
@@ -2098,20 +2110,26 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
 
   if (input.action === "tail") {
     const resolved = resolveTmuxControllerState(storage, input);
+    const workerSlots = buildWorkerFabricSlots(storage, {
+      fallback_workspace_root: resolved.workspace,
+      fallback_worker_count: resolved.worker_count,
+      fallback_shell: resolved.shell,
+    });
     const runtime = getTmuxRuntimeInfo();
     const sessionActive = runtime.dry_run ? true : tmuxSessionExists(resolved.session_name);
     const reconciled = reconcileTmuxTaskResidue(resolved, {
       session_active: sessionActive,
     });
     const state = reconciled.state;
-    const summarized = summarizeTmuxState(state, input.include_completed ?? false);
+    const summarized = summarizeTmuxState(state, input.include_completed ?? false, workerSlots);
     return {
       generated_at: new Date().toISOString(),
       action: "tail",
       state: summarized,
-      dashboard: buildTmuxDashboard(state, summarized.workers),
+      dashboard: buildTmuxDashboard(state, summarized.workers, workerSlots),
       reconciliation: reconciled.summary,
       panes: captureTmuxWorkerPanes(state, {
+        worker_slots: workerSlots,
         worker_id: input.worker_id,
         capture_lines: input.capture_lines ?? 200,
       }),
@@ -2131,23 +2149,33 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
     execute: async () => {
       if (input.action === "start") {
         const desired = reconcileTmuxTaskResidue(resolveTmuxControllerState(storage, input)).state;
-        ensureTmuxSession(desired);
+        const workerSlots = buildWorkerFabricSlots(storage, {
+          fallback_workspace_root: desired.workspace,
+          fallback_worker_count: desired.worker_count,
+          fallback_shell: desired.shell,
+        });
+        ensureTmuxSession(desired, workerSlots);
         const persisted = storage.setTriChatTmuxControllerState({
           ...desired,
           enabled: true,
           last_error: null,
         });
-        const summarized = summarizeTmuxState(persisted, true);
+        const summarized = summarizeTmuxState(persisted, true, workerSlots);
         return {
           action: "start",
           ok: true,
           status: summarized,
-          dashboard: buildTmuxDashboard(persisted, summarized.workers),
+          dashboard: buildTmuxDashboard(persisted, summarized.workers, workerSlots),
         };
       }
 
       if (input.action === "stop") {
         const desired = resolveTmuxControllerState(storage, input);
+        const workerSlots = buildWorkerFabricSlots(storage, {
+          fallback_workspace_root: desired.workspace,
+          fallback_worker_count: desired.worker_count,
+          fallback_shell: desired.shell,
+        });
         const stopResult = stopTmuxSession(desired.session_name);
         const reconciled = reconcileTmuxTaskResidue(
           {
@@ -2166,13 +2194,19 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
           ok: stopResult.ok,
           stop_result: stopResult,
           status: summarized,
-          dashboard: buildTmuxDashboard(persisted, summarized.workers),
+          dashboard: buildTmuxDashboard(persisted, summarized.workers, workerSlots),
         };
       }
 
       if (input.action === "sync") {
         const desired = resolveTmuxControllerState(storage, input);
+        const workerSlots = buildWorkerFabricSlots(storage, {
+          fallback_workspace_root: desired.workspace,
+          fallback_worker_count: desired.worker_count,
+          fallback_shell: desired.shell,
+        });
         const synced = syncTmuxTaskStatusFromPanes(desired, {
+          worker_slots: workerSlots,
           capture_lines: input.capture_lines ?? 400,
         });
         const reconciled = reconcileTmuxTaskResidue(synced.state);
@@ -2180,12 +2214,12 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
           ...reconciled.state,
           tasks: pruneTmuxTaskHistory(reconciled.state.tasks),
         });
-        const summarized = summarizeTmuxState(persisted, true);
+        const summarized = summarizeTmuxState(persisted, true, workerSlots);
         return {
           action: "sync",
           ok: true,
           status: summarized,
-          dashboard: buildTmuxDashboard(persisted, summarized.workers),
+          dashboard: buildTmuxDashboard(persisted, summarized.workers, workerSlots),
           sync: synced.summary,
         };
       }
@@ -2198,7 +2232,11 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
             action: "maintain",
             ok: false,
             status: summarized,
-            dashboard: buildTmuxDashboard(desired, summarized.workers),
+            dashboard: buildTmuxDashboard(desired, summarized.workers, buildWorkerFabricSlots(storage, {
+              fallback_workspace_root: desired.workspace,
+              fallback_worker_count: desired.worker_count,
+              fallback_shell: desired.shell,
+            })),
             maintenance: {
               skipped: true,
               reason: "tmux controller is disabled",
@@ -2215,7 +2253,12 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
             },
           };
         }
-        ensureTmuxSession(desired);
+        const workerSlots = buildWorkerFabricSlots(storage, {
+          fallback_workspace_root: desired.workspace,
+          fallback_worker_count: desired.worker_count,
+          fallback_shell: desired.shell,
+        });
+        ensureTmuxSession(desired, workerSlots);
         const lockKey =
           input.lock_key?.trim() || `trichat.tmux_controller.exec.${desired.session_name.replace(/\s+/g, "-")}`;
         const lockOwnerId = `${TMUX_CONTROLLER_EXEC_OWNER}:${Date.now()}:${Math.floor(Math.random() * 10_000)}`;
@@ -2245,6 +2288,7 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
         try {
           let nextState = { ...desired };
           const sync = syncTmuxTaskStatusFromPanes(nextState, {
+            worker_slots: workerSlots,
             capture_lines: input.capture_lines ?? 400,
           });
           nextState = reconcileTmuxTaskResidue(sync.state).state;
@@ -2255,8 +2299,8 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
             target_queue_per_worker: input.target_queue_per_worker,
           });
           nextState = scaleDecision.state;
-          const workerSnapshots = buildTmuxWorkerSnapshots(nextState);
-          const laneSignals = buildTmuxWorkerLaneSignals(nextState, workerSnapshots);
+          const workerSnapshots = buildTmuxWorkerSnapshots(nextState, workerSlots);
+          const laneSignals = buildTmuxWorkerLaneSignals(nextState, workerSnapshots, workerSlots);
           const nudgeResult = (input.nudge_blocked_lanes ?? true)
             ? nudgeBlockedTmuxWorkers(nextState, laneSignals)
             : { nudged_count: 0, nudges: [] };
@@ -2268,12 +2312,12 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
             tasks: pruneTmuxTaskHistory(nextState.tasks),
             last_error: firstNudgeError ?? null,
           });
-          const summarized = summarizeTmuxState(persisted, true);
+          const summarized = summarizeTmuxState(persisted, true, workerSlots);
           return {
             action: "maintain",
             ok: !firstNudgeError,
             status: summarized,
-            dashboard: buildTmuxDashboard(persisted, summarized.workers),
+            dashboard: buildTmuxDashboard(persisted, summarized.workers, workerSlots),
             maintenance: {
               skipped: false,
               reason: null,
@@ -2301,7 +2345,17 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
       if (!desired.enabled) {
         throw new Error("tmux controller is disabled; call action=start first");
       }
-      ensureTmuxSession(desired);
+      const workerSlots = buildWorkerFabricSlots(storage, {
+        fallback_workspace_root: desired.workspace,
+        fallback_worker_count: desired.worker_count,
+        fallback_shell: desired.shell,
+      });
+      const fabric = resolveEffectiveWorkerFabric(storage, {
+        fallback_workspace_root: desired.workspace,
+        fallback_worker_count: desired.worker_count,
+        fallback_shell: desired.shell,
+      });
+      ensureTmuxSession(desired, workerSlots);
 
       const lockKey =
         input.lock_key?.trim() || `trichat.tmux_controller.exec.${desired.session_name.replace(/\s+/g, "-")}`;
@@ -2327,6 +2381,7 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
 
       try {
         const syncBefore = syncTmuxTaskStatusFromPanes(desired, {
+          worker_slots: workerSlots,
           capture_lines: input.capture_lines ?? 400,
         });
         let nextState = reconcileTmuxTaskResidue(syncBefore.state).state;
@@ -2341,9 +2396,9 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
         };
         nextState = reconcileTmuxTaskResidue(nextState).state;
 
-        const assignment = assignQueuedTmuxTasks(nextState);
+        const assignment = assignQueuedTmuxTasks(nextState, workerSlots, fabric.strategy, fabric.default_host_id);
         nextState = assignment.state;
-        const dispatchResults = dispatchAssignedTmuxTasks(nextState);
+        const dispatchResults = dispatchAssignedTmuxTasks(nextState, workerSlots);
         nextState = dispatchResults.state;
 
         const dispatchTime = new Date().toISOString();
@@ -2420,12 +2475,12 @@ export function trichatTmuxController(storage: Storage, input: z.infer<typeof tr
           }
         }
 
-        const summarized = summarizeTmuxState(persisted, true);
+        const summarized = summarizeTmuxState(persisted, true, workerSlots);
         return {
           action: "dispatch",
           ok: dispatchResults.failures.length === 0,
           status: summarized,
-          dashboard: buildTmuxDashboard(persisted, summarized.workers),
+          dashboard: buildTmuxDashboard(persisted, summarized.workers, workerSlots),
           sync_before: syncBefore.summary,
           enqueued_count: materialized.tasks.length,
           assigned_count: assignment.assigned.length,
@@ -6114,6 +6169,7 @@ async function runAutopilotExecutionViaTmux(
 ): Promise<AutopilotExecutionResult> {
   const taskQueue = buildAutopilotTmuxTaskQueue({
     commands: input.command_plan.allowed_commands,
+    project_dir: input.intake.project_dir,
     thread_id: input.intake.thread_id,
     turn_id: input.intake.turn_id,
     strategy: input.selected_strategy,
@@ -7987,6 +8043,13 @@ function dedupeNonEmptyCommands(values: string[]): string[] {
   return [...deduped];
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return dedupeNonEmptyCommands(value.map((entry) => String(entry ?? "").trim()).filter(Boolean));
+}
+
 function resolveAutopilotExecutionBackendPreference(
   config: TriChatAutopilotConfig,
   commands: string[],
@@ -8014,6 +8077,7 @@ function resolveAutopilotExecutionBackendPreference(
 
 function buildAutopilotTmuxTaskQueue(input: {
   commands: string[];
+  project_dir: string;
   thread_id: string;
   turn_id: string;
   strategy: string;
@@ -8046,6 +8110,8 @@ function buildAutopilotTmuxTaskQueue(input: {
     return {
       title,
       command,
+      project_dir: input.project_dir,
+      isolation_mode: "git_worktree",
       priority: basePriority,
       complexity,
       thread_id: input.thread_id,
@@ -8062,6 +8128,10 @@ function buildAutopilotTmuxTaskQueue(input: {
         success_criteria: delegationBrief?.success_criteria ?? [],
         evidence_requirements: delegationBrief?.evidence_requirements ?? [],
         rollback_notes: delegationBrief?.rollback_notes ?? [],
+        project_dir: input.project_dir,
+        task_execution: {
+          isolation_mode: "git_worktree",
+        },
         task_routing: {
           preferred_agent_ids: preferredAgentIds,
           allowed_agent_ids: [AUTOPILOT_WORKER_ID],
@@ -10672,22 +10742,52 @@ function evaluateTurnAutoFinalizationInvariants(
 
 function buildTmuxControllerStatus(storage: Storage, input: z.infer<typeof trichatTmuxControllerSchema>) {
   const resolved = resolveTmuxControllerState(storage, input);
+  const workerSlots = buildWorkerFabricSlots(storage, {
+    fallback_workspace_root: resolved.workspace,
+    fallback_worker_count: resolved.worker_count,
+    fallback_shell: resolved.shell,
+  });
   const runtime = getTmuxRuntimeInfo();
   const sessionActive = runtime.dry_run ? true : tmuxSessionExists(resolved.session_name);
   const reconciled = reconcileTmuxTaskResidue(resolved, {
     session_active: sessionActive,
   });
   const state = reconciled.state;
-  const summarized = summarizeTmuxState(state, input.include_completed ?? false);
+  const summarized = summarizeTmuxState(state, input.include_completed ?? false, workerSlots);
   return {
     generated_at: new Date().toISOString(),
     action: "status",
     runtime,
     session_active: sessionActive,
     state: summarized,
-    dashboard: buildTmuxDashboard(state, summarized.workers),
+    dashboard: buildTmuxDashboard(state, summarized.workers, workerSlots),
     reconciliation: reconciled.summary,
   };
+}
+
+function fallbackTmuxWorkerSlots(state: TriChatTmuxControllerStateRecord): WorkerFabricSlot[] {
+  return resolveTmuxWorkerIds(state.worker_count).map((workerId) => ({
+    worker_id: workerId,
+    host_id: "local",
+    transport: "local",
+    ssh_destination: null,
+    workspace_root: state.workspace,
+    shell: state.shell,
+    tags: ["local", "default"],
+    capabilities: {},
+    metadata: {},
+  }));
+}
+
+function findTmuxWorkerSlot(
+  workerSlots: WorkerFabricSlot[],
+  workerId: string | null | undefined
+): WorkerFabricSlot | null {
+  const normalized = String(workerId ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+  return workerSlots.find((slot) => slot.worker_id === normalized) ?? null;
 }
 
 function resolveTmuxControllerState(
@@ -10728,7 +10828,11 @@ function resolveTmuxControllerState(
   };
 }
 
-function summarizeTmuxState(state: TriChatTmuxControllerStateRecord, includeCompleted: boolean) {
+function summarizeTmuxState(
+  state: TriChatTmuxControllerStateRecord,
+  includeCompleted: boolean,
+  workerSlots?: WorkerFabricSlot[]
+) {
   const tasks = includeCompleted ? state.tasks : state.tasks.filter((task) => !isTerminalTmuxTaskStatus(task.status));
   const counts = {
     total: tasks.length,
@@ -10751,14 +10855,15 @@ function summarizeTmuxState(state: TriChatTmuxControllerStateRecord, includeComp
     last_dispatch_at: state.last_dispatch_at,
     last_error: state.last_error,
     counts,
-    workers: buildTmuxWorkerSnapshots(state),
+    workers: buildTmuxWorkerSnapshots(state, workerSlots),
     tasks,
   };
 }
 
 function buildTmuxDashboard(
   state: TriChatTmuxControllerStateRecord,
-  workerSnapshots?: TriChatTmuxWorkerSnapshot[]
+  workerSnapshots?: TriChatTmuxWorkerSnapshot[],
+  workerSlots?: WorkerFabricSlot[]
 ): TriChatTmuxDashboardPayload {
   const nowMs = Date.now();
   const queueCandidates = state.tasks.filter((task) => task.status === "queued" || task.status === "dispatched");
@@ -10802,7 +10907,7 @@ function buildTmuxDashboard(
   const lastFailureAt =
     latestFailure?.completed_at ?? latestFailure?.dispatched_at ?? latestFailure?.created_at ?? null;
   const snapshots = workerSnapshots ?? buildTmuxWorkerSnapshots(state);
-  const laneSignals = buildTmuxWorkerLaneSignals(state, snapshots);
+  const laneSignals = buildTmuxWorkerLaneSignals(state, snapshots, workerSlots);
 
   return {
     generated_at: new Date().toISOString(),
@@ -10814,6 +10919,7 @@ function buildTmuxDashboard(
       lane_signal: laneSignals.get(snapshot.worker_id)?.lane_signal ?? null,
       lane_updated_at: laneSignals.get(snapshot.worker_id)?.lane_updated_at ?? new Date().toISOString(),
       worker_id: snapshot.worker_id,
+      host_id: snapshot.host_id,
       active_queue: snapshot.active_queue,
       active_load: snapshot.active_load,
     })),
@@ -11102,10 +11208,14 @@ function reconcileTmuxTaskResidue(
   };
 }
 
-function buildTmuxWorkerSnapshots(state: TriChatTmuxControllerStateRecord): TriChatTmuxWorkerSnapshot[] {
-  const workerIds = resolveTmuxWorkerIds(state.worker_count);
-  const snapshots = workerIds.map((workerId) => ({
-    worker_id: workerId,
+function buildTmuxWorkerSnapshots(
+  state: TriChatTmuxControllerStateRecord,
+  workerSlots?: WorkerFabricSlot[]
+): TriChatTmuxWorkerSnapshot[] {
+  const slots = workerSlots ?? fallbackTmuxWorkerSlots(state);
+  const snapshots = slots.map((slot) => ({
+    worker_id: slot.worker_id,
+    host_id: slot.host_id,
     active_queue: 0,
     active_load: 0,
     recent_task_ids: [] as string[],
@@ -11135,8 +11245,10 @@ function buildTmuxWorkerSnapshots(state: TriChatTmuxControllerStateRecord): TriC
 
 function buildTmuxWorkerLaneSignals(
   state: TriChatTmuxControllerStateRecord,
-  snapshots: TriChatTmuxWorkerSnapshot[]
+  snapshots: TriChatTmuxWorkerSnapshot[],
+  workerSlots?: WorkerFabricSlot[]
 ): Map<string, TriChatTmuxWorkerLaneSignal> {
+  const slots = workerSlots ?? fallbackTmuxWorkerSlots(state);
   const nowIso = new Date().toISOString();
   const signals = new Map<string, TriChatTmuxWorkerLaneSignal>();
   const workerIds = snapshots.map((snapshot) => snapshot.worker_id);
@@ -11163,6 +11275,7 @@ function buildTmuxWorkerLaneSignals(
   }
 
   const captured = captureTmuxWorkerPanes(state, {
+    worker_slots: slots,
     capture_lines: 220,
   });
   for (const pane of captured) {
@@ -11303,16 +11416,17 @@ function lastNonEmptyTmuxLine(output: string): string | null {
 
 function captureTmuxWorkerPanes(
   state: TriChatTmuxControllerStateRecord,
-  input: { worker_id?: string; capture_lines: number }
+  input: { worker_id?: string; capture_lines: number; worker_slots?: WorkerFabricSlot[] }
 ) {
   const requestedWorker = input.worker_id?.trim() || null;
-  const workerIds = resolveTmuxWorkerIds(state.worker_count).filter((workerId) =>
-    requestedWorker ? workerId === requestedWorker : true
+  const slots = (input.worker_slots ?? fallbackTmuxWorkerSlots(state)).filter((slot) =>
+    requestedWorker ? slot.worker_id === requestedWorker : true
   );
-  return workerIds.map((workerId) => {
-    const capture = captureTmuxPane(state.session_name, workerId, input.capture_lines);
+  return slots.map((slot) => {
+    const capture = captureTmuxPane(state.session_name, slot.worker_id, input.capture_lines);
     return {
-      worker_id: workerId,
+      worker_id: slot.worker_id,
+      host_id: slot.host_id,
       ok: capture.ok,
       error: capture.ok ? null : capture.error,
       output: capture.stdout,
@@ -11324,9 +11438,10 @@ function captureTmuxWorkerPanes(
 
 function syncTmuxTaskStatusFromPanes(
   state: TriChatTmuxControllerStateRecord,
-  input: { capture_lines: number }
+  input: { capture_lines: number; worker_slots?: WorkerFabricSlot[] }
 ): TriChatTmuxSyncResult {
   const markersByWorker = captureTmuxWorkerPanes(state, {
+    worker_slots: input.worker_slots,
     capture_lines: input.capture_lines,
   });
   const startedIds = new Set<string>();
@@ -11482,6 +11597,20 @@ function resolveTmuxTaskOwnershipMode(task: { command: string; metadata?: Record
   return isLikelyMutatingTmuxCommand(task.command) ? "mutating" : "read_only";
 }
 
+function mapProjectDirToWorkerHost(projectDir: string, controllerWorkspace: string, hostWorkspaceRoot: string) {
+  const normalizedProjectDir = path.resolve(projectDir);
+  const normalizedControllerWorkspace = path.resolve(controllerWorkspace);
+  const normalizedHostRoot = hostWorkspaceRoot.replace(/\\/g, "/");
+  if (!normalizedProjectDir.startsWith(normalizedControllerWorkspace)) {
+    return normalizedHostRoot;
+  }
+  const relative = path.relative(normalizedControllerWorkspace, normalizedProjectDir).replace(/\\/g, "/");
+  if (!relative || relative === ".") {
+    return normalizedHostRoot;
+  }
+  return path.posix.join(normalizedHostRoot, relative);
+}
+
 function materializeTmuxInputTasks(
   tasks: TriChatTmuxTaskInput[],
   nextTaskSeq: number,
@@ -11508,6 +11637,23 @@ function materializeTmuxInputTasks(
       ? normalizeTmuxTaskId(explicitTaskId)
       : `tmux-${seq}-${autopilotHash(`${title}|${command}|${seq}`).slice(0, 10)}`;
     const metadata = { ...(task.metadata ?? {}) };
+    const executionMetadata = isRecord(metadata.task_execution) ? metadata.task_execution : {};
+    if (task.project_dir?.trim()) {
+      metadata.project_dir = task.project_dir.trim();
+    }
+    if (task.host_id?.trim()) {
+      metadata.host_id = task.host_id.trim();
+    }
+    metadata.task_execution = {
+      ...executionMetadata,
+      isolation_mode: task.isolation_mode ?? String(executionMetadata.isolation_mode ?? "git_worktree"),
+      preferred_host_ids: task.host_id?.trim()
+        ? dedupeNonEmptyCommands([task.host_id.trim(), ...normalizeStringArray(executionMetadata.preferred_host_ids)])
+        : normalizeStringArray(executionMetadata.preferred_host_ids),
+      allowed_host_ids: normalizeStringArray(executionMetadata.allowed_host_ids),
+      preferred_host_tags: normalizeStringArray(executionMetadata.preferred_host_tags),
+      required_host_tags: normalizeStringArray(executionMetadata.required_host_tags),
+    };
     const ownershipScope = resolveTmuxTaskOwnershipScope({
       command,
       metadata,
@@ -11544,9 +11690,15 @@ function materializeTmuxInputTasks(
   };
 }
 
-function assignQueuedTmuxTasks(state: TriChatTmuxControllerStateRecord): TriChatTmuxAssignmentResult {
+function assignQueuedTmuxTasks(
+  state: TriChatTmuxControllerStateRecord,
+  workerSlots?: WorkerFabricSlot[],
+  fabricStrategy: "balanced" | "prefer_local" | "prefer_capacity" = "balanced",
+  defaultHostId: string | null = null
+): TriChatTmuxAssignmentResult {
   const tasks = state.tasks.map((task) => ({ ...task, metadata: { ...(task.metadata ?? {}) } }));
-  const workerIds = resolveTmuxWorkerIds(state.worker_count);
+  const slots = workerSlots ?? fallbackTmuxWorkerSlots(state);
+  const workerIds = slots.map((slot) => slot.worker_id);
   const workerStats = new Map<string, { active_queue: number; active_load: number }>();
   const busyOwnershipScopes = new Set<string>();
   for (const workerId of workerIds) {
@@ -11594,10 +11746,19 @@ function assignQueuedTmuxTasks(state: TriChatTmuxControllerStateRecord): TriChat
   for (const task of queued) {
     const ownershipMode = resolveTmuxTaskOwnershipMode(task);
     const ownershipScope = resolveTmuxTaskOwnershipScope(task);
+    const executionRouting = resolveTaskExecutionRouting(task.metadata);
     task.metadata = {
       ...(task.metadata ?? {}),
       ownership_mode: ownershipMode,
       ownership_scope: ownershipScope ?? null,
+      task_execution: {
+        ...(isRecord(task.metadata?.task_execution) ? task.metadata.task_execution : {}),
+        isolation_mode: executionRouting.isolation_mode,
+        preferred_host_ids: executionRouting.preferred_host_ids,
+        allowed_host_ids: executionRouting.allowed_host_ids,
+        preferred_host_tags: executionRouting.preferred_host_tags,
+        required_host_tags: executionRouting.required_host_tags,
+      },
     };
     if (ownershipMode === "mutating" && ownershipScope && busyOwnershipScopes.has(ownershipScope)) {
       unassigned.push({
@@ -11610,17 +11771,66 @@ function assignQueuedTmuxTasks(state: TriChatTmuxControllerStateRecord): TriChat
       continue;
     }
 
-    const candidates = workerIds
-      .map((workerId) => {
+    const candidates = slots
+      .map((slot) => {
+        const workerId = slot.worker_id;
         const stats = workerStats.get(workerId);
         return {
+          ...slot,
           worker_id: workerId,
           active_queue: stats?.active_queue ?? 0,
           active_load: stats?.active_load ?? 0,
         };
       })
+      .filter((slot) => {
+        if (executionRouting.allowed_host_ids.length > 0 && !executionRouting.allowed_host_ids.includes(slot.host_id)) {
+          return false;
+        }
+        if (executionRouting.required_host_tags.length > 0) {
+          const hostTags = new Set(slot.tags.map((entry) => entry.toLowerCase()));
+          if (!executionRouting.required_host_tags.every((tag) => hostTags.has(tag.toLowerCase()))) {
+            return false;
+          }
+        }
+        return true;
+      })
       .filter((entry) => entry.active_queue < state.max_queue_per_worker)
       .sort((left, right) => {
+        const leftPreferredHost = executionRouting.preferred_host_ids.includes(left.host_id) ? 1 : 0;
+        const rightPreferredHost = executionRouting.preferred_host_ids.includes(right.host_id) ? 1 : 0;
+        if (leftPreferredHost !== rightPreferredHost) {
+          return rightPreferredHost - leftPreferredHost;
+        }
+        const leftPreferredTags = executionRouting.preferred_host_tags.filter((tag) =>
+          left.tags.map((entry) => entry.toLowerCase()).includes(tag.toLowerCase())
+        ).length;
+        const rightPreferredTags = executionRouting.preferred_host_tags.filter((tag) =>
+          right.tags.map((entry) => entry.toLowerCase()).includes(tag.toLowerCase())
+        ).length;
+        if (leftPreferredTags !== rightPreferredTags) {
+          return rightPreferredTags - leftPreferredTags;
+        }
+        if (fabricStrategy === "prefer_local") {
+          const leftLocal = left.transport === "local" ? 1 : 0;
+          const rightLocal = right.transport === "local" ? 1 : 0;
+          if (leftLocal !== rightLocal) {
+            return rightLocal - leftLocal;
+          }
+        }
+        if (defaultHostId) {
+          const leftDefault = left.host_id === defaultHostId ? 1 : 0;
+          const rightDefault = right.host_id === defaultHostId ? 1 : 0;
+          if (leftDefault !== rightDefault) {
+            return rightDefault - leftDefault;
+          }
+        }
+        if (fabricStrategy === "prefer_capacity") {
+          const leftCapacity = Number(left.capabilities.gpu_memory_gb ?? left.capabilities.ram_gb ?? 0);
+          const rightCapacity = Number(right.capabilities.gpu_memory_gb ?? right.capabilities.ram_gb ?? 0);
+          if (leftCapacity !== rightCapacity) {
+            return rightCapacity - leftCapacity;
+          }
+        }
         if (left.active_load !== right.active_load) {
           return left.active_load - right.active_load;
         }
@@ -11668,8 +11878,12 @@ function assignQueuedTmuxTasks(state: TriChatTmuxControllerStateRecord): TriChat
   };
 }
 
-function dispatchAssignedTmuxTasks(state: TriChatTmuxControllerStateRecord): TriChatTmuxDispatchResult {
+function dispatchAssignedTmuxTasks(
+  state: TriChatTmuxControllerStateRecord,
+  workerSlots?: WorkerFabricSlot[]
+): TriChatTmuxDispatchResult {
   const tasks = state.tasks.map((task) => ({ ...task, metadata: { ...(task.metadata ?? {}) } }));
+  const slots = workerSlots ?? fallbackTmuxWorkerSlots(state);
   const queue = tasks
     .filter((task): task is TriChatTmuxDispatchTaskRecord => task.status === "queued" && Boolean(task.worker_id))
     .sort((left, right) => left.seq - right.seq);
@@ -11678,7 +11892,8 @@ function dispatchAssignedTmuxTasks(state: TriChatTmuxControllerStateRecord): Tri
   const failures: TriChatTmuxDispatchResult["failures"] = [];
 
   for (const task of queue) {
-    const result = dispatchTmuxTask(state.session_name, state.workspace, task.worker_id, task);
+    const slot = findTmuxWorkerSlot(slots, task.worker_id);
+    const result = dispatchTmuxTask(state.session_name, state.workspace, task.worker_id, task, slot);
     if (result.ok) {
       task.status = "dispatched";
       task.dispatched_at = now;
@@ -11727,7 +11942,7 @@ function isTerminalTmuxTaskStatus(status: TriChatTmuxControllerTaskRecord["statu
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
-function ensureTmuxSession(state: TriChatTmuxControllerStateRecord): void {
+function ensureTmuxSession(state: TriChatTmuxControllerStateRecord, workerSlots?: WorkerFabricSlot[]): void {
   const runtime = getTmuxRuntimeInfo();
   if (!runtime.available) {
     throw new Error(runtime.error ?? "tmux runtime is unavailable");
@@ -11737,7 +11952,7 @@ function ensureTmuxSession(state: TriChatTmuxControllerStateRecord): void {
   }
 
   fs.mkdirSync(state.workspace, { recursive: true });
-  const workerIds = resolveTmuxWorkerIds(state.worker_count);
+  const workerIds = (workerSlots ?? fallbackTmuxWorkerSlots(state)).map((slot) => slot.worker_id);
   const sessionExists = tmuxSessionExists(state.session_name);
   if (!sessionExists) {
     const firstWorker = workerIds[0];
@@ -11836,7 +12051,8 @@ function dispatchTmuxTask(
   sessionName: string,
   workspace: string,
   workerId: string,
-  task: TriChatTmuxDispatchTaskRecord
+  task: TriChatTmuxDispatchTaskRecord,
+  workerSlot?: WorkerFabricSlot | null
 ): TriChatTmuxCommandResult {
   const protectedDbMatch = commandReferencesProtectedDbArtifact(task.command, {
     repo_root: process.cwd(),
@@ -11855,9 +12071,38 @@ function dispatchTmuxTask(
       timed_out: false,
     };
   }
+  const executionRouting = resolveTaskExecutionRouting(task.metadata);
+  const projectDir = String(task.metadata?.project_dir ?? workspace).trim() || workspace;
+  const baseWorkspace =
+    workerSlot && workerSlot.transport !== "local"
+      ? mapProjectDirToWorkerHost(projectDir, workspace, workerSlot.workspace_root)
+      : projectDir;
+  const isolatedPlan = buildIsolatedExecutionPlan({
+    base_workspace: baseWorkspace,
+    command: task.command,
+    task_id: task.task_id,
+    isolation_mode: executionRouting.isolation_mode,
+  });
+  task.metadata = {
+    ...(task.metadata ?? {}),
+    isolated_workspace: isolatedPlan.workspace,
+    task_execution: {
+      ...(isRecord(task.metadata?.task_execution) ? task.metadata.task_execution : {}),
+      isolation_mode: executionRouting.isolation_mode,
+      isolated_workspace: isolatedPlan.workspace,
+      host_id: workerSlot?.host_id ?? "local",
+    },
+  };
+  const executableCommand =
+    workerSlot?.transport === "ssh"
+      ? buildRemoteExecutionCommand({
+          ssh_destination: workerSlot.ssh_destination ?? "",
+          script: isolatedPlan.script,
+        })
+      : isolatedPlan.script;
   const wrapped = [
     `echo "${TMUX_TASK_START_MARKER} ${task.task_id}"`,
-    task.command,
+    executableCommand,
     "__trichat_ec=$?",
     `echo "${TMUX_TASK_END_MARKER} ${task.task_id} $__trichat_ec"`,
   ].join("; ");

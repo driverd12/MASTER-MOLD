@@ -713,6 +713,67 @@ export type TaskAutoRetryStateRecord = {
   updated_at: string;
 };
 
+export type WorkerFabricTransport = "local" | "ssh";
+
+export type WorkerFabricHostRecord = {
+  host_id: string;
+  enabled: boolean;
+  transport: WorkerFabricTransport;
+  ssh_destination: string | null;
+  workspace_root: string;
+  worker_count: number;
+  shell: string;
+  capabilities: Record<string, unknown>;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  updated_at: string;
+};
+
+export type WorkerFabricStateRecord = {
+  enabled: boolean;
+  strategy: "balanced" | "prefer_local" | "prefer_capacity";
+  default_host_id: string | null;
+  hosts: WorkerFabricHostRecord[];
+  updated_at: string;
+};
+
+export type BenchmarkMetricMode = "duration_ms" | "stdout_regex" | "stderr_regex";
+
+export type BenchmarkSuiteCaseRecord = {
+  case_id: string;
+  title: string;
+  command: string;
+  timeout_seconds: number;
+  required: boolean;
+  metric_name: string;
+  metric_direction: ExperimentMetricDirection;
+  metric_mode: BenchmarkMetricMode;
+  metric_regex: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+};
+
+export type BenchmarkSuiteRecord = {
+  suite_id: string;
+  created_at: string;
+  updated_at: string;
+  title: string;
+  objective: string;
+  project_dir: string;
+  isolation_mode: "git_worktree" | "copy" | "none";
+  aggregate_metric_name: string;
+  aggregate_metric_direction: ExperimentMetricDirection;
+  cases: BenchmarkSuiteCaseRecord[];
+  tags: string[];
+  metadata: Record<string, unknown>;
+};
+
+export type BenchmarkSuitesStateRecord = {
+  enabled: boolean;
+  suites: BenchmarkSuiteRecord[];
+  updated_at: string;
+};
+
 export type GoalAutorunStateRecord = {
   enabled: boolean;
   interval_seconds: number;
@@ -2353,6 +2414,305 @@ export class Storage {
       promote_summary: parseBoolean(config.promote_summary, false),
       updated_at: String(row.updated_at ?? ""),
     };
+  }
+
+  getWorkerFabricState(): WorkerFabricStateRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT enabled, config_json, updated_at
+         FROM daemon_configs
+         WHERE daemon_key = ?`
+      )
+      .get("worker.fabric") as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+
+    const config = parseJsonObject(row.config_json);
+    const hostsRaw = Array.isArray(config.hosts) ? (config.hosts as unknown[]) : [];
+    const hosts = hostsRaw
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const item = entry as Record<string, unknown>;
+        const hostId = String(item.host_id ?? "").trim();
+        const workspaceRoot = String(item.workspace_root ?? "").trim();
+        if (!hostId || !workspaceRoot) {
+          return null;
+        }
+        const transportRaw = String(item.transport ?? "local").trim().toLowerCase();
+        const transport: WorkerFabricTransport = transportRaw === "ssh" ? "ssh" : "local";
+        return {
+          host_id: hostId,
+          enabled: parseBoolean(item.enabled, true),
+          transport,
+          ssh_destination: asNullableString(item.ssh_destination),
+          workspace_root: workspaceRoot,
+          worker_count: parseBoundedInt(item.worker_count, 1, 1, 64),
+          shell: String(item.shell ?? "/bin/zsh").trim() || "/bin/zsh",
+          capabilities: parseLooseObject(item.capabilities),
+          tags: dedupeNonEmpty(Array.isArray(item.tags) ? item.tags : []),
+          metadata: parseLooseObject(item.metadata),
+          updated_at: normalizeIsoTimestamp(asNullableString(item.updated_at) ?? undefined, String(row.updated_at ?? "")),
+        } satisfies WorkerFabricHostRecord;
+      })
+      .filter((entry): entry is WorkerFabricHostRecord => Boolean(entry))
+      .sort((left, right) => left.host_id.localeCompare(right.host_id));
+
+    const strategyRaw = String(config.strategy ?? "balanced").trim().toLowerCase();
+    const strategy =
+      strategyRaw === "prefer_local" || strategyRaw === "prefer_capacity" ? strategyRaw : "balanced";
+
+    return {
+      enabled: Number(row.enabled ?? 0) === 1,
+      strategy,
+      default_host_id: asNullableString(config.default_host_id),
+      hosts,
+      updated_at: String(row.updated_at ?? ""),
+    };
+  }
+
+  setWorkerFabricState(params: {
+    enabled: boolean;
+    strategy?: WorkerFabricStateRecord["strategy"];
+    default_host_id?: string | null;
+    hosts: WorkerFabricHostRecord[];
+  }): WorkerFabricStateRecord {
+    const now = new Date().toISOString();
+    const strategy =
+      params.strategy === "prefer_local" || params.strategy === "prefer_capacity" ? params.strategy : "balanced";
+    const normalizedHosts = (params.hosts ?? [])
+      .map((host) => {
+        const hostId = String(host.host_id ?? "").trim();
+        const workspaceRoot = String(host.workspace_root ?? "").trim();
+        if (!hostId || !workspaceRoot) {
+          return null;
+        }
+        const transport: WorkerFabricTransport = host.transport === "ssh" ? "ssh" : "local";
+        return {
+          host_id: hostId,
+          enabled: Boolean(host.enabled),
+          transport,
+          ssh_destination: asNullableString(host.ssh_destination),
+          workspace_root: workspaceRoot,
+          worker_count: parseBoundedInt(host.worker_count, 1, 1, 64),
+          shell: String(host.shell ?? "/bin/zsh").trim() || "/bin/zsh",
+          capabilities: parseLooseObject(host.capabilities),
+          tags: dedupeNonEmpty(host.tags ?? []),
+          metadata: parseLooseObject(host.metadata),
+          updated_at: now,
+        } satisfies WorkerFabricHostRecord;
+      })
+      .filter((entry): entry is WorkerFabricHostRecord => Boolean(entry))
+      .sort((left, right) => left.host_id.localeCompare(right.host_id));
+
+    const defaultHostIdRaw = params.default_host_id?.trim() || null;
+    const defaultHostId =
+      defaultHostIdRaw && normalizedHosts.some((host) => host.host_id === defaultHostIdRaw) ? defaultHostIdRaw : null;
+
+    const normalized: WorkerFabricStateRecord = {
+      enabled: Boolean(params.enabled),
+      strategy,
+      default_host_id: defaultHostId,
+      hosts: normalizedHosts,
+      updated_at: now,
+    };
+
+    const configJson = stableStringify({
+      strategy: normalized.strategy,
+      default_host_id: normalized.default_host_id,
+      hosts: normalized.hosts,
+    });
+
+    this.db
+      .prepare(
+        `INSERT INTO daemon_configs (daemon_key, enabled, config_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(daemon_key) DO UPDATE SET
+           enabled = excluded.enabled,
+           config_json = excluded.config_json,
+           updated_at = excluded.updated_at`
+      )
+      .run("worker.fabric", normalized.enabled ? 1 : 0, configJson, now);
+
+    return normalized;
+  }
+
+  getBenchmarkSuitesState(): BenchmarkSuitesStateRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT enabled, config_json, updated_at
+         FROM daemon_configs
+         WHERE daemon_key = ?`
+      )
+      .get("benchmark.suites") as Record<string, unknown> | undefined;
+    if (!row) {
+      return null;
+    }
+
+    const config = parseJsonObject(row.config_json);
+    const suitesRaw = Array.isArray(config.suites) ? (config.suites as unknown[]) : [];
+    const suites = suitesRaw
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const item = entry as Record<string, unknown>;
+        const suiteId = String(item.suite_id ?? "").trim();
+        const title = String(item.title ?? "").trim();
+        const objective = String(item.objective ?? "").trim();
+        const projectDir = String(item.project_dir ?? "").trim();
+        if (!suiteId || !title || !objective || !projectDir) {
+          return null;
+        }
+        const isolationRaw = String(item.isolation_mode ?? "git_worktree").trim().toLowerCase();
+        const isolationMode =
+          isolationRaw === "copy" || isolationRaw === "none" ? isolationRaw : "git_worktree";
+        const metricDirection =
+          String(item.aggregate_metric_direction ?? "maximize").trim().toLowerCase() === "minimize"
+            ? "minimize"
+            : "maximize";
+        const casesRaw = Array.isArray(item.cases) ? (item.cases as unknown[]) : [];
+        const cases = casesRaw
+          .map((caseEntry, index) => {
+            if (!caseEntry || typeof caseEntry !== "object") {
+              return null;
+            }
+            const caseItem = caseEntry as Record<string, unknown>;
+            const caseId = String(caseItem.case_id ?? "").trim() || `case-${index + 1}`;
+            const caseTitle = String(caseItem.title ?? caseId).trim() || caseId;
+            const command = String(caseItem.command ?? "").trim();
+            if (!command) {
+              return null;
+            }
+            const caseMetricDirection =
+              String(caseItem.metric_direction ?? metricDirection).trim().toLowerCase() === "minimize"
+                ? "minimize"
+                : "maximize";
+            const metricModeRaw = String(caseItem.metric_mode ?? "duration_ms").trim().toLowerCase();
+            const metricMode: BenchmarkMetricMode =
+              metricModeRaw === "stdout_regex" || metricModeRaw === "stderr_regex" ? metricModeRaw : "duration_ms";
+            return {
+              case_id: caseId,
+              title: caseTitle,
+              command,
+              timeout_seconds: parseBoundedInt(caseItem.timeout_seconds, 600, 5, 7200),
+              required: parseBoolean(caseItem.required, true),
+              metric_name: String(caseItem.metric_name ?? item.aggregate_metric_name ?? "duration_ms").trim() || "duration_ms",
+              metric_direction: caseMetricDirection,
+              metric_mode: metricMode,
+              metric_regex: asNullableString(caseItem.metric_regex),
+              tags: dedupeNonEmpty(Array.isArray(caseItem.tags) ? caseItem.tags : []),
+              metadata: parseLooseObject(caseItem.metadata),
+            } satisfies BenchmarkSuiteCaseRecord;
+          })
+          .filter((caseEntry): caseEntry is BenchmarkSuiteCaseRecord => Boolean(caseEntry));
+        return {
+          suite_id: suiteId,
+          created_at: normalizeIsoTimestamp(asNullableString(item.created_at) ?? undefined, String(row.updated_at ?? "")),
+          updated_at: normalizeIsoTimestamp(asNullableString(item.updated_at) ?? undefined, String(row.updated_at ?? "")),
+          title,
+          objective,
+          project_dir: projectDir,
+          isolation_mode: isolationMode,
+          aggregate_metric_name: String(item.aggregate_metric_name ?? "suite_success_rate").trim() || "suite_success_rate",
+          aggregate_metric_direction: metricDirection,
+          cases,
+          tags: dedupeNonEmpty(Array.isArray(item.tags) ? item.tags : []),
+          metadata: parseLooseObject(item.metadata),
+        } satisfies BenchmarkSuiteRecord;
+      })
+      .filter((entry): entry is BenchmarkSuiteRecord => Boolean(entry))
+      .sort((left, right) => left.title.localeCompare(right.title));
+
+    return {
+      enabled: Number(row.enabled ?? 0) === 1,
+      suites,
+      updated_at: String(row.updated_at ?? ""),
+    };
+  }
+
+  setBenchmarkSuitesState(params: { enabled: boolean; suites: BenchmarkSuiteRecord[] }): BenchmarkSuitesStateRecord {
+    const now = new Date().toISOString();
+    const normalizedSuites = (params.suites ?? [])
+      .map((suite) => {
+        const suiteId = String(suite.suite_id ?? "").trim();
+        const title = String(suite.title ?? "").trim();
+        const objective = String(suite.objective ?? "").trim();
+        const projectDir = String(suite.project_dir ?? "").trim();
+        if (!suiteId || !title || !objective || !projectDir) {
+          return null;
+        }
+        const isolationMode =
+          suite.isolation_mode === "copy" || suite.isolation_mode === "none" ? suite.isolation_mode : "git_worktree";
+        const aggregateMetricDirection = suite.aggregate_metric_direction === "minimize" ? "minimize" : "maximize";
+        const cases = (suite.cases ?? [])
+          .map((caseEntry, index) => {
+            const caseId = String(caseEntry.case_id ?? "").trim() || `case-${index + 1}`;
+            const command = String(caseEntry.command ?? "").trim();
+            if (!command) {
+              return null;
+            }
+            const metricMode =
+              caseEntry.metric_mode === "stdout_regex" || caseEntry.metric_mode === "stderr_regex"
+                ? caseEntry.metric_mode
+                : "duration_ms";
+            return {
+              case_id: caseId,
+              title: String(caseEntry.title ?? caseId).trim() || caseId,
+              command,
+              timeout_seconds: parseBoundedInt(caseEntry.timeout_seconds, 600, 5, 7200),
+              required: Boolean(caseEntry.required),
+              metric_name: String(caseEntry.metric_name ?? "duration_ms").trim() || "duration_ms",
+              metric_direction: caseEntry.metric_direction === "minimize" ? "minimize" : "maximize",
+              metric_mode: metricMode,
+              metric_regex: asNullableString(caseEntry.metric_regex),
+              tags: dedupeNonEmpty(caseEntry.tags ?? []),
+              metadata: parseLooseObject(caseEntry.metadata),
+            } satisfies BenchmarkSuiteCaseRecord;
+          })
+          .filter((caseEntry): caseEntry is BenchmarkSuiteCaseRecord => Boolean(caseEntry));
+        return {
+          suite_id: suiteId,
+          created_at: normalizeIsoTimestamp(suite.created_at, now),
+          updated_at: now,
+          title,
+          objective,
+          project_dir: projectDir,
+          isolation_mode: isolationMode,
+          aggregate_metric_name: String(suite.aggregate_metric_name ?? "suite_success_rate").trim() || "suite_success_rate",
+          aggregate_metric_direction: aggregateMetricDirection,
+          cases,
+          tags: dedupeNonEmpty(suite.tags ?? []),
+          metadata: parseLooseObject(suite.metadata),
+        } satisfies BenchmarkSuiteRecord;
+      })
+      .filter((entry): entry is BenchmarkSuiteRecord => Boolean(entry))
+      .sort((left, right) => left.title.localeCompare(right.title));
+
+    const normalized: BenchmarkSuitesStateRecord = {
+      enabled: Boolean(params.enabled),
+      suites: normalizedSuites,
+      updated_at: now,
+    };
+
+    const configJson = stableStringify({
+      suites: normalized.suites,
+    });
+
+    this.db
+      .prepare(
+        `INSERT INTO daemon_configs (daemon_key, enabled, config_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(daemon_key) DO UPDATE SET
+           enabled = excluded.enabled,
+           config_json = excluded.config_json,
+           updated_at = excluded.updated_at`
+      )
+      .run("benchmark.suites", normalized.enabled ? 1 : 0, configJson, now);
+
+    return normalized;
   }
 
   setImprintAutoSnapshotState(params: {
