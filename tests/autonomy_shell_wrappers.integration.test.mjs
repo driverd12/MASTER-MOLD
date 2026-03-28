@@ -50,6 +50,45 @@ test("autonomy shell wrapper ensure converges the control plane through the real
   }
 });
 
+test("ring leader start proactively uses autonomy bootstrap on a cold control plane", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-ring-leader-bootstrap-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const ollama = await startFakeOllamaServer({
+    models: [
+      {
+        name: "llama3.2:3b",
+      },
+    ],
+  });
+
+  try {
+    const baseEnv = inheritedEnv({
+      ANAMNESIS_HUB_DB_PATH: dbPath,
+      TRICHAT_BUS_SOCKET_PATH: path.join(tempDir, "trichat.bus.sock"),
+      TRICHAT_OLLAMA_URL: ollama.url,
+      TRICHAT_RING_LEADER_AUTOSTART: "1",
+      TRICHAT_RING_LEADER_BRIDGE_DRY_RUN: "1",
+      TRICHAT_RING_LEADER_EXECUTE_ENABLED: "0",
+      TRICHAT_RING_LEADER_INTERVAL_SECONDS: "600",
+      TRICHAT_RING_LEADER_TRANSPORT: "stdio",
+      MCP_HTTP_BEARER_TOKEN: "",
+    });
+
+    const started = await runShellJson(["./scripts/ring_leader_ctl.sh", "start"], baseEnv);
+    assert.equal(started.running, true);
+
+    const status = await runShellJson(["./scripts/autonomy_ctl.sh", "status"], baseEnv);
+    assert.equal(status.self_start_ready, true);
+    assert.deepEqual(status.repairs_needed, []);
+    assert.equal(status.ring_leader.running, true);
+    assert.equal(status.worker_fabric.host_present, true);
+    assert.equal(status.model_router.backend_present, true);
+  } finally {
+    await ollama.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 async function startFakeOllamaServer({ models }) {
   const server = http.createServer((req, res) => {
     if (req.url === "/api/tags") {

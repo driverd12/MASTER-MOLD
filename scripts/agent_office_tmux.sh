@@ -24,6 +24,11 @@ need_cmd python3
 need_cmd node
 need_cmd npm
 
+TOKEN_FILE="${REPO_ROOT}/data/imprint/http_bearer_token"
+if [[ -z "${MCP_HTTP_BEARER_TOKEN:-}" && -f "${TOKEN_FILE}" ]]; then
+  export MCP_HTTP_BEARER_TOKEN="$(cat "${TOKEN_FILE}")"
+fi
+
 SESSION_NAME="${TRICHAT_OFFICE_TMUX_SESSION_NAME:-agent-office}"
 THREAD_ID="${TRICHAT_OFFICE_THREAD_ID:-ring-leader-main}"
 REFRESH_SECONDS="${TRICHAT_OFFICE_REFRESH_SECONDS:-2.0}"
@@ -40,6 +45,25 @@ URL="${TRICHAT_MCP_URL:-http://127.0.0.1:8787/}"
 ORIGIN="${TRICHAT_MCP_ORIGIN:-http://127.0.0.1}"
 STDIO_COMMAND="${TRICHAT_MCP_STDIO_COMMAND:-node}"
 STDIO_ARGS="${TRICHAT_MCP_STDIO_ARGS:-dist/server.js}"
+
+ensure_autonomy_entry() {
+  local should_ensure="${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1}"
+  local mode="${TRICHAT_AUTONOMY_ENSURE_MODE:-required}"
+  if [[ "${should_ensure}" == "0" ]]; then
+    return 0
+  fi
+  if "${REPO_ROOT}/scripts/autonomy_ctl.sh" ensure >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "${mode}" == "best_effort" ]]; then
+    echo "[agent-office] warning: autonomy bootstrap ensure failed; continuing due to TRICHAT_AUTONOMY_ENSURE_MODE=best_effort" >&2
+    return 0
+  fi
+  echo "[agent-office] autonomy bootstrap ensure failed before office launch" >&2
+  exit 1
+}
+
+ensure_autonomy_entry
 
 DASHBOARD_BASE=(
   "python3" "./scripts/agent_office_dashboard.py"

@@ -15,14 +15,52 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 eval "$("${REPO_ROOT}/scripts/export_dotenv_env.sh" "${REPO_ROOT}")"
 
-TRANSPORT="${TRICHAT_RING_LEADER_TRANSPORT:-}"
-if [[ -z "${TRANSPORT}" ]]; then
-  if [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
-    TRANSPORT="http"
-  else
-    TRANSPORT="stdio"
-  fi
+TOKEN_FILE="${REPO_ROOT}/data/imprint/http_bearer_token"
+if [[ -z "${MCP_HTTP_BEARER_TOKEN:-}" && -f "${TOKEN_FILE}" ]]; then
+  export MCP_HTTP_BEARER_TOKEN="$(cat "${TOKEN_FILE}")"
 fi
+
+resolve_transport() {
+  local preferred="${TRICHAT_RING_LEADER_TRANSPORT:-}"
+  if [[ -n "${preferred}" ]]; then
+    printf '%s\n' "${preferred}"
+    return 0
+  fi
+  if [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
+    if node ./scripts/mcp_tool_call.mjs \
+      --tool health.storage \
+      --args '{}' \
+      --transport http \
+      --url "${TRICHAT_MCP_URL:-http://127.0.0.1:8787/}" \
+      --origin "${TRICHAT_MCP_ORIGIN:-http://127.0.0.1}" \
+      --cwd "${REPO_ROOT}" >/dev/null 2>&1; then
+      printf 'http\n'
+      return 0
+    fi
+  fi
+  printf 'stdio\n'
+}
+
+TRANSPORT="$(resolve_transport)"
+
+ensure_autonomy_entry() {
+  local should_ensure="${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1}"
+  local mode="${TRICHAT_AUTONOMY_ENSURE_MODE:-required}"
+  if [[ "${ACTION}" != "start" || "${should_ensure}" == "0" ]]; then
+    return 0
+  fi
+  if "${REPO_ROOT}/scripts/autonomy_ctl.sh" ensure >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "${mode}" == "best_effort" ]]; then
+    echo "[ring-leader] warning: autonomy bootstrap ensure failed; continuing due to TRICHAT_AUTONOMY_ENSURE_MODE=best_effort" >&2
+    return 0
+  fi
+  echo "[ring-leader] autonomy bootstrap ensure failed before start" >&2
+  exit 1
+}
+
+ensure_autonomy_entry
 
 SPECIALIST_IDS="${TRICHAT_RING_LEADER_SPECIALIST_AGENT_IDS:-}"
 if [[ -z "${SPECIALIST_IDS}" ]]; then

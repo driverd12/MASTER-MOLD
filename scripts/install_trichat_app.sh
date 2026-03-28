@@ -133,9 +133,9 @@ if [[ -n "${ICON_PATH}" ]]; then
   [[ -f "${ICON_PATH}" ]] || fail "icon file does not exist: ${ICON_PATH}"
 fi
 
-LAUNCH_SCRIPT="TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} npm run trichat:office:tmux"
+LAUNCH_SCRIPT="TRICHAT_AUTONOMY_ENSURE_ON_ENTRY=\${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1} TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} npm run trichat:office:tmux"
 if [[ "${TRANSPORT}" == "http" ]]; then
-  LAUNCH_SCRIPT="TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} TRICHAT_MCP_TRANSPORT=http npm run trichat:office:tmux"
+  LAUNCH_SCRIPT="TRICHAT_AUTONOMY_ENSURE_ON_ENTRY=\${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1} TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} TRICHAT_MCP_TRANSPORT=http npm run trichat:office:tmux"
 fi
 
 TMP_APPLESCRIPT="$(mktemp -t trichat-installer-XXXXXX.applescript)"

@@ -41,9 +41,33 @@ done
 cd "${REPO_ROOT}"
 eval "$("${REPO_ROOT}/scripts/export_dotenv_env.sh" "${REPO_ROOT}")"
 
+TOKEN_FILE="${REPO_ROOT}/data/imprint/http_bearer_token"
+if [[ -z "${MCP_HTTP_BEARER_TOKEN:-}" && -f "${TOKEN_FILE}" ]]; then
+  export MCP_HTTP_BEARER_TOKEN="$(cat "${TOKEN_FILE}")"
+fi
+
+ensure_autonomy_entry() {
+  local should_ensure="${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1}"
+  local mode="${TRICHAT_AUTONOMY_ENSURE_MODE:-required}"
+  if [[ "${should_ensure}" == "0" ]]; then
+    return 0
+  fi
+  if "${REPO_ROOT}/scripts/autonomy_ctl.sh" ensure >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "${mode}" == "best_effort" ]]; then
+    echo "[trichat:tui] warning: autonomy bootstrap ensure failed; continuing due to TRICHAT_AUTONOMY_ENSURE_MODE=best_effort" >&2
+    return 0
+  fi
+  echo "[trichat:tui] autonomy bootstrap ensure failed before TUI launch" >&2
+  exit 1
+}
+
 if [[ -z "${TRANSPORT}" ]]; then
   TRANSPORT="${TRICHAT_MCP_TRANSPORT:-stdio}"
 fi
+
+ensure_autonomy_entry
 
 ARGS=(
   "python3"
