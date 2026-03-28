@@ -7218,10 +7218,21 @@ function getAutopilotStatus(storage?: Storage) {
   const effectiveAgentPool = resolveAutopilotAgentPool(autopilotRuntime.config);
   const sessionId = buildAutopilotAgentSessionId(autopilotRuntime.config);
   const session = storage ? storage.getAgentSessionById(sessionId) : null;
+  const persisted = storage ? storage.getTriChatAutopilotState() : null;
   return {
     running: autopilotRuntime.running,
     in_tick: autopilotRuntime.in_tick,
     config: { ...autopilotRuntime.config },
+    persisted: persisted
+      ? {
+          enabled: persisted.enabled,
+          thread_id: persisted.thread_id,
+          lead_agent_id: persisted.lead_agent_id,
+          updated_at: persisted.updated_at,
+          pause_reason: persisted.pause_reason,
+        }
+      : null,
+    expected_running: Boolean(persisted?.enabled),
     effective_agent_pool: effectiveAgentPool,
     session: {
       session_id: sessionId,

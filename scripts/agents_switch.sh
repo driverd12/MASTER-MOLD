@@ -9,9 +9,11 @@ DOMAIN="gui/$(id -u)"
 MCP_LABEL="com.mcplayground.mcp.server"
 AUTO_LABEL="com.mcplayground.imprint.autosnapshot"
 WORKER_LABEL="com.mcplayground.imprint.inboxworker"
+KEEPALIVE_LABEL="com.mcplayground.autonomy.keepalive"
 MCP_PLIST="${LAUNCH_DIR}/${MCP_LABEL}.plist"
 AUTO_PLIST="${LAUNCH_DIR}/${AUTO_LABEL}.plist"
 WORKER_PLIST="${LAUNCH_DIR}/${WORKER_LABEL}.plist"
+KEEPALIVE_PLIST="${LAUNCH_DIR}/${KEEPALIVE_LABEL}.plist"
 
 is_loaded() {
   local label="$1"
@@ -34,31 +36,37 @@ bootstrap_if_exists() {
 
 case "${ACTION}" in
   on)
-    if [[ ! -f "${MCP_PLIST}" || ! -f "${AUTO_PLIST}" || ! -f "${WORKER_PLIST}" ]]; then
+    if [[ ! -f "${MCP_PLIST}" || ! -f "${AUTO_PLIST}" || ! -f "${WORKER_PLIST}" || ! -f "${KEEPALIVE_PLIST}" ]]; then
       "${REPO_ROOT}/scripts/launchd_install.sh"
     else
       launchctl enable "${DOMAIN}/${MCP_LABEL}" >/dev/null 2>&1 || true
       launchctl enable "${DOMAIN}/${AUTO_LABEL}" >/dev/null 2>&1 || true
       launchctl enable "${DOMAIN}/${WORKER_LABEL}" >/dev/null 2>&1 || true
+      launchctl enable "${DOMAIN}/${KEEPALIVE_LABEL}" >/dev/null 2>&1 || true
       bootout_if_exists "${MCP_PLIST}"
       bootout_if_exists "${AUTO_PLIST}"
       bootout_if_exists "${WORKER_PLIST}"
+      bootout_if_exists "${KEEPALIVE_PLIST}"
       bootstrap_if_exists "${MCP_PLIST}"
       bootstrap_if_exists "${AUTO_PLIST}"
       bootstrap_if_exists "${WORKER_PLIST}"
+      bootstrap_if_exists "${KEEPALIVE_PLIST}"
       launchctl kickstart -k "${DOMAIN}/${MCP_LABEL}" >/dev/null 2>&1 || true
       launchctl kickstart -k "${DOMAIN}/${AUTO_LABEL}" >/dev/null 2>&1 || true
       launchctl kickstart -k "${DOMAIN}/${WORKER_LABEL}" >/dev/null 2>&1 || true
+      launchctl kickstart -k "${DOMAIN}/${KEEPALIVE_LABEL}" >/dev/null 2>&1 || true
       for _ in 1 2 3 4 5; do
         if "${REPO_ROOT}/scripts/imprint_auto_snapshot_ctl.sh" start >/dev/null 2>&1; then
           break
         fi
         sleep 2
       done
+      "${REPO_ROOT}/scripts/autonomy_keepalive.sh" >/dev/null 2>&1 || true
     fi
     ;;
   off)
     "${REPO_ROOT}/scripts/imprint_auto_snapshot_ctl.sh" stop >/dev/null 2>&1 || true
+    bootout_if_exists "${KEEPALIVE_PLIST}"
     bootout_if_exists "${WORKER_PLIST}"
     bootout_if_exists "${AUTO_PLIST}"
     bootout_if_exists "${MCP_PLIST}"
@@ -80,13 +88,20 @@ esac
 MCP_RUNNING=false
 AUTO_AGENT_LOADED=false
 WORKER_AGENT_LOADED=false
+KEEPALIVE_AGENT_LOADED=false
 if is_loaded "${MCP_LABEL}"; then MCP_RUNNING=true; fi
 if is_loaded "${AUTO_LABEL}"; then AUTO_AGENT_LOADED=true; fi
 if is_loaded "${WORKER_LABEL}"; then WORKER_AGENT_LOADED=true; fi
+if is_loaded "${KEEPALIVE_LABEL}"; then KEEPALIVE_AGENT_LOADED=true; fi
 
 AUTO_SNAPSHOT_STATUS="{}"
 if STATUS_JSON="$("${REPO_ROOT}/scripts/imprint_auto_snapshot_ctl.sh" status 2>/dev/null)"; then
   AUTO_SNAPSHOT_STATUS="${STATUS_JSON}"
+fi
+
+AUTONOMY_STATUS="{}"
+if STATUS_JSON="$("${REPO_ROOT}/scripts/autonomy_ctl.sh" status 2>/dev/null)"; then
+  AUTONOMY_STATUS="${STATUS_JSON}"
 fi
 
 node --input-type=module - <<'NODE' \
@@ -98,10 +113,14 @@ node --input-type=module - <<'NODE' \
 "${AUTO_AGENT_LOADED}" \
 "${WORKER_LABEL}" \
 "${WORKER_AGENT_LOADED}" \
+"${KEEPALIVE_LABEL}" \
+"${KEEPALIVE_AGENT_LOADED}" \
 "${MCP_PLIST}" \
 "${AUTO_PLIST}" \
 "${WORKER_PLIST}" \
-"${AUTO_SNAPSHOT_STATUS}"
+"${KEEPALIVE_PLIST}" \
+"${AUTO_SNAPSHOT_STATUS}" \
+"${AUTONOMY_STATUS}"
 const [
   action,
   domain,
@@ -111,10 +130,14 @@ const [
   autoAgentLoaded,
   workerLabel,
   workerAgentLoaded,
+  keepaliveLabel,
+  keepaliveAgentLoaded,
   mcpPlist,
   autoPlist,
   workerPlist,
+  keepalivePlist,
   autoSnapshotStatusRaw,
+  autonomyStatusRaw,
 ] = process.argv.slice(2);
 
 let autoSnapshotStatus = {};
@@ -122,6 +145,13 @@ try {
   autoSnapshotStatus = JSON.parse(autoSnapshotStatusRaw);
 } catch {
   autoSnapshotStatus = {};
+}
+
+let autonomyStatus = {};
+try {
+  autonomyStatus = JSON.parse(autonomyStatusRaw);
+} catch {
+  autonomyStatus = {};
 }
 
 const payload = {
@@ -132,6 +162,7 @@ const payload = {
     mcp_server: mcpRunning === 'true',
     auto_snapshot: autoAgentLoaded === 'true',
     inbox_worker: workerAgentLoaded === 'true',
+    autonomy_keepalive: keepaliveAgentLoaded === 'true',
   },
   launchd: {
     mcp_label: mcpLabel,
@@ -143,8 +174,12 @@ const payload = {
     inbox_worker_label: workerLabel,
     inbox_worker_loaded: workerAgentLoaded === 'true',
     inbox_worker_plist: workerPlist,
+    autonomy_keepalive_label: keepaliveLabel,
+    autonomy_keepalive_loaded: keepaliveAgentLoaded === 'true',
+    autonomy_keepalive_plist: keepalivePlist,
   },
   auto_snapshot_runtime: autoSnapshotStatus,
+  autonomy_runtime: autonomyStatus,
 };
 
 process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);

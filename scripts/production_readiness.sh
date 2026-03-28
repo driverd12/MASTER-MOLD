@@ -44,6 +44,69 @@ echo "[production] node: $(node -v)"
 echo "[production] python: $(python3 --version 2>&1)"
 echo "[production] mcp url: ${TRICHAT_HTTP_URL}"
 
+call_http autonomy.bootstrap '{"action":"status"}' > "${TMP_DIR}/autonomy.json"
+python3 - "${TMP_DIR}/autonomy.json" <<'PY'
+import json
+import pathlib
+import sys
+
+data = json.loads(pathlib.Path(sys.argv[1]).read_text())
+print(
+    "[production] autonomy bootstrap: "
+    f"ready={data.get('self_start_ready')} "
+    f"attention={','.join(data.get('repairs_needed', [])) or 'none'}"
+)
+if not data.get("self_start_ready"):
+    raise SystemExit("autonomy bootstrap is not self-start ready")
+PY
+
+call_http model.router '{}' > "${TMP_DIR}/model-router.json"
+python3 - "${TMP_DIR}/model-router.json" <<'PY'
+import json
+import pathlib
+import sys
+
+data = json.loads(pathlib.Path(sys.argv[1]).read_text())
+state = data.get("state") or {}
+backends = state.get("backends") or []
+print(
+    "[production] model router: "
+    f"enabled={state.get('enabled')} "
+    f"backends={len(backends)} "
+    f"default={state.get('default_backend_id')}"
+)
+if not state.get("enabled") or not backends:
+    raise SystemExit("model.router is not enabled with at least one backend")
+PY
+
+call_http org.program '{}' > "${TMP_DIR}/org-program.json"
+python3 - "${TMP_DIR}/org-program.json" <<'PY'
+import json
+import pathlib
+import sys
+
+data = json.loads(pathlib.Path(sys.argv[1]).read_text())
+role_count = int(data.get("role_count") or 0)
+active_version_count = int(data.get("active_version_count") or 0)
+print(f"[production] org programs: roles={role_count} active_versions={active_version_count}")
+if role_count < 4 or active_version_count < 4:
+    raise SystemExit("org.program is missing expected active doctrine coverage")
+PY
+
+call_http eval.suite_list '{}' > "${TMP_DIR}/eval-suites.json"
+python3 - "${TMP_DIR}/eval-suites.json" <<'PY'
+import json
+import pathlib
+import sys
+
+data = json.loads(pathlib.Path(sys.argv[1]).read_text())
+suites = data.get("suites") or []
+suite_ids = {entry.get("suite_id") for entry in suites if isinstance(entry, dict)}
+print(f"[production] eval suites: count={len(suites)}")
+if "autonomy.control-plane" not in suite_ids:
+    raise SystemExit("eval.suite_list is missing autonomy.control-plane")
+PY
+
 call_http trichat.autopilot '{"action":"status"}' > "${TMP_DIR}/autopilot.json"
 python3 - "${TMP_DIR}/autopilot.json" <<'PY'
 import json
@@ -139,6 +202,18 @@ echo "[production] office dashboard: help view renders with truth mode + methodo
 
 test -d "/Applications/Agent Office.app"
 echo "[production] app launcher: /Applications/Agent Office.app present"
+
+AGENTS_STATUS_JSON="$("${REPO_ROOT}/scripts/agents_switch.sh" status)"
+python3 - "${AGENTS_STATUS_JSON}" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+loaded = bool(((data.get("launchd") or {}).get("autonomy_keepalive_loaded")))
+print(f"[production] autonomy keepalive loaded: {loaded}")
+if not loaded:
+    raise SystemExit("launchd autonomy keepalive agent is not loaded")
+PY
 
 tmux has-session -t agent-office
 WINDOWS="$(tmux list-windows -t agent-office -F '#{window_name}')"

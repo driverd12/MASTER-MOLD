@@ -196,6 +196,7 @@ import { workerFabric, workerFabricSchema } from "./tools/worker_fabric.js";
 import { modelRouter, modelRouterSchema } from "./tools/model_router.js";
 import { orgProgram, orgProgramSchema } from "./tools/org_program.js";
 import { taskCompile, taskCompileSchema } from "./tools/task_compiler.js";
+import { autonomyBootstrap, autonomyBootstrapSchema } from "./tools/autonomy_bootstrap.js";
 import {
   trichatChaos,
   trichatChaosSchema,
@@ -2128,6 +2129,13 @@ registerTool("model.router", "Manage and route across measured local and remote 
   modelRouter(storage, input)
 );
 
+registerTool(
+  "autonomy.bootstrap",
+  "Seed and repair the local autonomy substrate so the ring leader can self-start with real worker, model, org, and eval state.",
+  autonomyBootstrapSchema,
+  (input) => autonomyBootstrap(storage, invokeRegisteredTool, input)
+);
+
 registerTool("org.program", "Version and promote role programs for ring leader, directors, SMEs, and leaf agents.", orgProgramSchema, (input) =>
   orgProgram(storage, input)
 );
@@ -2718,6 +2726,32 @@ function createServerInstance() {
 async function main() {
   const args = process.argv.slice(2);
   const httpEnabled = args.includes("--http") || process.env.MCP_HTTP === "1";
+  const bootstrapOnStart = parseBooleanEnv(process.env.MCP_AUTONOMY_BOOTSTRAP_ON_START, true);
+
+  if (httpEnabled && bootstrapOnStart) {
+    const nonce = `${Date.now()}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+    try {
+      await autonomyBootstrap(storage, invokeRegisteredTool, {
+        action: "ensure",
+        local_host_id: "local",
+        mutation: {
+          idempotency_key: `server-startup-autonomy-${nonce}`,
+          side_effect_fingerprint: `server-startup-autonomy-${nonce}`,
+        },
+        probe_ollama_url: process.env.TRICHAT_OLLAMA_URL,
+        autostart_ring_leader: parseBooleanEnv(process.env.TRICHAT_RING_LEADER_AUTOSTART, true),
+        run_immediately: false,
+        seed_org_programs: true,
+        seed_benchmark_suite: true,
+        seed_eval_suite: true,
+        source_client: "server.startup",
+      });
+    } catch (error) {
+      console.warn(
+        `[autonomy.bootstrap] startup ensure failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
 
   if (httpEnabled) {
     const port = Number(getArgValue(args, "--http-port") ?? process.env.MCP_HTTP_PORT ?? 8787);

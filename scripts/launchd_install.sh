@@ -11,10 +11,12 @@ DOMAIN="gui/$(id -u)"
 MCP_LABEL="com.mcplayground.mcp.server"
 AUTO_LABEL="com.mcplayground.imprint.autosnapshot"
 WORKER_LABEL="com.mcplayground.imprint.inboxworker"
+KEEPALIVE_LABEL="com.mcplayground.autonomy.keepalive"
 
 MCP_PLIST="${LAUNCH_DIR}/${MCP_LABEL}.plist"
 AUTO_PLIST="${LAUNCH_DIR}/${AUTO_LABEL}.plist"
 WORKER_PLIST="${LAUNCH_DIR}/${WORKER_LABEL}.plist"
+KEEPALIVE_PLIST="${LAUNCH_DIR}/${KEEPALIVE_LABEL}.plist"
 BUS_SOCKET_PATH="${TRICHAT_BUS_SOCKET_PATH:-${REPO_ROOT}/data/trichat.bus.sock}"
 
 MCP_PORT="${MCP_HTTP_PORT:-${ANAMNESIS_MCP_HTTP_PORT:-8787}}"
@@ -24,6 +26,7 @@ INBOX_POLL_INTERVAL="${ANAMNESIS_INBOX_POLL_INTERVAL:-5}"
 INBOX_BATCH_SIZE="${ANAMNESIS_INBOX_BATCH_SIZE:-3}"
 INBOX_LEASE_SECONDS="${ANAMNESIS_INBOX_LEASE_SECONDS:-300}"
 INBOX_HEARTBEAT_INTERVAL="${ANAMNESIS_INBOX_HEARTBEAT_INTERVAL:-30}"
+AUTONOMY_KEEPALIVE_INTERVAL="${AUTONOMY_KEEPALIVE_INTERVAL_SECONDS:-120}"
 NODE_BIN="$(command -v node || true)"
 if [[ -z "${NODE_BIN}" ]]; then
   echo "error: node not found in PATH" >&2
@@ -229,25 +232,73 @@ cat >"${WORKER_PLIST}" <<PLIST
 </plist>
 PLIST
 
-chmod 644 "${MCP_PLIST}" "${AUTO_PLIST}" "${WORKER_PLIST}"
+cat >"${KEEPALIVE_PLIST}" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>${KEEPALIVE_LABEL}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/zsh</string>
+      <string>-lc</string>
+      <string>cd ${REPO_ROOT} &amp;&amp; ./scripts/autonomy_keepalive.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>${REPO_ROOT}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>${PATH}</string>
+      <key>MCP_HTTP_BEARER_TOKEN</key>
+      <string>${HTTP_BEARER_TOKEN}</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>${AUTONOMY_KEEPALIVE_INTERVAL}</integer>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/autonomy-keepalive.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/autonomy-keepalive.err.log</string>
+  </dict>
+</plist>
+PLIST
+
+chmod 644 "${MCP_PLIST}" "${AUTO_PLIST}" "${WORKER_PLIST}" "${KEEPALIVE_PLIST}"
 
 npm run build >/dev/null
 
 launchctl bootout "${DOMAIN}" "${MCP_PLIST}" >/dev/null 2>&1 || true
 launchctl bootout "${DOMAIN}" "${AUTO_PLIST}" >/dev/null 2>&1 || true
 launchctl bootout "${DOMAIN}" "${WORKER_PLIST}" >/dev/null 2>&1 || true
+launchctl bootout "${DOMAIN}" "${KEEPALIVE_PLIST}" >/dev/null 2>&1 || true
 
 launchctl bootstrap "${DOMAIN}" "${MCP_PLIST}"
 launchctl bootstrap "${DOMAIN}" "${AUTO_PLIST}"
 launchctl bootstrap "${DOMAIN}" "${WORKER_PLIST}"
+launchctl bootstrap "${DOMAIN}" "${KEEPALIVE_PLIST}"
 
 launchctl enable "${DOMAIN}/${MCP_LABEL}" >/dev/null 2>&1 || true
 launchctl enable "${DOMAIN}/${AUTO_LABEL}" >/dev/null 2>&1 || true
 launchctl enable "${DOMAIN}/${WORKER_LABEL}" >/dev/null 2>&1 || true
+launchctl enable "${DOMAIN}/${KEEPALIVE_LABEL}" >/dev/null 2>&1 || true
 
 launchctl kickstart -k "${DOMAIN}/${MCP_LABEL}" >/dev/null 2>&1 || true
 launchctl kickstart -k "${DOMAIN}/${AUTO_LABEL}" >/dev/null 2>&1 || true
 launchctl kickstart -k "${DOMAIN}/${WORKER_LABEL}" >/dev/null 2>&1 || true
+launchctl kickstart -k "${DOMAIN}/${KEEPALIVE_LABEL}" >/dev/null 2>&1 || true
 
 for _ in 1 2 3 4 5; do
   if "${REPO_ROOT}/scripts/imprint_auto_snapshot_ctl.sh" start >/dev/null 2>&1; then
@@ -256,19 +307,18 @@ for _ in 1 2 3 4 5; do
   sleep 2
 done
 
-if [[ "${TRICHAT_RING_LEADER_AUTOSTART:-1}" != "0" ]]; then
-  for _ in 1 2 3 4 5; do
-    if "${REPO_ROOT}/scripts/ring_leader_ctl.sh" start >/dev/null 2>&1; then
-      break
-    fi
-    sleep 2
-  done
-fi
+for _ in 1 2 3 4 5; do
+  if "${REPO_ROOT}/scripts/autonomy_keepalive.sh" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
 
 echo "Installed launchd agents:" >&2
 echo "- ${MCP_PLIST}" >&2
 echo "- ${AUTO_PLIST}" >&2
 echo "- ${WORKER_PLIST}" >&2
+echo "- ${KEEPALIVE_PLIST}" >&2
 
 echo "{" >&2
 echo "  \"ok\": true," >&2
@@ -276,6 +326,7 @@ echo "  \"domain\": \"${DOMAIN}\"," >&2
 echo "  \"mcp_label\": \"${MCP_LABEL}\"," >&2
 echo "  \"auto_snapshot_label\": \"${AUTO_LABEL}\"," >&2
 echo "  \"worker_label\": \"${WORKER_LABEL}\"," >&2
+echo "  \"keepalive_label\": \"${KEEPALIVE_LABEL}\"," >&2
 echo "  \"mcp_port\": ${MCP_PORT}," >&2
 echo "  \"http_token_file\": \"${TOKEN_FILE}\"" >&2
 echo "}" >&2

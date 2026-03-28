@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ACTION="${1:-ensure}"
+case "${ACTION}" in
+  status|ensure|repair)
+    ;;
+  *)
+    echo "usage: $0 [status|ensure]" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "${ACTION}" == "repair" ]]; then
+  ACTION="ensure"
+fi
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_ROOT}"
+eval "$("${REPO_ROOT}/scripts/export_dotenv_env.sh" "${REPO_ROOT}")"
+
+TRANSPORT="${AUTONOMY_BOOTSTRAP_TRANSPORT:-${TRICHAT_RING_LEADER_TRANSPORT:-}}"
+if [[ -z "${TRANSPORT}" ]]; then
+  if [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
+    TRANSPORT="http"
+  else
+    TRANSPORT="stdio"
+  fi
+fi
+
+export TRICHAT_RING_LEADER_TRANSPORT="${TRANSPORT}"
+
+exec "${REPO_ROOT}/scripts/autonomy_ctl.sh" "${ACTION}"

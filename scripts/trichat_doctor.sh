@@ -18,10 +18,58 @@ need_cmd npm
 need_cmd python3
 need_cmd curl
 
+TOKEN_FILE="${REPO_ROOT}/data/imprint/http_bearer_token"
+if [[ -z "${MCP_HTTP_BEARER_TOKEN:-}" && -f "${TOKEN_FILE}" ]]; then
+  export MCP_HTTP_BEARER_TOKEN="$(cat "${TOKEN_FILE}")"
+fi
+
+TRICHAT_HTTP_URL="${TRICHAT_MCP_URL:-http://127.0.0.1:8787/}"
+TRICHAT_HTTP_ORIGIN="${TRICHAT_MCP_ORIGIN:-http://127.0.0.1}"
+TRICHAT_STDIO_COMMAND="${TRICHAT_MCP_STDIO_COMMAND:-node}"
+TRICHAT_STDIO_ARGS="${TRICHAT_MCP_STDIO_ARGS:-dist/server.js}"
+
+resolve_transport() {
+  local preferred="${TRICHAT_RING_LEADER_TRANSPORT:-}"
+  if [[ -n "${preferred}" ]]; then
+    printf '%s\n' "${preferred}"
+    return 0
+  fi
+  if [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
+    if node ./scripts/mcp_tool_call.mjs \
+      --tool health.storage \
+      --args '{}' \
+      --transport http \
+      --url "${TRICHAT_HTTP_URL}" \
+      --origin "${TRICHAT_HTTP_ORIGIN}" \
+      --cwd "${REPO_ROOT}" >/dev/null 2>&1; then
+      printf 'http\n'
+      return 0
+    fi
+  fi
+  printf 'stdio\n'
+}
+
+MCP_TRANSPORT="$(resolve_transport)"
+
+call_mcp() {
+  local tool="$1"
+  local args="${2:-\{\}}"
+  node ./scripts/mcp_tool_call.mjs \
+    --tool "${tool}" \
+    --args "${args}" \
+    --transport "${MCP_TRANSPORT}" \
+    --url "${TRICHAT_HTTP_URL}" \
+    --origin "${TRICHAT_HTTP_ORIGIN}" \
+    --stdio-command "${TRICHAT_STDIO_COMMAND}" \
+    --stdio-args "${TRICHAT_STDIO_ARGS}" \
+    --cwd "${REPO_ROOT}"
+}
+
 echo "[doctor] repo: ${REPO_ROOT}"
 echo "[doctor] node: $(node -v)"
 echo "[doctor] npm: $(npm -v)"
 echo "[doctor] python: $(python3 --version 2>&1)"
+echo "[doctor] mcp transport: ${MCP_TRANSPORT}"
 
 python3 -m py_compile scripts/trichat.py
 echo "[doctor] python launcher: syntax ok"
@@ -41,51 +89,36 @@ node ./scripts/trichat_roster.mjs
 echo "[doctor] launchd status:"
 ./scripts/agents_switch.sh status
 
+echo "[doctor] autonomy bootstrap status:"
+AUTONOMY_STATUS="$(call_mcp autonomy.bootstrap '{"action":"status"}')"
+printf '%s\n' "${AUTONOMY_STATUS}"
+python3 - "${AUTONOMY_STATUS}" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+if not data.get("self_start_ready"):
+    raise SystemExit(
+        "autonomy bootstrap is not self-start ready: "
+        + ",".join(data.get("repairs_needed", []))
+    )
+PY
+
 echo "[doctor] ring leader status:"
 ./scripts/ring_leader_ctl.sh status
 
 echo "[doctor] active agent sessions:"
-node ./scripts/mcp_tool_call.mjs \
-  --tool agent.session_list \
-  --args '{"active_only":true,"limit":20}' \
-  --transport stdio \
-  --stdio-command node \
-  --stdio-args dist/server.js \
-  --cwd "${REPO_ROOT}"
+call_mcp agent.session_list '{"active_only":true,"limit":20}'
 
 echo "[doctor] kernel summary:"
-node ./scripts/mcp_tool_call.mjs \
-  --tool kernel.summary \
-  --args '{"session_limit":10,"event_limit":10}' \
-  --transport stdio \
-  --stdio-command node \
-  --stdio-args dist/server.js \
-  --cwd "${REPO_ROOT}"
+call_mcp kernel.summary '{"session_limit":10,"event_limit":10}'
 
 echo "[doctor] mcp stdio roster tool:"
-node ./scripts/mcp_tool_call.mjs \
-  --tool trichat.roster \
-  --args '{}' \
-  --transport stdio \
-  --stdio-command node \
-  --stdio-args dist/server.js \
-  --cwd "${REPO_ROOT}" >/dev/null
-echo "[doctor] mcp stdio: ok"
+call_mcp trichat.roster '{}' >/dev/null
+echo "[doctor] mcp roster: ok"
 
 echo "[doctor] adapter protocol check (dry-run):"
-node ./scripts/mcp_tool_call.mjs \
-  --tool trichat.adapter_protocol_check \
-  --args '{"run_ask_check":true,"ask_dry_run":true}' \
-  --transport stdio \
-  --stdio-command node \
-  --stdio-args dist/server.js \
-  --cwd "${REPO_ROOT}"
+call_mcp trichat.adapter_protocol_check '{"run_ask_check":true,"ask_dry_run":true}'
 
 echo "[doctor] adapter telemetry:"
-node ./scripts/mcp_tool_call.mjs \
-  --tool trichat.adapter_telemetry \
-  --args '{"action":"status","include_events":false}' \
-  --transport stdio \
-  --stdio-command node \
-  --stdio-args dist/server.js \
-  --cwd "${REPO_ROOT}"
+call_mcp trichat.adapter_telemetry '{"action":"status","include_events":false}'

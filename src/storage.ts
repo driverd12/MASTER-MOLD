@@ -2593,19 +2593,19 @@ export class Storage {
             health_state: healthState,
             queue_depth: parseBoundedInt(telemetry.queue_depth, 0, 0, 100_000),
             active_tasks: parseBoundedInt(telemetry.active_tasks, 0, 0, 100_000),
-            latency_ms: telemetry.latency_ms === undefined ? null : parseBoundedFloat(telemetry.latency_ms, 0, 0, 10_000_000),
-            cpu_utilization: telemetry.cpu_utilization === undefined ? null : parseBoundedFloat(telemetry.cpu_utilization, 0, 0, 1),
+            latency_ms: telemetry.latency_ms == null ? null : parseBoundedFloat(telemetry.latency_ms, 0, 0, 10_000_000),
+            cpu_utilization: telemetry.cpu_utilization == null ? null : parseBoundedFloat(telemetry.cpu_utilization, 0, 0, 1),
             ram_available_gb:
-              telemetry.ram_available_gb === undefined ? null : parseBoundedFloat(telemetry.ram_available_gb, 0, 0, 1_000_000),
+              telemetry.ram_available_gb == null ? null : parseBoundedFloat(telemetry.ram_available_gb, 0, 0, 1_000_000),
             ram_total_gb:
-              telemetry.ram_total_gb === undefined ? null : parseBoundedFloat(telemetry.ram_total_gb, 0, 0, 1_000_000),
-            gpu_utilization: telemetry.gpu_utilization === undefined ? null : parseBoundedFloat(telemetry.gpu_utilization, 0, 0, 1),
+              telemetry.ram_total_gb == null ? null : parseBoundedFloat(telemetry.ram_total_gb, 0, 0, 1_000_000),
+            gpu_utilization: telemetry.gpu_utilization == null ? null : parseBoundedFloat(telemetry.gpu_utilization, 0, 0, 1),
             gpu_memory_available_gb:
-              telemetry.gpu_memory_available_gb === undefined ? null : parseBoundedFloat(telemetry.gpu_memory_available_gb, 0, 0, 1_000_000),
+              telemetry.gpu_memory_available_gb == null ? null : parseBoundedFloat(telemetry.gpu_memory_available_gb, 0, 0, 1_000_000),
             gpu_memory_total_gb:
-              telemetry.gpu_memory_total_gb === undefined ? null : parseBoundedFloat(telemetry.gpu_memory_total_gb, 0, 0, 1_000_000),
+              telemetry.gpu_memory_total_gb == null ? null : parseBoundedFloat(telemetry.gpu_memory_total_gb, 0, 0, 1_000_000),
             disk_free_gb:
-              telemetry.disk_free_gb === undefined ? null : parseBoundedFloat(telemetry.disk_free_gb, 0, 0, 1_000_000),
+              telemetry.disk_free_gb == null ? null : parseBoundedFloat(telemetry.disk_free_gb, 0, 0, 1_000_000),
             thermal_pressure: thermalPressure,
           },
           metadata: parseLooseObject(item.metadata),
@@ -2673,19 +2673,19 @@ export class Storage {
             health_state: healthState,
             queue_depth: parseBoundedInt(telemetry.queue_depth, 0, 0, 100_000),
             active_tasks: parseBoundedInt(telemetry.active_tasks, 0, 0, 100_000),
-            latency_ms: telemetry.latency_ms === undefined ? null : parseBoundedFloat(telemetry.latency_ms, 0, 0, 10_000_000),
-            cpu_utilization: telemetry.cpu_utilization === undefined ? null : parseBoundedFloat(telemetry.cpu_utilization, 0, 0, 1),
+            latency_ms: telemetry.latency_ms == null ? null : parseBoundedFloat(telemetry.latency_ms, 0, 0, 10_000_000),
+            cpu_utilization: telemetry.cpu_utilization == null ? null : parseBoundedFloat(telemetry.cpu_utilization, 0, 0, 1),
             ram_available_gb:
-              telemetry.ram_available_gb === undefined ? null : parseBoundedFloat(telemetry.ram_available_gb, 0, 0, 1_000_000),
+              telemetry.ram_available_gb == null ? null : parseBoundedFloat(telemetry.ram_available_gb, 0, 0, 1_000_000),
             ram_total_gb:
-              telemetry.ram_total_gb === undefined ? null : parseBoundedFloat(telemetry.ram_total_gb, 0, 0, 1_000_000),
-            gpu_utilization: telemetry.gpu_utilization === undefined ? null : parseBoundedFloat(telemetry.gpu_utilization, 0, 0, 1),
+              telemetry.ram_total_gb == null ? null : parseBoundedFloat(telemetry.ram_total_gb, 0, 0, 1_000_000),
+            gpu_utilization: telemetry.gpu_utilization == null ? null : parseBoundedFloat(telemetry.gpu_utilization, 0, 0, 1),
             gpu_memory_available_gb:
-              telemetry.gpu_memory_available_gb === undefined ? null : parseBoundedFloat(telemetry.gpu_memory_available_gb, 0, 0, 1_000_000),
+              telemetry.gpu_memory_available_gb == null ? null : parseBoundedFloat(telemetry.gpu_memory_available_gb, 0, 0, 1_000_000),
             gpu_memory_total_gb:
-              telemetry.gpu_memory_total_gb === undefined ? null : parseBoundedFloat(telemetry.gpu_memory_total_gb, 0, 0, 1_000_000),
+              telemetry.gpu_memory_total_gb == null ? null : parseBoundedFloat(telemetry.gpu_memory_total_gb, 0, 0, 1_000_000),
             disk_free_gb:
-              telemetry.disk_free_gb === undefined ? null : parseBoundedFloat(telemetry.disk_free_gb, 0, 0, 1_000_000),
+              telemetry.disk_free_gb == null ? null : parseBoundedFloat(telemetry.disk_free_gb, 0, 0, 1_000_000),
             thermal_pressure: thermalPressure,
           },
           metadata: parseLooseObject(host.metadata),
@@ -2953,14 +2953,14 @@ export class Storage {
           host_id: asNullableString(item.host_id),
           locality: String(item.locality ?? "local").trim().toLowerCase() === "remote" ? "remote" : "local",
           context_window: parseBoundedInt(item.context_window, 8192, 256, 10_000_000),
-          throughput_tps: item.throughput_tps === undefined ? null : parseBoundedFloat(item.throughput_tps, 0, 0, 1_000_000),
-          latency_ms_p50: item.latency_ms_p50 === undefined ? null : parseBoundedFloat(item.latency_ms_p50, 0, 0, 10_000_000),
-          success_rate: item.success_rate === undefined ? null : clampMetricRate(item.success_rate),
-          win_rate: item.win_rate === undefined ? null : clampMetricRate(item.win_rate),
+          throughput_tps: item.throughput_tps == null ? null : parseBoundedFloat(item.throughput_tps, 0, 0, 1_000_000),
+          latency_ms_p50: item.latency_ms_p50 == null ? null : parseBoundedFloat(item.latency_ms_p50, 0, 0, 10_000_000),
+          success_rate: item.success_rate == null ? null : clampMetricRate(item.success_rate),
+          win_rate: item.win_rate == null ? null : clampMetricRate(item.win_rate),
           cost_per_1k_input:
-            item.cost_per_1k_input === undefined ? null : parseBoundedFloat(item.cost_per_1k_input, 0, 0, 1_000_000),
+            item.cost_per_1k_input == null ? null : parseBoundedFloat(item.cost_per_1k_input, 0, 0, 1_000_000),
           max_output_tokens:
-            item.max_output_tokens === undefined ? null : parseBoundedInt(item.max_output_tokens, 0, 0, 10_000_000),
+            item.max_output_tokens == null ? null : parseBoundedInt(item.max_output_tokens, 0, 0, 10_000_000),
           tags: dedupeNonEmpty(Array.isArray(item.tags) ? item.tags : []),
           capabilities: parseLooseObject(item.capabilities),
           metadata: parseLooseObject(item.metadata),
