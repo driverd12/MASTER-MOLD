@@ -50,6 +50,12 @@ test("autonomy.ide_ingress records continuity, mirrors to the office thread, and
     assert.equal(ingress.ok, true);
     assert.equal(ingress.session_id, sessionId);
     assert.equal(ingress.thread_id, threadId);
+    assert.deepEqual(ingress.effective_trichat_agent_ids, [
+      "implementation-director",
+      "research-director",
+      "verification-director",
+      "local-imprint",
+    ]);
     assert.equal(ingress.autonomy.goal.title, "IDE ingress integration");
     assert.equal(ingress.autonomy.execution.ok, true);
 

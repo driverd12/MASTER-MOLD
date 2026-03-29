@@ -250,6 +250,15 @@ Optional shell flags are available through the wrapper, for example:
 ./scripts/autonomy_ide_ingress.sh --session codex-ide --thread trichat-autopilot-internal --tag ide -- "Mirror this IDE objective into the office and keep the background workflow moving."
 ```
 
+If you do not explicitly override `trichat_agent_ids`, IDE ingress now defaults to a local-first council:
+
+- `implementation-director`
+- `research-director`
+- `verification-director`
+- `local-imprint`
+
+That keeps the first attempt inside your local house agents before escalation.
+
 ## Agent Office Dashboard
 
 Launch the animated office monitor directly:
@@ -412,9 +421,26 @@ Connection examples and client setup:
 - [IDE + Agent Setup Guide](./docs/IDE_AGENT_SETUP.md)
 - [Transport Connection Guide](./docs/CONNECT.md)
 - [Coworker Quickstart (Cursor + Codex)](./docs/COWORKER_QUICKSTART_CURSOR_CODEX.md)
+- [Provider Bridge Matrix](./docs/PROVIDER_BRIDGE_MATRIX.md)
+- [Presentation Runbook](./docs/PRESENTATION_RUNBOOK.md)
 - [TriChat Multi-Agent Setup](./docs/TRICHAT_MULTI_AGENT_SETUP.md)
 - [Agent Adoption Guide](./docs/AGENT_ADOPTION.md)
 - [Ring Leader MCP Ops](./docs/RING_LEADER_MCP_OPS.md)
+
+Provider bridge commands:
+
+```bash
+npm run providers:status
+npm run providers:export
+npm run providers:install -- cursor gemini-cli github-copilot-cli
+```
+
+`provider.bridge` is the truthful federation surface:
+
+- it reports which clients can really connect into this MCP runtime
+- it reports which providers are already available as live outbound council agents
+- it exports config bundles for Cursor, Gemini CLI, GitHub Copilot, and Codex
+- it preserves `autonomy.ide_ingress` as the one canonical operator/IDE ingress path
 
 Fast STDIO connection example:
 

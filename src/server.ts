@@ -199,6 +199,7 @@ import { taskCompile, taskCompileSchema } from "./tools/task_compiler.js";
 import { autonomyBootstrap, autonomyBootstrapSchema } from "./tools/autonomy_bootstrap.js";
 import { autonomyCommand, autonomyCommandSchema } from "./tools/autonomy_command.js";
 import { autonomyIdeIngress, autonomyIdeIngressSchema } from "./tools/autonomy_ide_ingress.js";
+import { providerBridge, providerBridgeSchema } from "./tools/provider_bridge.js";
 import {
   trichatChaos,
   trichatChaosSchema,
@@ -2150,6 +2151,13 @@ registerTool(
   "Mirror an IDE/operator objective into continuity, the office thread, and the durable autonomy command path.",
   autonomyIdeIngressSchema,
   (input) => autonomyIdeIngress(storage, invokeRegisteredTool, input)
+);
+
+registerTool(
+  "provider.bridge",
+  "Export, install, and truthfully report external client bridges that should point at this MCP runtime and its canonical IDE ingress path.",
+  providerBridgeSchema,
+  (input) => providerBridge(storage, input)
 );
 
 registerTool("org.program", "Version and promote role programs for ring leader, directors, SMEs, and leaf agents.", orgProgramSchema, (input) =>

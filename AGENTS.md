@@ -16,6 +16,10 @@ Build and harden a robust MCP server with real agentic tooling so a local ring l
 - Make agents smarter through bounded learning from real outcomes: capture durable per-agent lessons, reuse only the highest-signal task-relevant lessons, and never let learning turn into recursive self-improvement work.
 - Preserve continuity in MCP artifacts, memory, and local repo guidance whenever strategy or long-term goals meaningfully evolve.
 - Keep the office TUI cute, informative, and operationally honest: sprite states should reflect real MCP/tmux/telemetry signals, not fake activity.
+- Treat `autonomy.ide_ingress` as the one canonical operator and IDE intake lane. Do not invent a second ingress path for shell, office, or external clients.
+- For IDE-originated work, let the local-first council try first: `implementation-director`, `research-director`, `verification-director`, `local-imprint`, unless an explicit agent override is provided.
+- Separate inbound client federation from outbound council capability. Cursor, Codex, and Gemini can be real council participants here; GitHub Copilot is an inbound MCP client today, not a fake outbound council bridge.
+- Keep ChatGPT/OpenAI custom MCP claims truthful: remote-only until a real remote MCP surface exists. Never present it as a pure local install.
 
 ## Current UX Direction
 
@@ -23,6 +27,7 @@ Build and harden a robust MCP server with real agentic tooling so a local ring l
 - Launch path should be one-click from `/Applications` via the installed Agent Office app.
 - Office sprites should communicate real states like desk work, briefing, chatting, break/reset, blocked, offline, and sleeping.
 - The office UX should keep borrowing the best open-source wins from projects like Ralph TUI, GSD, autoresearch, and SuperClaude, while explicitly excluding unsafe jailbreak behavior.
+- Presentation path should always be runnable from real commands: `npm run production:doctor`, `npm run providers:status`, `npm run providers:export`, `npm run autonomy:ide -- \"<objective>\"`, and `/Applications/Agent Office.app`.
 
 ## Reliability Direction
 

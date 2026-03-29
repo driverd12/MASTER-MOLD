@@ -129,6 +129,30 @@ if confidence_mode:
     print(f"[production] confidence method: {confidence_mode}")
 PY
 
+call_http provider.bridge '{"action":"status"}' > "${TMP_DIR}/provider-bridge.json"
+python3 - "${TMP_DIR}/provider-bridge.json" <<'PY'
+import json
+import pathlib
+import sys
+
+data = json.loads(pathlib.Path(sys.argv[1]).read_text())
+clients = {entry.get("client_id"): entry for entry in data.get("clients", [])}
+local_first = data.get("local_first_ide_agent_ids") or []
+if data.get("canonical_ingress_tool") != "autonomy.ide_ingress":
+    raise SystemExit("provider.bridge did not report autonomy.ide_ingress as canonical ingress")
+required_clients = {"codex", "cursor", "gemini-cli", "github-copilot-cli", "chatgpt-developer-mode"}
+missing = sorted(required_clients - set(clients))
+if missing:
+    raise SystemExit(f"provider.bridge missing expected clients: {missing}")
+if len(local_first) < 4:
+    raise SystemExit("provider.bridge local-first IDE policy is incomplete")
+print(
+    "[production] provider bridge: "
+    f"canonical_ingress={data.get('canonical_ingress_tool')} "
+    f"local_first={','.join(local_first)}"
+)
+PY
+
 kernel_ok=0
 for attempt in 1 2 3 4 5; do
   call_http kernel.summary '{"session_limit":6,"event_limit":6,"task_running_limit":8}' > "${TMP_DIR}/kernel.json"

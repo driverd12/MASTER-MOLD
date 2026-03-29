@@ -127,6 +127,20 @@ Run these checks from your client:
 4. `memory.search`
 5. `pack.hooks.list`
 
+## Provider Bridge Shortcut
+
+To export or install client-facing MCP config bundles from the server itself, use:
+
+```bash
+npm run providers:status
+npm run providers:export
+```
+
+Truth boundary:
+
+- Cursor, Codex, Gemini CLI, and GitHub Copilot CLI can be configured as MCP clients here.
+- ChatGPT/OpenAI custom MCP is documented as a remote-only path, not a fake local install.
+
 ## Common Troubleshooting
 
 - `Unknown tool`:

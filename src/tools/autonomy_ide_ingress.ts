@@ -39,6 +39,17 @@ function dedupeStrings(values: unknown): string[] {
   return [...new Set(values.map((entry) => String(entry ?? "").trim()).filter(Boolean))];
 }
 
+function resolveLocalFirstTriChatAgentIds() {
+  const envConfigured = String(process.env.TRICHAT_IDE_LOCAL_FIRST_AGENT_IDS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (envConfigured.length > 0) {
+    return [...new Set(envConfigured)];
+  }
+  return ["implementation-director", "research-director", "verification-director", "local-imprint"];
+}
+
 function deriveMutation(base: { idempotency_key: string; side_effect_fingerprint: string }, phase: string) {
   const safePhase = phase.replace(/[^a-zA-Z0-9._-]+/g, "-");
   const digest = crypto
@@ -114,6 +125,9 @@ export async function autonomyIdeIngress(
       };
       const title = input.title?.trim() || deriveTitle(input.objective);
       const tags = [...new Set(["autonomy", "ide", "ingress", ...dedupeStrings(input.tags)])];
+      const explicitTriChatAgentIds = dedupeStrings(input.trichat_agent_ids);
+      const effectiveTriChatAgentIds =
+        explicitTriChatAgentIds.length > 0 ? explicitTriChatAgentIds : resolveLocalFirstTriChatAgentIds();
       const sessionId =
         input.session_id?.trim() ||
         `ide-${sanitizeIdentifier(sourceClient || sourceAgent || "codex") || "codex"}-autonomy`;
@@ -200,6 +214,8 @@ export async function autonomyIdeIngress(
           ingress_kind: "ide",
           ingress_session_id: sessionId,
           ingress_thread_id: threadId,
+          ingress_agent_policy: explicitTriChatAgentIds.length > 0 ? "explicit" : "local-first",
+          ingress_effective_agents: effectiveTriChatAgentIds,
           ...(input.metadata ?? {}),
         },
         owner: input.owner,
@@ -221,7 +237,7 @@ export async function autonomyIdeIngress(
         dispatch_limit: input.dispatch_limit,
         dry_run: input.dry_run,
         max_passes: input.max_passes,
-        trichat_agent_ids: input.trichat_agent_ids,
+        trichat_agent_ids: effectiveTriChatAgentIds,
         trichat_max_rounds: input.trichat_max_rounds,
         trichat_min_success_agents: input.trichat_min_success_agents,
         trichat_bridge_timeout_seconds: input.trichat_bridge_timeout_seconds,
@@ -270,6 +286,8 @@ export async function autonomyIdeIngress(
                 mirrored_to_thread: Boolean(threadId),
                 transcript_appended: input.append_transcript !== false,
                 memory_recorded: input.append_memory !== false,
+                ingress_agent_policy: explicitTriChatAgentIds.length > 0 ? "explicit" : "local-first",
+                ingress_effective_agents: effectiveTriChatAgentIds,
               },
               ...source,
             })) as Record<string, unknown>);
@@ -279,6 +297,7 @@ export async function autonomyIdeIngress(
         title,
         source,
         session_id: sessionId,
+        effective_trichat_agent_ids: effectiveTriChatAgentIds,
         thread_id: threadId,
         thread_title: threadId ? threadTitle : null,
         transcript,

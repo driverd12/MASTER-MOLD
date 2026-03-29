@@ -13,5 +13,7 @@ data/recovery-*/
 data/hub.from_wal.*
 data/trichat.bus.sock
 data/imprint/
+data/exports/
 coverage/
 __pycache__/
+.vscode/mcp.json

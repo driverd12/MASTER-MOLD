@@ -111,3 +111,14 @@ Use these defaults in day-to-day workflows:
 2. Use run ledger + lock tools for significant workflows.
 3. Use `preflight.check` and `postflight.verify` around risky changes.
 4. Record important decisions with `adr.create` and `decision.link`.
+
+## 10) Provider Bridge
+
+When you want to prep multiple IDE or agent clients quickly from the runtime itself:
+
+```bash
+npm run providers:status
+npm run providers:export
+```
+
+The canonical objective lane for IDE/operator commands is still `autonomy.ide_ingress`.
