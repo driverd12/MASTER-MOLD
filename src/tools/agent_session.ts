@@ -781,6 +781,15 @@ export function summarizeAdaptiveSessionHealth(session: AgentSessionRecord): Ada
   const recentSessionSignals = summarizeAdaptiveRecentOutcomes(profile, "low");
   const reasons: string[] = [];
   let adaptiveState: AdaptiveSessionHealthState = "unproven";
+  const hasRecentFailureDebt = recentSessionSignals.effective_recent_failed > 0;
+  const hasRecentStagnationDebt = recentSessionSignals.effective_recent_stagnation_signals > 0;
+  const recentEvidenceDebt = recentSessionSignals.effective_recent_evidence_blocks;
+  const evidenceDebtRecovered =
+    !hasRecentFailureDebt &&
+    !hasRecentStagnationDebt &&
+    recentEvidenceDebt > 0 &&
+    recentSessionSignals.recovery_streak >=
+      Math.max(4, recentEvidenceDebt * ADAPTIVE_RECOVERY_EVIDENCE_CREDIT_EVERY);
 
   if (profile.total_claims === 0) {
     adaptiveState = "unproven";
@@ -793,29 +802,29 @@ export function summarizeAdaptiveSessionHealth(session: AgentSessionRecord): Ada
     if (profile.consecutive_stagnation_signals >= 1) {
       reasons.push(`Suppressed after ${profile.consecutive_stagnation_signals} recent stagnation signal(s).`);
     }
-  } else if (
-    recentSessionSignals.effective_recent_failed > 0 ||
-    recentSessionSignals.effective_recent_stagnation_signals > 0 ||
-    recentSessionSignals.effective_recent_evidence_blocks > 0
-  ) {
+  } else if (hasRecentFailureDebt || hasRecentStagnationDebt || (recentEvidenceDebt > 0 && !evidenceDebtRecovered)) {
     adaptiveState = "degraded";
-    if (recentSessionSignals.effective_recent_failed > 0) {
+    if (hasRecentFailureDebt) {
       reasons.push(`${recentSessionSignals.effective_recent_failed} recent failed task signal(s) still need recovery.`);
     }
-    if (recentSessionSignals.effective_recent_stagnation_signals > 0) {
+    if (hasRecentStagnationDebt) {
       reasons.push(
         `${recentSessionSignals.effective_recent_stagnation_signals} recent stagnation signal(s) still need recovery.`
       );
     }
-    if (recentSessionSignals.effective_recent_evidence_blocks > 0) {
+    if (recentEvidenceDebt > 0 && !evidenceDebtRecovered) {
       reasons.push(
-        `${recentSessionSignals.effective_recent_evidence_blocks} recent evidence-blocked completion(s) still need recovery.`
+        `${recentEvidenceDebt} recent evidence-blocked completion(s) still need recovery.`
       );
     }
   } else {
     adaptiveState = "healthy";
     const recoveryStreak = recentSessionSignals.recovery_streak;
-    if (profile.total_failed > 0 || profile.total_stagnation_signals > 0 || profile.total_evidence_blocks > 0) {
+    if (evidenceDebtRecovered) {
+      reasons.push(
+        `Recent routing history is stable and a recovery streak of ${recoveryStreak} completion(s) is outweighing ${recentEvidenceDebt} remaining evidence-quality signal(s).`
+      );
+    } else if (profile.total_failed > 0 || profile.total_stagnation_signals > 0 || profile.total_evidence_blocks > 0) {
       reasons.push(
         recoveryStreak > 0
           ? `Recent routing history is stable and a recovery streak of ${recoveryStreak} completion(s) is offsetting older failures.`

@@ -270,9 +270,25 @@ def build_view_tabs(active_view: str, width: int, theme: str) -> str:
             tabs.append(f"[{index}:{label}*]")
         else:
             tabs.append(f"[{index}:{label}]")
+    tabs.append("[5:INTAKE]")
     tabs.append("[H:HELP]")
     tabs.append(f"[T:{theme_label(theme)}]")
     return fit_text(" ".join(tabs), width)
+
+
+def switch_tmux_window(window_name: str) -> None:
+    if not os.environ.get("TMUX"):
+        return
+    session_name = os.environ.get("TRICHAT_OFFICE_TMUX_SESSION_NAME", "agent-office").strip() or "agent-office"
+    try:
+        subprocess.run(
+            ["tmux", "select-window", "-t", f"{session_name}:{window_name}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return
 
 
 class McpToolCaller:
@@ -1666,7 +1682,7 @@ def render_workers_view(snapshot: DashboardSnapshot, width: int, height: int) ->
 def render_help_view(width: int, height: int, theme: str = "night") -> List[str]:
     lines = [
         fit_text("HELP", width),
-        fit_text("1 Office   2 Briefing   3 Lanes   4 Workers   h Help", width),
+        fit_text("1 Office   2 Briefing   3 Lanes   4 Workers   5 Intake   h Help", width),
         fit_text("r Refresh  p Pause      t Theme   q Quit", width),
         "",
         fit_text("The office scene is driven by MCP tools:", width),
@@ -1682,6 +1698,7 @@ def render_help_view(width: int, height: int, theme: str = "night") -> List[str]
         fit_text("- agent.session_list", width),
         fit_text("- task.list (running/pending)", width),
         fit_text("- trichat.autopilot(status)", width),
+        fit_text("- autonomy.command (via the tmux intake desk)", width),
         "",
         fit_text("Truth mode:", width),
         fit_text("- WORK / LEAD require explicit task, session, or active-turn evidence", width),
@@ -1697,6 +1714,7 @@ def render_help_view(width: int, height: int, theme: str = "night") -> List[str]
         fit_text("- GSD-style bounded work packets with one owner, evidence, and rollback", width),
         fit_text("- autoresearch-style small-budget loops and org-first delegation discipline", width),
         fit_text("- SuperClaude-inspired confidence checks before high-confidence plans", width),
+        fit_text("- 5 jumps to the live intake desk when running inside Agent Office tmux", width),
     ]
     if len(lines) > height:
         compacted: List[str] = []
@@ -1909,6 +1927,8 @@ class OfficeDashboardApp:
                 self.view = "lanes"
             elif normalized == "4":
                 self.view = "workers"
+            elif normalized == "5":
+                switch_tmux_window("intake")
             elif normalized == "h":
                 self.view = "help"
             elif normalized == "r":
@@ -1943,7 +1963,7 @@ class OfficeDashboardApp:
             f"theme={theme_label(self.theme)} {'PAUSED' if self.paused else 'LIVE'}"
         )
         tabs_line = build_view_tabs(self.view, width, self.theme)
-        help_line = "r refresh  p pause  t theme  q quit"
+        help_line = "5 intake  r refresh  p pause  t theme  q quit"
         safe_addstr(screen, 0, 0, fit_text(header, width), curses.color_pair(8) | curses.A_BOLD)
         safe_addstr(screen, 1, 0, tabs_line, curses.color_pair(1) | curses.A_BOLD)
         safe_addstr(screen, 2, 0, fit_text(help_line, width), curses.color_pair(2))

@@ -257,6 +257,12 @@ Start the tmux war room with dedicated windows for the office scene, briefing bo
 npm run trichat:office:tmux
 ```
 
+Open the intake desk directly when you want to hand the office a plain-language objective and let the autonomous stack run with it:
+
+```bash
+npm run autonomy:intake:shell
+```
+
 This dashboard is MCP-backed and reads live state from:
 
 - `trichat.roster`
@@ -275,6 +281,7 @@ Recent polish added:
 - a stylized night-shift office banner with a built-in mascot and richer ASCII sprite poses
 - animated per-agent states for desk work, supervision, chatter, break, blocked, offline, and sleep
 - a `t` hotkey to cycle dashboard themes (`night`, `sunrise`, `mono`)
+- a dedicated `intake` tmux window and `5` hotkey from the office dashboard so the war room can take objectives, not just monitor them
 - confidence-check surfacing in the briefing board so ring-leader confidence is explainable, not just numeric
 
 Install the single-click macOS app launcher in `/Applications`:

@@ -2551,6 +2551,144 @@ test("adaptive worker health recovers after a completion streak while stale fail
   }
 });
 
+test("adaptive worker health can recover from evidence-only debt after a strong clean completion streak", async () => {
+  const testId = `${Date.now()}-adaptive-evidence-recovery`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-adaptive-evidence-recovery-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open.recovered", () => mutationCounter++),
+      session_id: "adaptive-evidence-recovered-session",
+      agent_id: "ring-leader",
+      client_kind: "trichat-autopilot",
+      display_name: "Recovered evidence session",
+      workspace_root: REPO_ROOT,
+      transport_kind: "daemon",
+      status: "active",
+      capabilities: {
+        capability_tier: "high",
+        planning: true,
+      },
+    });
+
+    const createEvidenceTask = async (label) => {
+      const goal = await callTool(client, "goal.create", {
+        mutation: nextMutation(testId, `goal.create.${label}`, () => mutationCounter++),
+        title: `Evidence recovery ${label}`,
+        objective: `Require verification evidence for ${label}`,
+        status: "active",
+        autonomy_mode: "execute_bounded",
+        acceptance_criteria: ["Verification evidence must be attached before the step completes"],
+      });
+
+      const plan = await callTool(client, "plan.create", {
+        mutation: nextMutation(testId, `plan.create.${label}`, () => mutationCounter++),
+        goal_id: goal.goal.goal_id,
+        title: `Evidence plan ${label}`,
+        summary: `Require a verification artifact for ${label}`,
+        selected: true,
+        steps: [
+          {
+            step_id: `verify-${label}`,
+            seq: 1,
+            title: `Produce verification report ${label}`,
+            step_kind: "verification",
+            executor_kind: "worker",
+            expected_artifact_types: ["verification_report"],
+            input: {
+              objective: `Run verification for ${label} and attach the verification report artifact`,
+              project_dir: REPO_ROOT,
+            },
+          },
+        ],
+      });
+
+      const dispatched = await callTool(client, "plan.dispatch", {
+        mutation: nextMutation(testId, `plan.dispatch.${label}`, () => mutationCounter++),
+        plan_id: plan.plan.plan_id,
+      });
+
+      return {
+        goal,
+        plan,
+        task_id: dispatched.results[0]?.task_id,
+      };
+    };
+
+    const createRecoveryTask = async (label) =>
+      callTool(client, "task.create", {
+        mutation: nextMutation(testId, `task.create.${label}`, () => mutationCounter++),
+        objective: `Recover evidence-health baseline for ${label}`,
+        project_dir: REPO_ROOT,
+        priority: 5,
+        tags: ["adaptive-routing", "recovery", "evidence"],
+      });
+
+    for (const label of ["evidence-one", "evidence-two"]) {
+      const task = await createEvidenceTask(label);
+      const claimed = await callTool(client, "agent.claim_next", {
+        mutation: nextMutation(testId, `agent.claim_next.evidence.${label}`, () => mutationCounter++),
+        session_id: "adaptive-evidence-recovered-session",
+        task_id: task.task_id,
+      });
+      assert.equal(claimed.claimed, true);
+      await callTool(client, "agent.report_result", {
+        mutation: nextMutation(testId, `agent.report_result.evidence.${label}`, () => mutationCounter++),
+        session_id: "adaptive-evidence-recovered-session",
+        task_id: claimed.task.task_id,
+        outcome: "completed",
+        summary: `Completed ${label} but omitted the verification artifact`,
+        result: {
+          completed: true,
+        },
+      });
+    }
+
+    for (const label of ["recovery-one", "recovery-two", "recovery-three", "recovery-four"]) {
+      const task = await createRecoveryTask(label);
+      await callTool(client, "agent.claim_next", {
+        mutation: nextMutation(testId, `agent.claim_next.recovery.${label}`, () => mutationCounter++),
+        session_id: "adaptive-evidence-recovered-session",
+        task_id: task.task.task_id,
+      });
+      await callTool(client, "agent.report_result", {
+        mutation: nextMutation(testId, `agent.report_result.recovery.${label}`, () => mutationCounter++),
+        session_id: "adaptive-evidence-recovered-session",
+        task_id: task.task.task_id,
+        outcome: "completed",
+        summary: `Recovered session completed ${label}`,
+        result: {
+          completed: true,
+        },
+      });
+    }
+
+    const kernelSummary = await callTool(client, "kernel.summary", {
+      session_limit: 10,
+      goal_limit: 5,
+      event_limit: 20,
+      task_running_limit: 10,
+    });
+    const recoveredSessionSummary = kernelSummary.adaptive_sessions.find(
+      (session) => session.session_id === "adaptive-evidence-recovered-session"
+    );
+    assert.ok(recoveredSessionSummary);
+    assert.equal(recoveredSessionSummary.adaptive_state, "healthy");
+    assert.match(recoveredSessionSummary.adaptive_reasons.join(" | "), /recovery streak/i);
+    assert.ok(kernelSummary.overview.adaptive_session_counts.healthy >= 1);
+    assert.equal(
+      kernelSummary.attention.some((entry) => /adaptive routing marks .* degraded/i.test(entry)),
+      false
+    );
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("adaptive session health counts recent failure pressure once across complexity lanes", async () => {
   const testId = `${Date.now()}-adaptive-health-counts-once`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-adaptive-health-counts-once-test-"));

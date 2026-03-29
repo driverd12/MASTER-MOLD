@@ -4535,9 +4535,16 @@ function ensureAutopilotDelegationSuccessCriteriaContext(
   taskObjective: string | null
 ): string[] {
   const normalizedCriteria = dedupeNonEmptyCommands(criteria);
-  const alreadyScoped = normalizedCriteria.some((entry) =>
-    /\b(slice|delegated|handoff|dashboard|implementation slice|bounded objective)\b/i.test(entry)
-  );
+  const alreadyScoped = normalizedCriteria.some((entry) => {
+    const normalizedEntry = normalizeAutopilotDelegationHint(entry).trim();
+    if (!normalizedEntry) {
+      return false;
+    }
+    if (/\b(slice|delegated|dashboard|implementation slice|bounded objective)\b/i.test(normalizedEntry)) {
+      return true;
+    }
+    return /\bhandoff\b/i.test(normalizedEntry) && /\b(slice|bounded|scope)\b/i.test(normalizedEntry);
+  });
   if (alreadyScoped) {
     return normalizedCriteria;
   }

@@ -117,6 +117,18 @@ ensure_window "office" "office"
 ensure_window "briefing" "briefing"
 ensure_window "lanes" "lanes"
 ensure_window "workers" "workers"
+if window_exists "intake"; then
+  pane_dead="$(tmux list-panes -t "${SESSION_NAME}:intake" -F '#{pane_dead}' 2>/dev/null | head -n 1 || echo 1)"
+  pane_command="$(tmux list-panes -t "${SESSION_NAME}:intake" -F '#{pane_current_command}' 2>/dev/null | head -n 1 || true)"
+  if [[ "${pane_dead}" == "1" || ( "${pane_command}" != "bash" && "${pane_command}" != "zsh" ) ]]; then
+    tmux respawn-window -k -t "${SESSION_NAME}:intake" "./scripts/autonomy_intake_shell.sh"
+  fi
+else
+  tmux new-window -t "${SESSION_NAME}" -n "intake" "./scripts/autonomy_intake_shell.sh"
+fi
+tmux set-window-option -t "${SESSION_NAME}:intake" remain-on-exit on >/dev/null
+tmux set-window-option -t "${SESSION_NAME}:intake" automatic-rename off >/dev/null
+tmux set-window-option -t "${SESSION_NAME}:intake" allow-rename off >/dev/null
 
 tmux set-option -t "${SESSION_NAME}" mouse on
 tmux set-option -t "${SESSION_NAME}" renumber-windows on
@@ -128,7 +140,7 @@ tmux set-option -t "${SESSION_NAME}" window-status-current-style "fg=colour222,b
 tmux set-option -t "${SESSION_NAME}" pane-border-style "fg=colour239"
 tmux set-option -t "${SESSION_NAME}" pane-active-border-style "fg=colour81"
 tmux set-option -t "${SESSION_NAME}" status-left "#[fg=colour215,bold]o[ ]o #[fg=colour222,bold]Agent Office #[fg=colour110]${THEME}"
-tmux set-option -t "${SESSION_NAME}" status-right "#[fg=colour114]tmux #[fg=colour81]#S #[fg=colour250]%H:%M"
+tmux set-option -t "${SESSION_NAME}" status-right "#[fg=colour114]tmux #[fg=colour81]#S #[fg=colour250]5:intake #[fg=colour250]%H:%M"
 tmux select-window -t "${SESSION_NAME}:office"
 
 if [[ "${DETACH}" == "1" ]]; then

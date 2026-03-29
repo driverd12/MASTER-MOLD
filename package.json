@@ -52,6 +52,7 @@
     "autonomy:ensure": "./scripts/autonomy_ctl.sh ensure",
     "autonomy:intake": "./scripts/autonomy_command.sh",
     "autonomy:command": "./scripts/autonomy_command.sh",
+    "autonomy:intake:shell": "./scripts/autonomy_intake_shell.sh",
     "production:doctor": "./scripts/production_readiness.sh",
     "codex:mcp:register": "./scripts/codex_mcp_register.sh"
   },
