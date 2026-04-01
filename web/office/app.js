@@ -408,6 +408,7 @@
         if (!state.selectedAgentId && payload.agents && payload.agents.length && payload.agents[0].agent) {
           state.selectedAgentId = payload.agents[0].agent.agent_id || "";
         }
+        setResultText("Ready.");
         renderAll();
         return payload;
       }, function (error) {

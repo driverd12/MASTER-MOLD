@@ -48,6 +48,7 @@ const officeDashboardScript = path.join(repoRoot, "scripts", "agent_office_dashb
 const autonomyIngressScript = path.join(repoRoot, "scripts", "autonomy_ide_ingress.sh");
 const autonomyCtlScript = path.join(repoRoot, "scripts", "autonomy_ctl.sh");
 const officeTmuxScript = path.join(repoRoot, "scripts", "agent_office_tmux.sh");
+const officeTmuxOpenScript = path.join(repoRoot, "scripts", "agent_office_tmux_open.sh");
 const officeSnapshotInflight = new Map<string, Promise<OfficeSnapshotCommandResult>>();
 let lastReadySnapshotCache: ReadySnapshotCacheEntry | null = null;
 
@@ -756,6 +757,12 @@ async function maybeHandleOfficeRequest(
       });
     } else if (action === "tmux_detach") {
       result = await runLocalCommand(officeTmuxScript, ["--detach"], {
+        cwd: repoRoot,
+        env: officeEnv(origin),
+        timeoutMs: 60000,
+      });
+    } else if (action === "tmux_open") {
+      result = await runLocalCommand(officeTmuxOpenScript, [], {
         cwd: repoRoot,
         env: officeEnv(origin),
         timeoutMs: 60000,

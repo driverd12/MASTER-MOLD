@@ -234,7 +234,7 @@ function runGuiAction(repoRoot, action) {
     });
   }
   if (action === "open_tmux") {
-    const completed = spawnSync(path.join(repoRoot, "scripts", "agent_office_tmux.sh"), ["--detach"], {
+    const completed = spawnSync(path.join(repoRoot, "scripts", "agent_office_tmux_open.sh"), [], {
       cwd: repoRoot,
       env: process.env,
       encoding: "utf8",
