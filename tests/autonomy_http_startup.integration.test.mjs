@@ -195,6 +195,70 @@ test("http daemon serves the clickable office GUI and snapshot routes on the liv
   }
 });
 
+test("office action maintain returns immediately with 202 instead of blocking on shell upkeep", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-http-office-action-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const busPath = path.join(tempDir, "trichat.bus.sock");
+  const bearerToken = "test-autonomy-http-office-action-token";
+  const ollama = await startFakeOllamaServer({
+    models: [{ name: "llama3.2:3b" }],
+  });
+  const httpPort = await reservePort();
+  const child = spawn("node", ["dist/server.js", "--http", "--http-port", String(httpPort)], {
+    cwd: REPO_ROOT,
+    env: inheritedEnv({
+      MCP_HTTP: "1",
+      MCP_HTTP_PORT: String(httpPort),
+      MCP_HTTP_HOST: "127.0.0.1",
+      MCP_HTTP_BEARER_TOKEN: bearerToken,
+      ANAMNESIS_HUB_DB_PATH: dbPath,
+      TRICHAT_BUS_SOCKET_PATH: busPath,
+      TRICHAT_OLLAMA_URL: ollama.url,
+      TRICHAT_RING_LEADER_AUTOSTART: "1",
+      TRICHAT_RING_LEADER_BRIDGE_DRY_RUN: "1",
+      TRICHAT_RING_LEADER_EXECUTE_ENABLED: "0",
+      TRICHAT_RING_LEADER_INTERVAL_SECONDS: "600",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "1",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "1",
+    }),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    await waitForAutonomyStatus({
+      url: `http://127.0.0.1:${httpPort}/`,
+      origin: "http://127.0.0.1",
+      bearerToken,
+    });
+
+    const startedAt = Date.now();
+    const response = await postHttpJson(`http://127.0.0.1:${httpPort}/office/api/action`, {
+      action: "maintain",
+    }, {
+      Authorization: `Bearer ${bearerToken}`,
+      Origin: "http://127.0.0.1",
+      "Content-Type": "application/json",
+    });
+    const durationMs = Date.now() - startedAt;
+
+    assert.equal(response.statusCode, 202);
+    const payload = JSON.parse(response.body);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.action, "maintain");
+    assert.equal(typeof payload.started_at, "string");
+    assert.ok(durationMs < 10_000, `expected maintain action to return without long blocking, got ${durationMs}ms`);
+
+    const health = JSON.parse(await fetchHttpText(`http://127.0.0.1:${httpPort}/health`));
+    assert.equal(health.ok, true);
+    assert.equal(health.status, "ok");
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", () => resolve()));
+    await ollama.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("/ready reflects recent critical observability documents instead of reporting stale green state", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-http-ready-observability-"));
   const dbPath = path.join(tempDir, "hub.sqlite");
@@ -640,6 +704,40 @@ function fetchHttpResponse(url, headers = {}) {
         });
       });
     }).on("error", reject);
+  });
+}
+
+function postHttpJson(url, body, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const parsed = new URL(url);
+    const request = http.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: parsed.pathname + parsed.search,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          ...headers,
+        },
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => {
+          resolve({
+            statusCode: response.statusCode ?? 500,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      }
+    );
+    request.on("error", reject);
+    request.write(payload);
+    request.end();
   });
 }
 

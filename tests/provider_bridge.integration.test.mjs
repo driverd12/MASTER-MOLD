@@ -336,7 +336,92 @@ test("provider.bridge diagnose treats Copilot as disconnected from recent auth l
     assert.equal(copilot.status, "disconnected");
     assert.equal(copilot.connected, false);
     assert.match(copilot.detail, /no authenticated session/i);
-    assert.match(copilot.command, /stateful log heartbeat/i);
+    assert.match(copilot.command, /stateful config \+ recent log heartbeat/i);
+  } finally {
+    await session.client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("provider.bridge diagnose treats Copilot as connected from config metadata and ignores older stale auth logs", { concurrency: false }, async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-provider-bridge-copilot-config-diagnose-"));
+  const homeDir = path.join(tempDir, "home");
+  const binDir = path.join(tempDir, "bin");
+  fs.mkdirSync(homeDir, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, "copilot"), "#!/bin/sh\nsleep 30\n", { mode: 0o755 });
+  fs.chmodSync(path.join(binDir, "copilot"), 0o755);
+
+  const copilotDir = path.join(homeDir, ".copilot");
+  const logsDir = path.join(copilotDir, "logs");
+  fs.mkdirSync(logsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(copilotDir, "mcp-config.json"),
+    JSON.stringify(
+      {
+        mcpServers: {
+          mcplayground: {
+            type: "http",
+            url: "http://127.0.0.1:8787/",
+          },
+        },
+      },
+      null,
+      2
+    )
+  );
+  fs.writeFileSync(
+    path.join(logsDir, "process-stale.log"),
+    "2026-04-01T18:04:19.666Z [ERROR] No authentication information found.\n",
+    "utf8"
+  );
+  const staleLogPath = path.join(logsDir, "process-stale.log");
+  const older = new Date("2026-04-01T18:04:19.666Z");
+  fs.utimesSync(staleLogPath, older, older);
+  fs.writeFileSync(
+    path.join(copilotDir, "config.json"),
+    JSON.stringify(
+      {
+        last_logged_in_user: {
+          host: "https://github.com",
+          login: "kolonelpanik",
+        },
+        logged_in_users: [
+          {
+            host: "https://github.com",
+            login: "kolonelpanik",
+          },
+        ],
+      },
+      null,
+      2
+    )
+  );
+
+  const session = await openClient({
+    ANAMNESIS_HUB_DB_PATH: path.join(tempDir, "hub.sqlite"),
+    HOME: homeDir,
+    PATH: `${binDir}:${process.env.PATH || ""}`,
+    MCP_HTTP_BEARER_TOKEN: "provider-bridge-diagnose-token",
+    TRICHAT_MCP_URL: "http://127.0.0.1:8787/",
+    TRICHAT_MCP_ORIGIN: "http://127.0.0.1",
+  });
+
+  try {
+    const diagnose = await callTool(session.client, "provider.bridge", {
+      action: "diagnose",
+      clients: ["github-copilot-cli"],
+      probe_timeout_ms: 1000,
+      workspace_root: tempDir,
+    });
+    assert.equal(diagnose.ok, true);
+    assert.equal(diagnose.diagnostics.length, 1);
+    const copilot = diagnose.diagnostics[0];
+    assert.equal(copilot.client_id, "github-copilot-cli");
+    assert.equal(copilot.status, "connected");
+    assert.equal(copilot.connected, true);
+    assert.match(copilot.detail, /login metadata present/i);
+    assert.match(copilot.command, /stateful config \+ recent log heartbeat/i);
   } finally {
     await session.client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

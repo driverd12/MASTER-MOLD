@@ -42,6 +42,16 @@ type ReadySnapshotCacheEntry = {
   capturedAt: number;
 };
 
+type OfficeActionRuntimeState = {
+  action: string;
+  startedAt: string;
+  completedAt: string | null;
+  running: boolean;
+  code: number | null;
+  stdout: string;
+  stderr: string;
+};
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const officeStaticRoot = path.join(repoRoot, "web", "office");
 const officeDashboardScript = path.join(repoRoot, "scripts", "agent_office_dashboard.py");
@@ -50,6 +60,8 @@ const autonomyCtlScript = path.join(repoRoot, "scripts", "autonomy_ctl.sh");
 const officeTmuxScript = path.join(repoRoot, "scripts", "agent_office_tmux.sh");
 const officeTmuxOpenScript = path.join(repoRoot, "scripts", "agent_office_tmux_open.sh");
 const officeSnapshotInflight = new Map<string, Promise<OfficeSnapshotCommandResult>>();
+const officeActionInflight = new Map<string, Promise<void>>();
+const officeActionStatus = new Map<string, OfficeActionRuntimeState>();
 let lastReadySnapshotCache: ReadySnapshotCacheEntry | null = null;
 
 function readySnapshotTimeoutMs() {
@@ -520,6 +532,106 @@ function runLocalCommand(
   });
 }
 
+function runOfficeActionInBackground(
+  action: string,
+  command: string,
+  args: string[],
+  options?: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }
+) {
+  const existing = officeActionInflight.get(action);
+  if (existing) {
+    const state = officeActionStatus.get(action) ?? {
+      action,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      running: true,
+      code: null,
+      stdout: "",
+      stderr: "",
+    };
+    officeActionStatus.set(action, state);
+    return {
+      accepted: true,
+      alreadyRunning: true,
+      state,
+    };
+  }
+
+  const startedAt = new Date().toISOString();
+  const state: OfficeActionRuntimeState = {
+    action,
+    startedAt,
+    completedAt: null,
+    running: true,
+    code: null,
+    stdout: "",
+    stderr: "",
+  };
+  officeActionStatus.set(action, state);
+
+  const task = Promise.resolve()
+    .then(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        })
+    )
+    .then(() => runLocalCommand(command, args, options))
+    .then((result) => {
+      const completedAt = new Date().toISOString();
+      const nextState: OfficeActionRuntimeState = {
+        action,
+        startedAt,
+        completedAt,
+        running: false,
+        code: result.code,
+        stdout: result.stdout.trim(),
+        stderr: result.stderr.trim(),
+      };
+      officeActionStatus.set(action, nextState);
+      logEvent("office.action.complete", {
+        action,
+        code: result.code,
+        started_at: startedAt,
+        completed_at: completedAt,
+        stderr: nextState.stderr || undefined,
+      });
+    })
+    .catch((error) => {
+      const completedAt = new Date().toISOString();
+      const nextState: OfficeActionRuntimeState = {
+        action,
+        startedAt,
+        completedAt,
+        running: false,
+        code: -1,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error),
+      };
+      officeActionStatus.set(action, nextState);
+      logEvent("office.action.failed", {
+        action,
+        started_at: startedAt,
+        completed_at: completedAt,
+        error: nextState.stderr,
+      });
+    })
+    .finally(() => {
+      officeActionInflight.delete(action);
+    });
+
+  officeActionInflight.set(action, task);
+  logEvent("office.action.start", {
+    action,
+    started_at: startedAt,
+  });
+  return {
+    accepted: true,
+    alreadyRunning: false,
+    state,
+  };
+}
+
 async function serveOfficeStatic(res: http.ServerResponse, requestPath: string) {
   const relativePath = requestPath === "/office/" ? "index.html" : requestPath.replace(/^\/office\//, "");
   const resolvedPath = path.resolve(officeStaticRoot, relativePath);
@@ -744,17 +856,35 @@ async function maybeHandleOfficeRequest(
     }
     let result: { stdout: string; stderr: string; code: number };
     if (action === "ensure") {
-      result = await runLocalCommand(autonomyCtlScript, ["ensure"], {
+      const started = runOfficeActionInBackground(action, autonomyCtlScript, ["ensure"], {
         cwd: repoRoot,
         env: officeEnv(origin),
         timeoutMs: 60000,
       });
+      sendJson(res, 202, {
+        ok: true,
+        action,
+        accepted: started.accepted,
+        already_running: started.alreadyRunning,
+        status: started.alreadyRunning ? "already_running" : "started",
+        started_at: started.state.startedAt,
+      });
+      return true;
     } else if (action === "maintain") {
-      result = await runLocalCommand(autonomyCtlScript, ["maintain"], {
+      const started = runOfficeActionInBackground(action, autonomyCtlScript, ["maintain"], {
         cwd: repoRoot,
         env: officeEnv(origin),
         timeoutMs: 60000,
       });
+      sendJson(res, 202, {
+        ok: true,
+        action,
+        accepted: started.accepted,
+        already_running: started.alreadyRunning,
+        status: started.alreadyRunning ? "already_running" : "started",
+        started_at: started.state.startedAt,
+      });
+      return true;
     } else if (action === "tmux_detach") {
       result = await runLocalCommand(officeTmuxScript, ["--detach"], {
         cwd: repoRoot,

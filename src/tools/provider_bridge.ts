@@ -988,6 +988,63 @@ function readGeminiOauthState() {
   }
 }
 
+function readCopilotAuthState() {
+  const filePath = path.join(resolveProviderHome(), ".copilot", "config.json");
+  if (!fs.existsSync(filePath)) {
+    return {
+      available: false,
+      connected: false,
+      detail: "Copilot CLI auth metadata is missing.",
+      file_path: filePath,
+      mtime_ms: 0,
+      login: null as string | null,
+    };
+  }
+  try {
+    const stats = fs.statSync(filePath);
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    const lastLoggedInUser =
+      parsed.last_logged_in_user && typeof parsed.last_logged_in_user === "object"
+        ? (parsed.last_logged_in_user as Record<string, unknown>)
+        : {};
+    const loggedInUsers = Array.isArray(parsed.logged_in_users)
+      ? parsed.logged_in_users.filter((entry) => entry && typeof entry === "object")
+      : [];
+    const lastLogin = String(lastLoggedInUser.login ?? "").trim();
+    const fallbackLogin = loggedInUsers
+      .map((entry) => String((entry as Record<string, unknown>).login ?? "").trim())
+      .find(Boolean);
+    const login = lastLogin || fallbackLogin || null;
+    if (login) {
+      return {
+        available: true,
+        connected: true,
+        detail: `Copilot CLI login metadata present for ${login}.`,
+        file_path: filePath,
+        mtime_ms: stats.mtimeMs,
+        login,
+      };
+    }
+    return {
+      available: true,
+      connected: false,
+      detail: "Copilot CLI config is present, but no logged-in user metadata is recorded.",
+      file_path: filePath,
+      mtime_ms: stats.mtimeMs,
+      login: null as string | null,
+    };
+  } catch {
+    return {
+      available: true,
+      connected: false,
+      detail: "Copilot CLI auth metadata file is unreadable.",
+      file_path: filePath,
+      mtime_ms: 0,
+      login: null as string | null,
+    };
+  }
+}
+
 function readRecentFileTail(filePath: string, maxBytes = 4096) {
   try {
     const stats = fs.statSync(filePath);
@@ -1009,7 +1066,7 @@ function readRecentFileTail(filePath: string, maxBytes = 4096) {
   }
 }
 
-function inspectRecentCopilotAuthLogs() {
+function inspectRecentCopilotAuthLogs(options: { newerThanMs?: number } = {}) {
   const logsDir = path.join(resolveProviderHome(), ".copilot", "logs");
   if (!fs.existsSync(logsDir)) {
     return null;
@@ -1027,6 +1084,9 @@ function inspectRecentCopilotAuthLogs() {
   const recencyCutoff = Date.now() - 1000 * 60 * 60 * 24;
   for (const entry of candidates) {
     if (entry.stats.mtimeMs < recencyCutoff) {
+      continue;
+    }
+    if (typeof options.newerThanMs === "number" && Number.isFinite(options.newerThanMs) && entry.stats.mtimeMs <= options.newerThanMs) {
       continue;
     }
     const tail = readRecentFileTail(entry.filePath, 8192);
@@ -1219,7 +1279,25 @@ function runProviderDiagnostics(
           config_path: status.config_path,
         } satisfies ProviderBridgeDiagnostic;
       }
-      const copilotLogState = inspectRecentCopilotAuthLogs();
+      const copilotAuthState = readCopilotAuthState();
+      const copilotLogState = inspectRecentCopilotAuthLogs({
+        newerThanMs: copilotAuthState.connected ? copilotAuthState.mtime_ms : undefined,
+      });
+      if (copilotAuthState.connected && !copilotLogState) {
+        return {
+          client_id: status.client_id,
+          display_name: status.display_name,
+          office_agent_id: status.office_agent_id,
+          available: true,
+          runtime_probed: true,
+          connected: true,
+          status: "connected",
+          detail: copilotAuthState.detail,
+          notes: status.notes,
+          command: "stateful config + recent log heartbeat",
+          config_path: status.config_path,
+        } satisfies ProviderBridgeDiagnostic;
+      }
       if (copilotLogState) {
         return {
           client_id: status.client_id,
@@ -1231,7 +1309,7 @@ function runProviderDiagnostics(
           status: copilotLogState.status,
           detail: `${copilotLogState.detail} (${copilotLogState.source})`,
           notes: status.notes,
-          command: "stateful log heartbeat",
+          command: "stateful config + recent log heartbeat",
           config_path: status.config_path,
         } satisfies ProviderBridgeDiagnostic;
       }

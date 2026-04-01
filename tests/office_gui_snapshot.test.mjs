@@ -73,8 +73,9 @@ test("office gui snapshot reflects provider heartbeat states and self-drive summ
 
   const agents = new Map(snapshot.agents.map((entry) => [entry.agent.agent_id, entry]));
   assert.equal(agents.get("gemini")?.evidence_source, "provider_bridge");
-  assert.equal(agents.get("gemini")?.state, "idle");
-  assert.equal(agents.get("cursor")?.state, "idle");
+  assert.equal(agents.get("gemini")?.state, "ready");
+  assert.equal(agents.get("gemini")?.location, "ops");
+  assert.equal(agents.get("cursor")?.state, "ready");
   assert.equal(agents.get("github-copilot")?.state, "blocked");
   assert.equal(snapshot.summary.provider_bridge.connected_count, 2);
   assert.equal(snapshot.summary.maintain.self_drive_enabled, true);

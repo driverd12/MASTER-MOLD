@@ -209,10 +209,10 @@ function buildProviderSignals(raw: Record<string, unknown>) {
       | null = null;
     if (status === "connected") {
       signal = {
-        state: "idle",
+        state: "ready",
         activity: `${displayName} bridge connected`,
         detail,
-        location: "desk",
+        location: "ops",
       };
     } else if (status === "configured") {
       signal = {
