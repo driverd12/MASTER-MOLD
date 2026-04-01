@@ -391,6 +391,8 @@ function inferTaskKindsForBridgeAgent(agentId: string | null) {
       return ["planning", "coding", "verification", "tool_use"];
     case "cursor":
       return ["coding", "verification", "tool_use"];
+    case "github-copilot":
+      return ["coding", "verification", "tool_use"];
     case "gemini":
       return ["research", "planning", "chat"];
     default:
@@ -408,6 +410,10 @@ function inferTagsForBridgeAgent(agentId: string | null, clientId: ProviderBridg
   } else if (agentId === "cursor") {
     tags.add("coding");
     tags.add("implementer");
+  } else if (agentId === "github-copilot") {
+    tags.add("coding");
+    tags.add("implementer");
+    tags.add("github");
   } else if (agentId === "gemini") {
     tags.add("frontier");
     tags.add("research");
@@ -702,7 +708,7 @@ function buildClientStatuses(
     codex: "codex",
     cursor: "cursor",
     "gemini-cli": "gemini",
-    "github-copilot-cli": null,
+    "github-copilot-cli": "github-copilot",
     "github-copilot-vscode": null,
     "chatgpt-developer-mode": null,
   };
@@ -728,7 +734,8 @@ function buildClientStatuses(
     "github-copilot-cli": [
       "Inbound MCP config is exportable/installable through ~/.copilot/mcp-config.json.",
       "The current official CLI installs as `copilot`; older `gh copilot` extension installs are still detected.",
-      "There is no truthful local outbound council bridge for Copilot in this repo yet.",
+      "Outbound council consultation is available through bridges/copilot_bridge.py.",
+      "The outbound bridge disables MCP servers for the council prompt path because Copilot rejects the full local tool catalog shape.",
     ],
     "github-copilot-vscode": [
       "Workspace-level VS Code/Copilot Agent mode config is exportable as .vscode/mcp.json.",
@@ -795,9 +802,9 @@ function buildClientStatuses(
       supported_transports: ["http", "stdio"],
       preferred_transport: transport.mode,
       inbound_mcp_supported: true,
-      outbound_council_supported: false,
-      outbound_agent_id: null,
-      outbound_bridge_ready: false,
+      outbound_council_supported: true,
+      outbound_agent_id: rosterAgentIds["github-copilot-cli"],
+      outbound_bridge_ready: resolveOutboundBridgeReady(rosterAgentIds["github-copilot-cli"]),
       requires_internet_for_model: true,
       notes: notes["github-copilot-cli"],
     },

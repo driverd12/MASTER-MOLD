@@ -99,6 +99,8 @@ const fallbackConfig: TriChatRosterConfig = {
       role_lane: "implementer",
       coordination_tier: "support",
       accent_color: "#7aa2f7",
+      bridge_env_var: "TRICHAT_GITHUB_COPILOT_CMD",
+      bridge_script_names: ["copilot_bridge.py"],
       description: "Hosted implementation support lane for GitHub-native coding assistance and MCP-connected editing flows.",
       supports_local_model_fallback: true,
       system_prompt:

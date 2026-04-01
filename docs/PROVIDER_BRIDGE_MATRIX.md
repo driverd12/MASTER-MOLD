@@ -38,7 +38,7 @@ Override with explicit `trichat_agent_ids` only when you intentionally want a di
 | Codex | Yes | Yes | Yes for MCP, no for frontier model inference | Inbound via Codex MCP config; outward via `bridges/codex_bridge.py` |
 | Cursor | Yes | Yes | Yes for MCP, no for cloud model inference | Inbound via both `~/.cursor/mcp.json` and workspace-local `.cursor/mcp.json`; outward via `bridges/cursor_bridge.py` |
 | Gemini CLI | Yes | Yes | Yes for MCP transport, no for Gemini model inference | Inbound via `~/.gemini/settings.json`; standalone `gemini` CLI binary; defaults to `stdio` for MCP reliability; outward via `bridges/gemini_bridge.py` |
-| GitHub Copilot CLI | Yes | No | Yes for MCP transport, no for Copilot model inference | Inbound via `~/.copilot/mcp-config.json`; current official standalone CLI is `copilot`; no truthful outbound council bridge in this repo yet |
+| GitHub Copilot CLI | Yes | Yes | Yes for MCP transport, no for Copilot model inference | Inbound via `~/.copilot/mcp-config.json`; current official standalone CLI is `copilot`; outbound council consultation is available through `bridges/copilot_bridge.py`, with MCP servers disabled on the Copilot council prompt path because the CLI rejects the full local tool catalog shape |
 | GitHub Copilot Agent Mode / VS Code | Exportable | No | Yes for MCP transport, no for Copilot model inference | Export workspace `.vscode/mcp.json`; keep this honest as an editor-client integration |
 | ChatGPT Developer Mode | Remote-only | No | No | Requires a remote MCP server path and internet connectivity; export manifest only |
 

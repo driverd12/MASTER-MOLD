@@ -300,6 +300,7 @@ class WrapperDryRunTests(unittest.TestCase):
             "codex_bridge.py",
             "cursor_bridge.py",
             "gemini_bridge.py",
+            "copilot_bridge.py",
             "claude_bridge.py",
             "local_imprint_bridge.py",
         ]
@@ -347,6 +348,7 @@ class WrapperDryRunTests(unittest.TestCase):
             "codex_bridge.py",
             "cursor_bridge.py",
             "gemini_bridge.py",
+            "copilot_bridge.py",
             "claude_bridge.py",
             "local_imprint_bridge.py",
         ]

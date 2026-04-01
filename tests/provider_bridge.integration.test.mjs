@@ -39,7 +39,8 @@ test("provider.bridge reports truthful client and outbound council coverage", { 
     assert.equal(clients.get("cursor")?.outbound_council_supported, true);
     assert.equal(clients.get("cursor")?.outbound_bridge_ready, true);
     assert.equal(clients.get("gemini-cli")?.outbound_council_supported, true);
-    assert.equal(clients.get("github-copilot-cli")?.outbound_council_supported, false);
+    assert.equal(clients.get("github-copilot-cli")?.outbound_council_supported, true);
+    assert.equal(clients.get("github-copilot-cli")?.outbound_bridge_ready, true);
     assert.equal(clients.get("chatgpt-developer-mode")?.install_mode, "remote-only");
 
     const routerCandidates = new Map(status.router_backend_candidates.map((entry) => [entry.client_id, entry]));
