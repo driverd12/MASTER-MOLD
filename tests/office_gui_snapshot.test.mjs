@@ -142,6 +142,193 @@ test("office gui snapshot surfaces control-plane rollup signals", () => {
   assert.equal(snapshot.summary.control_plane.disabled_feature_flags, 2);
 });
 
+test("office gui snapshot exposes live autopilot execution posture and council state", () => {
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        active_agent_ids: ["ring-leader", "implementation-director", "research-director", "verification-director"],
+        agents: [
+          { agent_id: "ring-leader", display_name: "Ring Leader", coordination_tier: "lead", role_lane: "orchestrator" },
+          {
+            agent_id: "implementation-director",
+            display_name: "Implementation Director",
+            coordination_tier: "director",
+            role_lane: "implementer",
+          },
+          {
+            agent_id: "research-director",
+            display_name: "Research Director",
+            coordination_tier: "director",
+            role_lane: "analyst",
+          },
+          {
+            agent_id: "verification-director",
+            display_name: "Verification Director",
+            coordination_tier: "director",
+            role_lane: "verifier",
+          },
+        ],
+      },
+      workboard: {
+        latest_turn: {
+          turn_id: "turn-exec",
+          updated_at: new Date().toISOString(),
+          selected_agent: "implementation-director",
+          selected_strategy: "Dispatch a bounded execution slice",
+        },
+      },
+      tmux: {},
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: {
+        sessions: [
+          {
+            session_id: "trichat-autopilot:ring-leader-main",
+            agent_id: "ring-leader",
+            client_kind: "trichat-autopilot",
+            status: "busy",
+            metadata: {
+              thread_id: "ring-leader-main",
+              current_task_id: "task-exec",
+              last_execution_mode: "tmux_dispatch",
+            },
+          },
+        ],
+      },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {
+        state: {
+          running: true,
+          local_running: true,
+          in_tick: false,
+          config: {
+            execute_enabled: true,
+            execute_backend: "tmux",
+            objective: "Ship bounded execution through the MCP runtime",
+          },
+          effective_agent_pool: {
+            lead_agent_id: "ring-leader",
+            specialist_agent_ids: ["implementation-director", "research-director", "verification-director"],
+            council_agent_ids: ["ring-leader", "implementation-director", "research-director", "verification-director"],
+          },
+          last_tick: {
+            ok: true,
+            success_agents: 4,
+            execution: {
+              mode: "tmux_dispatch",
+              task_ids: ["task-exec"],
+            },
+          },
+        },
+      },
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: {
+        state: {},
+        runtime: {},
+        due: {},
+      },
+      provider_bridge: {
+        diagnostics: {
+          generated_at: "2026-04-01T17:00:00.000Z",
+          cached: true,
+          diagnostics: [],
+        },
+      },
+    },
+    { theme: "dark" }
+  );
+
+  assert.equal(snapshot.summary.autopilot.running, true);
+  assert.equal(snapshot.summary.autopilot.execute_enabled, true);
+  assert.equal(snapshot.summary.autopilot.last_execution_mode, "tmux_dispatch");
+  assert.equal(snapshot.summary.autopilot.council_agent_count, 4);
+  assert.equal(snapshot.current.execution_mode, "tmux_dispatch");
+  assert.equal(snapshot.current.execute_enabled, true);
+  assert.deepEqual(snapshot.current.council_agent_ids, [
+    "ring-leader",
+    "implementation-director",
+    "research-director",
+    "verification-director",
+  ]);
+});
+
+test("office gui snapshot keeps active roster agents desk-ready when they are armed but idle", () => {
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        active_agent_ids: ["research-director"],
+        agents: [
+          {
+            agent_id: "research-director",
+            display_name: "Research Director",
+            coordination_tier: "director",
+            role_lane: "analyst",
+          },
+        ],
+      },
+      workboard: {},
+      tmux: {},
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: { sessions: [] },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {},
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: {
+        state: {},
+        runtime: {},
+        due: {},
+      },
+      provider_bridge: {
+        diagnostics: {
+          generated_at: "2026-04-01T17:00:00.000Z",
+          cached: true,
+          diagnostics: [],
+        },
+      },
+    },
+    { theme: "dark" }
+  );
+
+  const agent = snapshot.agents[0];
+  assert.equal(agent.agent.agent_id, "research-director");
+  assert.equal(agent.state, "ready");
+  assert.equal(agent.location, "desk");
+  assert.equal(agent.activity, "armed for the next bounded task");
+  assert.equal(agent.evidence_source, "roster");
+  assert.equal(agent.evidence_detail, "active-agent-pool");
+});
+
 test("office gui snapshot prefers a connected Copilot bridge over an unavailable export-only Copilot entry", () => {
   const snapshot = buildOfficeGuiSnapshot(
     {
@@ -463,6 +650,7 @@ test("office gui snapshot ignores stale provider diagnostics before marking agen
 
   const copilot = snapshot.agents.find((entry) => entry.agent.agent_id === "github-copilot");
   assert.ok(copilot);
-  assert.equal(copilot.state, "sleeping");
+  assert.equal(copilot.state, "ready");
+  assert.equal(copilot.evidence_source, "roster");
   assert.notEqual(copilot.evidence_source, "provider_bridge");
 });

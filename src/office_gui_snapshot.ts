@@ -524,11 +524,11 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
       evidenceSource = "task";
       evidenceDetail = owner.detail;
     } else if (agent.active) {
-      state = "sleeping";
-      location = "sofa";
-      activity = "saving energy until the next bounded task";
-      evidenceSource = "none";
-      evidenceDetail = "active-but-idle";
+      state = "ready";
+      location = "desk";
+      activity = "armed for the next bounded task";
+      evidenceSource = "roster";
+      evidenceDetail = "active-agent-pool";
     } else {
       state = "offline";
       location = "ops";
@@ -607,6 +607,14 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
     String(autopilotSessionMetadata.last_claimed_task_id ?? "").trim() ||
     String(autopilotSessionMetadata.last_execution_task_id ?? "").trim();
   const currentTask = asDict(taskIndex.get(currentTaskId));
+  const autopilotConfig = asDict(autopilotState.config);
+  const autopilotPool = asDict(autopilotState.effective_agent_pool);
+  const autopilotExecution = asDict(lastTick.execution);
+  const autopilotCouncilAgentIds = dedupe([
+    autopilotPool.lead_agent_id,
+    ...asList(autopilotPool.council_agent_ids),
+  ]);
+  const autopilotSpecialistAgentIds = dedupe(asList(autopilotPool.specialist_agent_ids));
 
   return {
     thread_id: threadId,
@@ -723,6 +731,25 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
         self_drive_last_goal_id: String(maintainSelfDrive.last_goal_id ?? ""),
         subsystems: asDict(maintain.subsystems),
       },
+      autopilot: {
+        running: Boolean(autopilotState.running),
+        local_running: Boolean(autopilotState.local_running),
+        in_tick: Boolean(autopilotState.in_tick),
+        execute_enabled: Boolean(autopilotConfig.execute_enabled),
+        execute_backend: String(autopilotConfig.execute_backend ?? "n/a"),
+        objective: compactSingleLine(String(autopilotConfig.objective ?? ""), 180),
+        last_execution_mode: String(autopilotExecution.mode ?? autopilotSessionMetadata.last_execution_mode ?? "none"),
+        last_tick_ok:
+          typeof autopilotState.last_tick === "object" && autopilotState.last_tick !== null
+            ? Boolean(lastTick.ok)
+            : null,
+        last_tick_reason: compactSingleLine(String(lastTick.reason ?? autopilotSessionMetadata.last_tick_reason ?? ""), 160),
+        success_agents: parseAnyInt(lastTick.success_agents),
+        council_agent_ids: autopilotCouncilAgentIds,
+        council_agent_count: autopilotCouncilAgentIds.length,
+        specialist_agent_ids: autopilotSpecialistAgentIds,
+        specialist_agent_count: autopilotSpecialistAgentIds.length,
+      },
       swarm: {
         active_profile_count: parseAnyInt(asDict(kernel.swarm).active_profile_count),
         checkpoint_artifact_count: parseAnyInt(asDict(kernel.swarm).checkpoint_artifact_count),
@@ -768,6 +795,10 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
         ...asList(asDict(lastTick.execution).task_ids),
         ...asList(autopilotSessionMetadata.last_execution_task_ids),
       ]),
+      execution_mode: String(autopilotExecution.mode ?? autopilotSessionMetadata.last_execution_mode ?? "none"),
+      execute_enabled: Boolean(autopilotConfig.execute_enabled),
+      council_agent_ids: autopilotCouncilAgentIds,
+      specialist_agent_ids: autopilotSpecialistAgentIds,
       confidence_method: asDict(lastTick.confidence_method || autopilotSessionMetadata.last_confidence_method),
       learning_signal: asDict(lastTick.learning_signal || autopilotSessionMetadata.last_learning_signal),
       last_tick: lastTick,

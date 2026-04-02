@@ -20,6 +20,10 @@ health_ok() {
   curl -fsS --max-time 3 "${TRICHAT_HTTP_URL%/}/health" >/dev/null 2>&1
 }
 
+listener_ok() {
+  lsof -nP -iTCP:"${MCP_PORT}" -sTCP:LISTEN >/dev/null 2>&1
+}
+
 ready_ok() {
   [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]] || return 1
   curl -fsS --max-time 8 \
@@ -44,13 +48,13 @@ stop_tmux_fallback() {
 
 ensure_http() {
   local attempt
-  if health_ok && ready_ok; then
+  if ready_ok; then
     return 0
   fi
 
   start_via_launchd
   for attempt in 1 2 3 4 5 6; do
-    if health_ok && ready_ok; then
+    if ready_ok; then
       stop_tmux_fallback
       return 0
     fi
@@ -59,7 +63,7 @@ ensure_http() {
 
   start_via_tmux_fallback
   for attempt in 1 2 3 4 5 6; do
-    if health_ok && ready_ok; then
+    if ready_ok; then
       return 0
     fi
     sleep 2
@@ -68,17 +72,46 @@ ensure_http() {
 }
 
 print_status() {
+  local health="false"
+  local listener="false"
+  local ready="false"
   local mode="down"
-  if health_ok && ready_ok; then
+  if health_ok; then
+    health="true"
+  fi
+  if listener_ok; then
+    listener="true"
+  fi
+  if ready_ok; then
+    ready="true"
+  fi
+  if [[ "${ready}" == "true" ]]; then
     if tmux has-session -t "${FALLBACK_SESSION}" >/dev/null 2>&1; then
       mode="tmux"
     else
       mode="launchd"
     fi
+  elif [[ "${health}" == "true" ]]; then
+    mode="warming"
+  elif [[ "${listener}" == "true" ]]; then
+    mode="busy"
   fi
-  node --input-type=module - <<'NODE' "${GUI_URL}" "${mode}"
-const [url, mode] = process.argv.slice(2);
-process.stdout.write(`${JSON.stringify({ ok: mode !== "down", mode, url }, null, 2)}\n`);
+  node --input-type=module - <<'NODE' "${GUI_URL}" "${mode}" "${health}" "${listener}" "${ready}"
+const [url, mode, health, listener, ready] = process.argv.slice(2);
+process.stdout.write(
+  `${JSON.stringify(
+    {
+      ok: ready === "true" || listener === "true",
+      mode,
+      health: health === "true",
+      listener: listener === "true",
+      ready: ready === "true",
+      url,
+    },
+    null,
+    2
+  )}\n`
+);
 NODE
 }
 

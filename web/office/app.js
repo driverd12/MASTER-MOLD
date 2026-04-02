@@ -149,6 +149,7 @@
     var liveBackend = router.live_backend || {};
     var runtimeWorkers = summary.runtime_workers || {};
     var maintain = summary.maintain || {};
+    var autopilot = summary.autopilot || {};
     var providers = summary.provider_bridge || {};
     var chips = [];
     if (state.snapshot.errors && state.snapshot.errors.length) {
@@ -159,6 +160,7 @@
       ["Tasks", "run " + String(tasks.running || 0) + " | queue " + String(tasks.pending || 0) + " | fail " + String(tasks.failed || 0)],
       ["Host", "cpu " + Math.round((host.cpu_utilization || 0) * 100) + "% | ram " + fmt(host.ram_available_gb) + " / " + fmt(host.ram_total_gb) + " GB | swap " + fmt(host.swap_used_gb) + " GB"],
       ["Router", String(router.default_backend_id || "n/a") + " | " + (liveBackend.probe_model_loaded ? "warm" : "cold") + " | " + fmt(liveBackend.latency_ms_p50, 0) + " ms"],
+      ["Autopilot", (autopilot.running ? "running" : "idle") + " | exec " + (autopilot.execute_enabled ? "armed" : "advisory") + " | " + String(autopilot.last_execution_mode || "none")],
       ["Workers", "active " + String(runtimeWorkers.active_count || 0) + " | sessions " + String(runtimeWorkers.session_count || 0)],
       ["Maintain", (maintain.running ? "running" : "idle") + " | eval_due " + (maintain.eval_due ? "yes" : "no")],
       ["Providers", "connected " + String(providers.connected_count || 0) + " | disconnected " + String(providers.disconnected_count || 0)]
@@ -241,6 +243,7 @@
     var runtimeWorkers = summary.runtime_workers || {};
     var reactionEngine = summary.reaction_engine || {};
     var maintain = summary.maintain || {};
+    var autopilot = summary.autopilot || {};
     var swarm = summary.swarm || {};
     var workflowExports = summary.workflow_exports || {};
     var providers = summary.provider_bridge || {};
@@ -251,6 +254,8 @@
       '<section class="brief-card"><div class="section-title">Current Objective</div><pre>' + escapeHtml(current.current_objective || "No active objective.") + '</pre><div class="metric-list">' +
       '<div class="metric"><span>Spawn path</span><strong>' + escapeHtml(current.spawn_path || "n/a") + '</strong></div>' +
       '<div class="metric"><span>Selected agent</span><strong>' + escapeHtml(current.selected_agent || "n/a") + '</strong></div>' +
+      '<div class="metric"><span>Execution mode</span><strong>' + escapeHtml(current.execution_mode || "none") + '</strong></div>' +
+      '<div class="metric"><span>Council</span><strong>' + escapeHtml(((current.council_agent_ids || []).join(", ")) || "n/a") + '</strong></div>' +
       '<div class="metric"><span>Execution tasks</span><strong>' + escapeHtml(((current.execution_task_ids || []).join(", ")) || "n/a") + "</strong></div>" +
       "</div></section>" +
       '<section class="brief-card"><div class="section-title">Confidence</div><div class="metric-list">' +
@@ -263,6 +268,10 @@
       '<div class="metric"><span>Anti-echo</span><strong>' + fmt(checks.anti_echo, 2) + "</strong></div>" +
       "</div></section>" +
       '<section class="brief-card"><div class="section-title">Infrastructure</div><div class="metric-list">' +
+      '<div class="metric"><span>Autopilot</span><strong class="' + statusClass(autopilot.running) + '">' + (autopilot.running ? "running" : "idle") + '</strong></div>' +
+      '<div class="metric"><span>Execution posture</span><strong>' + (autopilot.execute_enabled ? "armed" : "advisory only") + '</strong></div>' +
+      '<div class="metric"><span>Council</span><strong>' + String(autopilot.council_agent_count || 0) + " agents</strong></div>" +
+      '<div class="metric"><span>Last execution</span><strong>' + escapeHtml(autopilot.last_execution_mode || "none") + '</strong></div>' +
       '<div class="metric"><span>tmux queue</span><strong>' + String(tmux.queue_depth || 0) + '</strong></div>' +
       '<div class="metric"><span>Runtime workers</span><strong>' + String(runtimeWorkers.active_count || 0) + " active / " + String(runtimeWorkers.session_count || 0) + ' total</strong></div>' +
       '<div class="metric"><span>Reaction engine</span><strong class="' + statusClass(reactionEngine.runtime_running) + '">' + (reactionEngine.runtime_running ? "running" : "down") + '</strong></div>' +

@@ -7376,7 +7376,7 @@ async function pauseAutopilotDaemon(storage: Storage, config: TriChatAutopilotCo
   closeAutopilotAgentSession(storage, config, reason);
 }
 
-function getAutopilotStatus(storage?: Storage) {
+export function getAutopilotStatus(storage?: Storage) {
   const persisted = storage ? storage.getTriChatAutopilotState() : null;
   const effectiveConfig = persisted ? resolveAutopilotConfig(persisted, autopilotRuntime.config) : autopilotRuntime.config;
   const effectiveAgentPool = resolveAutopilotAgentPool(storage, effectiveConfig, effectiveConfig.objective);

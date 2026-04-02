@@ -17,7 +17,7 @@ import { resolveProviderBridgeDiagnostics, resolveProviderBridgeSnapshot } from 
 import { getReactionEngineRuntimeStatus } from "./reaction_engine.js";
 import { summarizeLiveRuntimeWorkers } from "./runtime_worker.js";
 import { taskList, taskSummary } from "./task.js";
-import { trichatAdapterTelemetry, trichatSummary, trichatWorkboard } from "./trichat.js";
+import { getAutopilotStatus, trichatAdapterTelemetry, trichatSummary, trichatWorkboard } from "./trichat.js";
 import { readWarmCacheEntry } from "../warm_cache_runtime.js";
 
 const recordSchema = z.record(z.unknown());
@@ -220,12 +220,26 @@ function summarizeReactionEngineState(storage: Storage) {
 function buildRosterPayload(
   workboard: WorkboardPayload,
   agentSessions: AgentSessionListPayload,
-  learning: LearningPayload
+  learning: LearningPayload,
+  autopilot: Record<string, unknown>
 ) {
   const latestTurn = (workboard.active_turn as Record<string, unknown> | null) ?? (workboard.latest_turn as Record<string, unknown> | null) ?? {};
   const latestMetadata = (latestTurn.metadata as Record<string, unknown> | undefined) ?? {};
+  const autopilotState = asRecord(autopilot.state);
+  const autopilotConfig = asRecord(autopilotState.config);
+  const autopilotPool = asRecord(autopilotState.effective_agent_pool);
+  const autopilotSession = asRecord(asRecord(autopilotState.session).session);
+  const autopilotSessionMetadata = asRecord(autopilotSession.metadata);
   const defaultAgentIds = getTriChatConfiguredDefaultAgentIds();
   const activeAgentIds = dedupeAgentIds([
+    autopilotPool.lead_agent_id,
+    ...((Array.isArray(autopilotPool.specialist_agent_ids) ? autopilotPool.specialist_agent_ids : []) as unknown[]),
+    ...((Array.isArray(autopilotPool.council_agent_ids) ? autopilotPool.council_agent_ids : []) as unknown[]),
+    autopilotConfig.lead_agent_id,
+    ...((Array.isArray(autopilotConfig.specialist_agent_ids) ? autopilotConfig.specialist_agent_ids : []) as unknown[]),
+    autopilotSession.agent_id,
+    ...((Array.isArray(autopilotSessionMetadata.specialist_agent_ids) ? autopilotSessionMetadata.specialist_agent_ids : []) as unknown[]),
+    ...((Array.isArray(autopilotSessionMetadata.council_agent_ids) ? autopilotSessionMetadata.council_agent_ids : []) as unknown[]),
     latestMetadata.lead_agent_id,
     latestTurn.selected_agent,
     ...((Array.isArray(latestTurn.expected_agents) ? latestTurn.expected_agents : []) as unknown[]),
@@ -324,6 +338,9 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
         })
       )
     : {};
+  const autopilot = safe<Record<string, unknown>>("autopilot", {}, () => ({
+    state: getAutopilotStatus(storage),
+  }));
   const roster = safe("roster", {
     default_agent_ids: getTriChatConfiguredDefaultAgentIds(),
     active_agent_ids: [] as string[],
@@ -340,7 +357,7 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     })),
     source: "office.snapshot",
   }, () =>
-    buildRosterPayload(workboard, agentSessions, learning)
+    buildRosterPayload(workboard, agentSessions, learning, autopilot)
   );
   const tmuxState = safe("tmux", null, () => storage.getTriChatTmuxControllerState());
   const tmux = {
@@ -495,10 +512,6 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
         buildKernelPayload(storage, taskSummaryPayload, agentSessions)
       )
     : {};
-  const autopilot = safe("autopilot", {}, () => {
-    const state = storage.getTriChatAutopilotState();
-    return state ? { state } : {};
-  });
   const providerReadyAgentIds = providerBridge.diagnostics.diagnostics
     .filter((entry) => entry.status === "connected" || entry.status === "configured")
     .map((entry) => String(entry.office_agent_id || "").trim().toLowerCase())

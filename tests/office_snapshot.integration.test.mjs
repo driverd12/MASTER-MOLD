@@ -47,6 +47,24 @@ test("office.snapshot returns a storage-backed GUI payload without depending on 
       mutation: nextMutation("office-snapshot", "autonomy.maintain", () => mutationCounter++),
     });
 
+    await callTool(client, "trichat.autopilot", {
+      action: "start",
+      mutation: nextMutation("office-snapshot", "trichat.autopilot", () => mutationCounter++),
+      thread_id: "ring-leader-main",
+      thread_title: "Ring Leader Main Loop",
+      thread_status: "active",
+      objective: "Validate office snapshot autopilot visibility",
+      lead_agent_id: "ring-leader",
+      specialist_agent_ids: ["implementation-director", "research-director", "verification-director"],
+      execute_enabled: true,
+      execute_backend: "tmux",
+      bridge_dry_run: true,
+      max_rounds: 1,
+      min_success_agents: 1,
+      confidence_threshold: 0.1,
+      run_immediately: false,
+    });
+
     const snapshot = await callTool(client, "office.snapshot", {
       thread_id: "ring-leader-main",
     });
@@ -81,6 +99,16 @@ test("office.snapshot returns a storage-backed GUI payload without depending on 
     assert.equal(typeof snapshot.provider_bridge.snapshot.canonical_ingress_tool, "string");
     assert.ok(Array.isArray(snapshot.provider_bridge.diagnostics.diagnostics));
     assert.equal(snapshot.provider_bridge.diagnostics.cached, true);
+    assert.equal(snapshot.autopilot.state.running, true);
+    assert.equal(snapshot.autopilot.state.config.execute_enabled, true);
+    for (const agentId of ["implementation-director", "research-director", "verification-director"]) {
+      assert.ok(snapshot.autopilot.state.effective_agent_pool.specialist_agent_ids.includes(agentId));
+    }
+    assert.ok(snapshot.roster.active_agent_ids.includes("implementation-director"));
+    await callTool(client, "trichat.autopilot", {
+      action: "stop",
+      mutation: nextMutation("office-snapshot", "trichat.autopilot.stop", () => mutationCounter++),
+    });
     assert.equal(Array.isArray(snapshot.errors), true);
   } finally {
     await client.close().catch(() => {});
