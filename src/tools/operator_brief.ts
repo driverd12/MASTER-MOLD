@@ -374,9 +374,11 @@ function summarizeControlPlane(
   const warmCacheRecord: Record<string, unknown> = isRecord(kernel?.warm_cache) ? kernel!.warm_cache : {};
   const featureFlagsRecord: Record<string, unknown> = isRecord(kernel?.feature_flags) ? kernel!.feature_flags : {};
   const desktopControlRecord: Record<string, unknown> = isRecord(kernel?.desktop_control) ? kernel!.desktop_control : {};
+  const patientZeroRecord: Record<string, unknown> = isRecord(kernel?.patient_zero) ? kernel!.patient_zero : {};
   const desktopControlSummaryRecord: Record<string, unknown> = isRecord(desktopControlRecord.summary)
     ? desktopControlRecord.summary
     : {};
+  const patientZeroSummaryRecord: Record<string, unknown> = isRecord(patientZeroRecord.summary) ? patientZeroRecord.summary : {};
   const budgetLedger = {
     total_entries: Number(budgetLedgerRecord.total_entries ?? 0),
     projected_cost_usd: Number(budgetLedgerRecord.projected_cost_usd ?? 0),
@@ -406,6 +408,14 @@ function summarizeControlPlane(
       typeof desktopControlSummaryRecord.listen_ready === "boolean" ? desktopControlSummaryRecord.listen_ready : false,
     last_frontmost_app: readString(desktopControlSummaryRecord.last_frontmost_app),
   };
+  const patientZero = {
+    enabled: typeof patientZeroSummaryRecord.enabled === "boolean" ? patientZeroSummaryRecord.enabled : false,
+    posture: readString(patientZeroSummaryRecord.posture) ?? "standby",
+    permission_profile: readString(patientZeroSummaryRecord.permission_profile) ?? "high_risk",
+    browser_ready: typeof patientZeroSummaryRecord.browser_ready === "boolean" ? patientZeroSummaryRecord.browser_ready : false,
+    root_shell_enabled:
+      typeof patientZeroSummaryRecord.root_shell_enabled === "boolean" ? patientZeroSummaryRecord.root_shell_enabled : false,
+  };
   return {
     permission_profile: permission.resolved_profile_id,
     permission_chain: permission.chain,
@@ -413,6 +423,7 @@ function summarizeControlPlane(
     warm_cache: warmCache,
     feature_flags: featureFlags,
     desktop_control: desktopControl,
+    patient_zero: patientZero,
   };
 }
 
@@ -480,6 +491,7 @@ export function operatorBrief(storage: Storage, input: z.infer<typeof operatorBr
     `- warm_cache: ${controlPlaneSummary.warm_cache.enabled ? (controlPlaneSummary.warm_cache.stale ? "stale" : "warm") : "disabled"}`,
     `- disabled_feature_flags: ${controlPlaneSummary.feature_flags.disabled_count}/${controlPlaneSummary.feature_flags.total_count}`,
     `- desktop_control: ${controlPlaneSummary.desktop_control.enabled ? `enabled (eyes=${controlPlaneSummary.desktop_control.observe_ready ? "yes" : "no"}, hands=${controlPlaneSummary.desktop_control.act_ready ? "yes" : "no"}, ears=${controlPlaneSummary.desktop_control.listen_ready ? "yes" : "no"})` : "disabled"}`,
+    `- patient_zero: ${controlPlaneSummary.patient_zero.enabled ? `${controlPlaneSummary.patient_zero.posture} (profile=${controlPlaneSummary.patient_zero.permission_profile}, browser=${controlPlaneSummary.patient_zero.browser_ready ? "yes" : "no"}, root=${controlPlaneSummary.patient_zero.root_shell_enabled ? "yes" : "no"})` : "standby"}`,
     "",
     renderBulletSection("Success criteria", delegationBrief.success_criteria),
     "",

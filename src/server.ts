@@ -22,6 +22,7 @@ import {
   desktopObserve,
   desktopObserveSchema,
 } from "./tools/desktop_control.js";
+import { patientZeroControl, patientZeroSchema } from "./tools/patient_zero.js";
 import {
   agentClaimNext,
   agentClaimNextSchema,
@@ -3078,6 +3079,13 @@ registerTool(
   "Capture short microphone clips to a temp file through the local desktop control lane.",
   desktopListenSchema,
   (input) => desktopListen(storage, input)
+);
+
+registerTool(
+  "patient.zero",
+  "Arm or disarm an explicit high-risk local-control posture with operator-visible desktop access and audit reporting.",
+  patientZeroSchema,
+  (input) => patientZeroControl(storage, input)
 );
 
 registerTool(

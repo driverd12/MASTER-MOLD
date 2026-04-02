@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { summarizeDesktopControlState } from "../desktop_control_plane.js";
+import { summarizePatientZeroState } from "../patient_zero_plane.js";
 import {
   type AgentSessionRecord,
   type RuntimeWorkerSessionRecord,
@@ -20,6 +21,7 @@ import { summarizeLiveRuntimeWorkers } from "./runtime_worker.js";
 import { taskList, taskSummary } from "./task.js";
 import { getAutopilotStatus, trichatAdapterTelemetry, trichatSummary, trichatWorkboard } from "./trichat.js";
 import { readWarmCacheEntry } from "../warm_cache_runtime.js";
+import { buildPatientZeroReport } from "./patient_zero.js";
 
 const recordSchema = z.record(z.unknown());
 type TaskListPayload = ReturnType<typeof taskList>;
@@ -528,6 +530,12 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     state: desktopControlState,
     summary: summarizeDesktopControlState(desktopControlState),
   };
+  const patientZeroState = storage.getPatientZeroState();
+  const patientZero = {
+    state: patientZeroState,
+    summary: summarizePatientZeroState(patientZeroState, desktopControlState),
+    report: buildPatientZeroReport(storage),
+  };
 
   return {
     generated_at: new Date().toISOString(),
@@ -551,6 +559,7 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     operator_brief: operatorBriefPayload,
     provider_bridge: providerBridge,
     desktop_control: desktopControl,
+    patient_zero: patientZero,
     source: "office.snapshot",
   };
 }
@@ -566,6 +575,12 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
         state: liveDesktopControlState,
         summary: summarizeDesktopControlState(liveDesktopControlState),
       };
+      const livePatientZeroState = storage.getPatientZeroState();
+      const livePatientZero = {
+        state: livePatientZeroState,
+        summary: summarizePatientZeroState(livePatientZeroState, liveDesktopControlState),
+        report: buildPatientZeroReport(storage),
+      };
       const cachedPayload = cached.payload as Record<string, unknown>;
       const cachedKernel = asRecord(cachedPayload.kernel);
       return {
@@ -573,8 +588,10 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
         kernel: {
           ...cachedKernel,
           desktop_control: liveDesktopControl,
+          patient_zero: livePatientZero,
         },
         desktop_control: liveDesktopControl,
+        patient_zero: livePatientZero,
         cache: {
           hit: true,
           key: cached.key,

@@ -18,6 +18,11 @@ import {
   normalizeDesktopControlState,
   type DesktopControlStateRecord,
 } from "./desktop_control_plane.js";
+import {
+  getDefaultPatientZeroState,
+  normalizePatientZeroState,
+  type PatientZeroStateRecord,
+} from "./patient_zero_plane.js";
 
 const SQLITE_HEADER = Buffer.from("SQLite format 3\u0000", "utf8");
 
@@ -11381,6 +11386,98 @@ export class Storage {
           last_frontmost_window: normalized.last_frontmost_window,
           last_error: normalized.last_error,
           capability_probe: normalized.capability_probe,
+        }),
+        now
+      );
+    return {
+      ...normalized,
+      updated_at: now,
+      source: "persisted",
+    };
+  }
+
+  getPatientZeroState(): PatientZeroStateRecord {
+    const row = this.db
+      .prepare(
+        `SELECT enabled, config_json, updated_at
+         FROM daemon_configs
+         WHERE daemon_key = ?`
+      )
+      .get("patient.zero") as Record<string, unknown> | undefined;
+
+    if (!row) {
+      return getDefaultPatientZeroState();
+    }
+    return normalizePatientZeroState(
+      {
+        ...parseJsonObject(row.config_json),
+        enabled: Number(row.enabled ?? 0) === 1,
+      },
+      String(row.updated_at ?? "") || null
+    );
+  }
+
+  setPatientZeroState(params: {
+    enabled?: boolean;
+    autonomy_enabled?: boolean;
+    allow_observe?: boolean;
+    allow_act?: boolean;
+    allow_listen?: boolean;
+    browser_app?: string;
+    root_shell_reason?: string;
+    audit_required?: boolean;
+    armed_at?: string | null;
+    armed_by?: string | null;
+    disarmed_at?: string | null;
+    disarmed_by?: string | null;
+    last_operator_note?: string | null;
+  }): PatientZeroStateRecord {
+    const now = new Date().toISOString();
+    const existing = this.getPatientZeroState();
+    const normalized = normalizePatientZeroState(
+      {
+        enabled: params.enabled ?? existing.enabled,
+        autonomy_enabled: params.autonomy_enabled ?? existing.autonomy_enabled,
+        allow_observe: params.allow_observe ?? existing.allow_observe,
+        allow_act: params.allow_act ?? existing.allow_act,
+        allow_listen: params.allow_listen ?? existing.allow_listen,
+        browser_app: params.browser_app ?? existing.browser_app,
+        root_shell_reason: params.root_shell_reason ?? existing.root_shell_reason,
+        audit_required: params.audit_required ?? existing.audit_required,
+        armed_at: params.armed_at === undefined ? existing.armed_at : params.armed_at,
+        armed_by: params.armed_by === undefined ? existing.armed_by : params.armed_by,
+        disarmed_at: params.disarmed_at === undefined ? existing.disarmed_at : params.disarmed_at,
+        disarmed_by: params.disarmed_by === undefined ? existing.disarmed_by : params.disarmed_by,
+        last_operator_note:
+          params.last_operator_note === undefined ? existing.last_operator_note : params.last_operator_note,
+      },
+      now
+    );
+    this.db
+      .prepare(
+        `INSERT INTO daemon_configs (daemon_key, enabled, config_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(daemon_key) DO UPDATE SET
+           enabled = excluded.enabled,
+           config_json = excluded.config_json,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        "patient.zero",
+        normalized.enabled ? 1 : 0,
+        stableStringify({
+          autonomy_enabled: normalized.autonomy_enabled,
+          allow_observe: normalized.allow_observe,
+          allow_act: normalized.allow_act,
+          allow_listen: normalized.allow_listen,
+          browser_app: normalized.browser_app,
+          root_shell_reason: normalized.root_shell_reason,
+          audit_required: normalized.audit_required,
+          armed_at: normalized.armed_at,
+          armed_by: normalized.armed_by,
+          disarmed_at: normalized.disarmed_at,
+          disarmed_by: normalized.disarmed_by,
+          last_operator_note: normalized.last_operator_note,
         }),
         now
       );

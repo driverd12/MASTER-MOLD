@@ -59,6 +59,7 @@ const autonomyIngressScript = path.join(repoRoot, "scripts", "autonomy_ide_ingre
 const autonomyCtlScript = path.join(repoRoot, "scripts", "autonomy_ctl.sh");
 const officeTmuxScript = path.join(repoRoot, "scripts", "agent_office_tmux.sh");
 const officeTmuxOpenScript = path.join(repoRoot, "scripts", "agent_office_tmux_open.sh");
+const mcpToolCallScript = path.join(repoRoot, "scripts", "mcp_tool_call.mjs");
 const officeSnapshotInflight = new Map<string, Promise<OfficeSnapshotCommandResult>>();
 const officeNodeSnapshotInflight = new Map<string, Promise<{ body: string; parsed: OfficeSnapshotPayload | null }>>();
 const officeRawSnapshotInflight = new Map<string, Promise<string>>();
@@ -311,6 +312,22 @@ function parseOfficeSnapshotPayload(raw: string): OfficeSnapshotPayload | null {
   } catch {
     return null;
   }
+}
+
+function parseJsonText(raw: string) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function buildOfficeMutation(action: string) {
+  const token = `office-api-${action}-${Date.now()}-${randomUUID()}`;
+  return {
+    idempotency_key: token,
+    side_effect_fingerprint: token,
+  };
 }
 
 function writeOfficeSnapshotCache(payload: unknown) {
@@ -1059,14 +1076,48 @@ async function maybeHandleOfficeRequest(
         env: officeEnv(origin),
         timeoutMs: 60000,
       });
+    } else if (action === "patient_zero_enable" || action === "patient_zero_disable") {
+      const patientZeroAction = action === "patient_zero_enable" ? "enable" : "disable";
+      const toolArgs = {
+        action: patientZeroAction,
+        mutation: buildOfficeMutation(`patient-zero-${patientZeroAction}`),
+        operator_note: String(body.operator_note || "").trim() || undefined,
+        source_client: "office.api",
+        source_agent: "operator",
+      };
+      result = await runLocalCommand(
+        process.execPath,
+        [
+          mcpToolCallScript,
+          "--tool",
+          "patient.zero",
+          "--args",
+          JSON.stringify(toolArgs),
+          "--transport",
+          "http",
+          "--url",
+          `${origin}/`,
+          "--origin",
+          normalizedOfficeOrigin(origin),
+          "--cwd",
+          repoRoot,
+        ],
+        {
+          cwd: repoRoot,
+          env: officeEnv(origin),
+          timeoutMs: 30000,
+        }
+      );
     } else {
       sendJson(res, 400, { ok: false, error: "unsupported_action" });
       return true;
     }
+    const parsed = parseJsonText(result.stdout.trim());
     sendJson(res, result.code === 0 ? 200 : 500, {
       ok: result.code === 0,
       action,
-      stdout: result.stdout.trim(),
+      result: parsed ?? null,
+      stdout: parsed ? "" : result.stdout.trim(),
       stderr: result.stderr.trim(),
     });
     return true;

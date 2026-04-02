@@ -573,6 +573,7 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
   const kernelWarmCache = asDict(kernel.warm_cache);
   const kernelFeatureFlags = asDict(kernel.feature_flags);
   const kernelDesktopControl = asDict(kernel.desktop_control);
+  const kernelPatientZero = asDict(kernel.patient_zero);
   const defaultHostId = String(kernelWorkerFabric.default_host_id ?? "local").trim() || "local";
   const localHost = asDict(
     asList(kernelWorkerFabric.hosts).find((entry) => String(asDict(entry).host_id ?? "").trim() === defaultHostId)
@@ -595,6 +596,9 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
   const providerEntries = asList(providerBridgeDiagnostics.diagnostics);
   const rawDesktopControl = asDict(raw.desktop_control);
   const desktopControlSummary = asDict(kernelDesktopControl.summary || rawDesktopControl.summary);
+  const rawPatientZero = asDict(raw.patient_zero);
+  const patientZeroSummary = asDict(kernelPatientZero.summary || rawPatientZero.summary);
+  const patientZeroReport = asDict(rawPatientZero.report);
   const threadId = String(raw.thread_id ?? "ring-leader-main").trim() || "ring-leader-main";
   const latestAutopilotSession = asList(agentSessions.sessions).find((entry) => {
     const session = asDict(entry);
@@ -731,6 +735,28 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
         listen_ready: Boolean(desktopControlSummary.listen_ready),
         last_frontmost_app: String(desktopControlSummary.last_frontmost_app ?? ""),
       },
+      patient_zero: {
+        enabled: Boolean(patientZeroSummary.enabled),
+        posture: String(patientZeroSummary.posture ?? "standby"),
+        severity: String(patientZeroSummary.severity ?? "controlled"),
+        permission_profile: String(patientZeroSummary.permission_profile ?? "high_risk"),
+        browser_app: String(patientZeroSummary.browser_app ?? "Safari"),
+        browser_ready: Boolean(patientZeroSummary.browser_ready),
+        root_shell_enabled: Boolean(patientZeroSummary.root_shell_enabled),
+        root_shell_reason: String(patientZeroSummary.root_shell_reason ?? ""),
+        autonomy_enabled: Boolean(patientZeroSummary.autonomy_enabled),
+        armed_at: String(patientZeroSummary.armed_at ?? ""),
+        armed_by: String(patientZeroSummary.armed_by ?? ""),
+        last_operator_note: String(patientZeroSummary.last_operator_note ?? ""),
+        report: {
+          stance: String(patientZeroReport.stance ?? ""),
+          priority_pull: String(patientZeroReport.priority_pull ?? ""),
+          concern: String(patientZeroReport.concern ?? ""),
+          desire: String(patientZeroReport.desire ?? ""),
+          activity_summary: asList(patientZeroReport.activity_summary).map((entry) => String(entry)),
+          scope_notice: String(patientZeroReport.scope_notice ?? ""),
+        },
+      },
       maintain: {
         enabled: Boolean(maintainState.enabled),
         running: Boolean(maintainRuntime.running),
@@ -779,6 +805,7 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
         warm_cache_enabled: Boolean(asDict(kernelWarmCache.state).enabled || kernelWarmCache.enabled),
         warm_cache_stale: Boolean(kernelWarmCache.stale),
         disabled_feature_flags: parseAnyInt(kernelFeatureFlags.disabled_count),
+        patient_zero_enabled: Boolean(patientZeroSummary.enabled),
       },
     },
     current: {

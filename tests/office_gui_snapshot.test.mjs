@@ -126,6 +126,32 @@ test("office gui snapshot surfaces control-plane rollup signals", () => {
             last_frontmost_app: "Cursor",
           },
         },
+        patient_zero: {
+          summary: {
+            enabled: true,
+            posture: "armed",
+            severity: "critical",
+            permission_profile: "high_risk",
+            browser_app: "Safari",
+            browser_ready: true,
+            root_shell_enabled: false,
+            root_shell_reason: "Manual operator-mediated only.",
+            autonomy_enabled: true,
+            armed_at: "2026-04-01T17:05:00.000Z",
+            armed_by: "operator",
+            last_operator_note: "Take over while I step away.",
+          },
+        },
+      },
+      patient_zero: {
+        report: {
+          stance: "Armed for operator-visible high-risk local control.",
+          priority_pull: "Keep pushing the current objective.",
+          concern: "No fresh runtime error spike is visible.",
+          desire: "Convert explicit operator intent into bounded execution.",
+          activity_summary: ["Running: Ship the next slice", "Queued: Verify the runtime"],
+          scope_notice: "Operator-facing self-report only.",
+        },
       },
       autonomy_maintain: {
         state: {},
@@ -155,6 +181,13 @@ test("office gui snapshot surfaces control-plane rollup signals", () => {
   assert.equal(snapshot.summary.desktop_control.act_ready, true);
   assert.equal(snapshot.summary.desktop_control.listen_ready, false);
   assert.equal(snapshot.summary.desktop_control.last_frontmost_app, "Cursor");
+  assert.equal(snapshot.summary.patient_zero.enabled, true);
+  assert.equal(snapshot.summary.patient_zero.posture, "armed");
+  assert.equal(snapshot.summary.patient_zero.browser_app, "Safari");
+  assert.equal(snapshot.summary.patient_zero.browser_ready, true);
+  assert.equal(snapshot.summary.patient_zero.root_shell_enabled, false);
+  assert.equal(snapshot.summary.patient_zero.report.activity_summary.length, 2);
+  assert.equal(snapshot.summary.control_plane.patient_zero_enabled, true);
 });
 
 test("office gui snapshot exposes live autopilot execution posture and council state", () => {

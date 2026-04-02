@@ -7,6 +7,7 @@ import {
   summarizeToolCatalog,
 } from "../control_plane.js";
 import { summarizeDesktopControlState } from "../desktop_control_plane.js";
+import { summarizePatientZeroState } from "../patient_zero_plane.js";
 import {
   type AutonomyMaintainStateRecord,
   type AgentSessionRecord,
@@ -1769,6 +1770,8 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     : [];
   const desktopControlState = storage.getDesktopControlState();
   const desktopControlSummary = summarizeDesktopControlState(desktopControlState);
+  const patientZeroState = storage.getPatientZeroState();
+  const patientZeroSummary = summarizePatientZeroState(patientZeroState, desktopControlState);
   const goalSummaries = openGoals.map((goal) => {
     const plan = resolveGoalPlan(storage, goal);
     const steps = plan ? storage.listPlanSteps(plan.plan_id) : [];
@@ -2204,6 +2207,13 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
         listen_ready: desktopControlSummary.listen_ready,
         heartbeat_age_seconds: desktopControlSummary.heartbeat_age_seconds,
       },
+      patient_zero: {
+        enabled: patientZeroSummary.enabled,
+        posture: patientZeroSummary.posture,
+        permission_profile: patientZeroSummary.permission_profile,
+        browser_ready: patientZeroSummary.browser_ready,
+        root_shell_enabled: patientZeroSummary.root_shell_enabled,
+      },
       tool_catalog: toolCatalogSummary,
       permission_profiles: {
         default_profile: permissionProfilesSummary.default_profile,
@@ -2257,6 +2267,10 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     desktop_control: {
       state: desktopControlState,
       summary: desktopControlSummary,
+    },
+    patient_zero: {
+      state: patientZeroState,
+      summary: patientZeroSummary,
     },
     tool_catalog: toolCatalogSummary,
     permission_profiles: permissionProfilesSummary,

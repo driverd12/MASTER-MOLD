@@ -328,6 +328,63 @@ test("feature.flag drives explicit rollout decisions for operator and permission
   }
 });
 
+test("patient.zero arms and disarms explicit elevated local control with an operator-visible report", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-control-plane-patient-zero-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(tempDir, dbPath);
+  try {
+    const initial = await callTool(client, "patient.zero", {
+      action: "status",
+    });
+    assert.equal(initial.state.enabled, false);
+    assert.equal(initial.summary.posture, "standby");
+    assert.equal(initial.state.permission_profile, "high_risk");
+    assert.equal(initial.report.scope_notice.includes("self-report"), true);
+
+    const armed = await callTool(client, "patient.zero", {
+      action: "enable",
+      mutation: nextMutation("patient-zero", "patient.zero.enable", () => mutationCounter++),
+      operator_note: "Taking over while the operator steps away.",
+      source_client: "integration-test",
+      source_agent: "operator",
+    });
+    assert.equal(armed.state.enabled, true);
+    assert.equal(armed.summary.posture, "armed");
+    assert.equal(typeof armed.summary.browser_ready, "boolean");
+    assert.equal(armed.summary.root_shell_enabled, false);
+    assert.equal(armed.summary.last_operator_note, "Taking over while the operator steps away.");
+    assert.equal(armed.desktop_control.state.enabled, true);
+    assert.equal(armed.desktop_control.state.allow_observe, true);
+    assert.equal(armed.desktop_control.state.allow_act, true);
+    assert.equal(armed.desktop_control.state.allow_listen, true);
+    assert.equal(armed.report.activity_summary.length >= 0, true);
+
+    const kernel = await callTool(client, "kernel.summary", {});
+    assert.equal(kernel.patient_zero.summary.enabled, true);
+    assert.equal(kernel.overview.patient_zero.posture, "armed");
+
+    const disarmed = await callTool(client, "patient.zero", {
+      action: "disable",
+      mutation: nextMutation("patient-zero", "patient.zero.disable", () => mutationCounter++),
+      operator_note: "Operator back at the keyboard.",
+      source_client: "integration-test",
+      source_agent: "operator",
+    });
+    assert.equal(disarmed.state.enabled, false);
+    assert.equal(disarmed.summary.posture, "standby");
+    assert.equal(disarmed.desktop_control.state.enabled, false);
+    assert.equal(disarmed.desktop_control.state.allow_observe, false);
+    assert.equal(disarmed.desktop_control.state.allow_act, false);
+    assert.equal(disarmed.desktop_control.state.allow_listen, false);
+    assert.equal(disarmed.summary.last_operator_note, "Operator back at the keyboard.");
+  } finally {
+    await closeClient(client);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 async function openClient(tempDir, dbPath, extraEnv = {}) {
   const transport = new StdioClientTransport({
     command: "node",

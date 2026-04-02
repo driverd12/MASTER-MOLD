@@ -14,6 +14,7 @@
     officeView: document.querySelector("#office-view"),
     briefingView: document.querySelector("#briefing-view"),
     workersView: document.querySelector("#workers-view"),
+    patientZeroView: document.querySelector("#patient-zero-view"),
     eventsView: document.querySelector("#events-view"),
     tabs: Array.prototype.slice.call(document.querySelectorAll(".tabs__button")),
     intakeForm: document.querySelector("#intake-form"),
@@ -26,6 +27,12 @@
   function setBootState(value) {
     if (document.body) {
       document.body.setAttribute("data-office-boot", value);
+    }
+  }
+
+  function setPatientZeroTone(value) {
+    if (document.body) {
+      document.body.setAttribute("data-patient-zero", value);
     }
   }
 
@@ -101,6 +108,26 @@
     );
   }
 
+  function patientZeroSkullSvg(enabled) {
+    var fill = enabled ? "#f1dfd4" : "#cfb9ad";
+    var accent = enabled ? "#b43c3c" : "#6c3030";
+    return (
+      '<svg viewBox="0 0 96 96" aria-hidden="true">' +
+      '<rect x="24" y="20" width="48" height="10" fill="' + accent + '" />' +
+      '<rect x="18" y="30" width="60" height="28" rx="6" fill="' + fill + '" />' +
+      '<rect x="26" y="58" width="44" height="14" rx="4" fill="' + fill + '" />' +
+      '<rect x="30" y="38" width="12" height="12" fill="#0f1116" />' +
+      '<rect x="54" y="38" width="12" height="12" fill="#0f1116" />' +
+      '<polygon points="48,44 40,58 56,58" fill="' + accent + '" />' +
+      '<rect x="34" y="62" width="6" height="12" fill="#0f1116" />' +
+      '<rect x="44" y="62" width="6" height="12" fill="#0f1116" />' +
+      '<rect x="54" y="62" width="6" height="12" fill="#0f1116" />' +
+      '<rect x="28" y="74" width="8" height="10" fill="' + accent + '" />' +
+      '<rect x="60" y="74" width="8" height="10" fill="' + accent + '" />' +
+      "</svg>"
+    );
+  }
+
   function getSnapshotAgents() {
     return state.snapshot && Array.isArray(state.snapshot.agents) ? state.snapshot.agents : [];
   }
@@ -150,6 +177,7 @@
     var autopilot = summary.autopilot || {};
     var providers = summary.provider_bridge || {};
     var desktop = summary.desktop_control || {};
+    var patientZero = summary.patient_zero || {};
     var chips = [];
     if (state.snapshot.errors && state.snapshot.errors.length) {
       chips.push(["Snapshot", String(state.snapshot.errors.length) + " partial errors"]);
@@ -163,7 +191,13 @@
       ["Workers", "active " + String(runtimeWorkers.active_count || 0) + " | sessions " + String(runtimeWorkers.session_count || 0)],
       ["Maintain", (maintain.running ? "running" : "idle") + " | eval_due " + (maintain.eval_due ? "yes" : "no")],
       ["Providers", "connected " + String(providers.connected_count || 0) + " | disconnected " + String(providers.disconnected_count || 0)],
-      ["Desktop", (desktop.enabled ? "enabled" : "disabled") + " | eyes " + (desktop.observe_ready ? "yes" : "no") + " | hands " + (desktop.act_ready ? "yes" : "no") + " | ears " + (desktop.listen_ready ? "yes" : "no")]
+      ["Desktop", (desktop.enabled ? "enabled" : "disabled") + " | eyes " + (desktop.observe_ready ? "yes" : "no") + " | hands " + (desktop.act_ready ? "yes" : "no") + " | ears " + (desktop.listen_ready ? "yes" : "no")],
+      [
+        "Patient Zero",
+        (patientZero.enabled ? "armed" : "standby") +
+          " | browser " + (patientZero.browser_ready ? "yes" : "no") +
+          " | root " + (patientZero.root_shell_enabled ? "yes" : "manual")
+      ]
     );
     els.statusStrip.innerHTML = chips
       .map(function (entry) {
@@ -326,6 +360,91 @@
       "</div>";
   }
 
+  function renderPatientZeroView() {
+    if (!state.snapshot) {
+      els.patientZeroView.innerHTML = "";
+      return;
+    }
+    var summary = state.snapshot.summary || {};
+    var patientZero = summary.patient_zero || {};
+    var desktop = summary.desktop_control || {};
+    var report = patientZero.report || {};
+    var enabled = !!patientZero.enabled;
+    var posture = enabled ? "ARMED" : "STANDBY";
+    var capabilityRows = [
+      ["Eyes", desktop.observe_ready ? "Live observe path available." : "Observe lane not ready."],
+      ["Hands", desktop.act_ready ? "Keyboard and pointer actuation available." : "Actuation lane not ready."],
+      ["Ears", desktop.listen_ready ? "Microphone/listen lane available." : "Listen lane not ready."],
+      ["Browser", patientZero.browser_ready ? String(patientZero.browser_app || "Safari") + " ready for operator-directed work." : String(patientZero.browser_app || "Safari") + " not currently ready."],
+      ["Root Shell", patientZero.root_shell_enabled ? "Enabled." : String(patientZero.root_shell_reason || "Manual operator-mediated only.")],
+      ["Audit", patientZero.autonomy_enabled ? "Operator-visible report mode active." : "Bounded audit mode only."],
+    ];
+    var activitySummary = Array.isArray(report.activity_summary) ? report.activity_summary : [];
+    var noteValue = String(patientZero.last_operator_note || "");
+    els.patientZeroView.innerHTML =
+      '<div class="patient-zero-grid">' +
+      '<section class="patient-zero-banner">' +
+      '<div class="patient-zero-banner__icon">' + patientZeroSkullSvg(enabled) + '</div>' +
+      '<div class="patient-zero-banner__copy">' +
+      '<div class="section-title">Explicit High-Risk Local Control</div>' +
+      '<h2>' + escapeHtml(posture + " · Patient Zero") + '</h2>' +
+      '<p>' + escapeHtml(report.scope_notice || "Operator-visible elevated control surface for local execution.") + '</p>' +
+      '<div class="patient-zero-banner__meta">' +
+      '<span class="tag ' + (enabled ? "tag--block" : "tag--talk") + '">' + escapeHtml(String(patientZero.permission_profile || "high_risk")) + '</span>' +
+      '<span class="tag">' + escapeHtml("armed_by " + (patientZero.armed_by || "n/a")) + '</span>' +
+      '<span class="tag">' + escapeHtml("armed_at " + (patientZero.armed_at || "n/a")) + '</span>' +
+      "</div>" +
+      "</div>" +
+      '<div class="patient-zero-banner__actions">' +
+      '<button class="patient-zero-button patient-zero-button--arm" data-patient-zero-action="patient_zero_enable">ENABLE PATIENT ZERO</button>' +
+      '<button class="patient-zero-button patient-zero-button--disarm" data-patient-zero-action="patient_zero_disable">DISABLE PATIENT ZERO</button>' +
+      "</div>" +
+      "</section>" +
+      '<section class="patient-zero-card">' +
+      '<div class="section-title">Operator Note</div>' +
+      '<textarea class="patient-zero-note" data-patient-zero-note rows="4" placeholder="Record intent for the audit trail.">' + escapeHtml(noteValue) + '</textarea>' +
+      '<div class="patient-zero-note__hint">This note is stored with the arm or disarm event.</div>' +
+      "</section>" +
+      '<section class="patient-zero-card">' +
+      '<div class="section-title">Capabilities</div>' +
+      '<div class="patient-zero-capabilities">' +
+      capabilityRows.map(function (entry) {
+        return '<article class="patient-zero-capability"><strong>' + escapeHtml(entry[0]) + '</strong><span>' + escapeHtml(entry[1]) + "</span></article>";
+      }).join("") +
+      "</div>" +
+      "</section>" +
+      '<section class="patient-zero-card">' +
+      '<div class="section-title">Recon Summary</div>' +
+      '<div class="patient-zero-report">' +
+      '<div class="metric"><span>Stance</span><strong>' + escapeHtml(report.stance || "No stance recorded.") + '</strong></div>' +
+      '<div class="metric"><span>Priority Pull</span><strong>' + escapeHtml(report.priority_pull || "No current priority.") + '</strong></div>' +
+      '<div class="metric"><span>Concern</span><strong>' + escapeHtml(report.concern || "No concern recorded.") + '</strong></div>' +
+      '<div class="metric"><span>Desire</span><strong>' + escapeHtml(report.desire || "No desire recorded.") + '</strong></div>' +
+      "</div>" +
+      '<div class="section-title">Activity</div>' +
+      '<div class="events-list">' +
+      (activitySummary.length
+        ? activitySummary.map(function (entry) {
+            return '<article class="event-row"><div>' + escapeHtml(entry) + "</div></article>";
+          }).join("")
+        : '<article class="event-row"><div>No recent activity summary recorded.</div></article>') +
+      "</div>" +
+      "</section>" +
+      "</div>";
+
+    Array.prototype.slice.call(els.patientZeroView.querySelectorAll("[data-patient-zero-action]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var noteNode = els.patientZeroView.querySelector("[data-patient-zero-note]");
+        var operatorNote = noteNode ? String(noteNode.value || "").trim() : "";
+        postAction(button.getAttribute("data-patient-zero-action") || "", {
+          operator_note: operatorNote,
+        }).catch(function (error) {
+          setResultText(String(error));
+        });
+      });
+    });
+  }
+
   function renderEventsView() {
     if (!state.snapshot) {
       els.eventsView.innerHTML = "";
@@ -371,6 +490,8 @@
   }
 
   function renderAll() {
+    var patientZeroEnabled = !!(state.snapshot && state.snapshot.summary && state.snapshot.summary.patient_zero && state.snapshot.summary.patient_zero.enabled);
+    setPatientZeroTone(patientZeroEnabled ? "enabled" : "disabled");
     if (els.subtitle) {
       els.subtitle.textContent = state.snapshot
         ? "Thread " + state.snapshot.thread_id + " · data age " + relativeTime(state.snapshot.fetched_at_iso)
@@ -380,6 +501,7 @@
     renderOfficeView();
     renderBriefingView();
     renderWorkersView();
+    renderPatientZeroView();
     renderEventsView();
     renderAgentDetail();
     setTab(state.activeTab);
@@ -476,11 +598,12 @@
     }, intervalMs);
   }
 
-  function postAction(action) {
+  function postAction(action, extra) {
+    var payload = Object.assign({ action: action }, extra || {});
     return getJson("/office/api/action", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: action }),
+      body: JSON.stringify(payload),
     }).then(function (result) {
       setResultText(JSON.stringify(result, null, 2));
       return fetchSnapshot({ forceLive: true, explicitForceLive: true });

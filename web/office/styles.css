@@ -191,6 +191,11 @@ button:hover,
   background: rgba(215, 142, 88, 0.15);
 }
 
+.tabs__button--patient-zero {
+  border-color: rgba(185, 73, 73, 0.55);
+  background: linear-gradient(180deg, rgba(120, 24, 24, 0.18), rgba(120, 24, 24, 0.06));
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
@@ -528,6 +533,170 @@ textarea {
   margin-bottom: 8px;
 }
 
+.patient-zero-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.patient-zero-banner,
+.patient-zero-card {
+  border: 1px solid rgba(185, 73, 73, 0.35);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.02), transparent),
+    rgba(22, 11, 12, 0.92);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.35);
+}
+
+.patient-zero-banner {
+  padding: 18px;
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr) minmax(220px, 280px);
+  gap: 18px;
+  align-items: center;
+}
+
+.patient-zero-banner__icon {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 108px;
+  border-radius: 14px;
+  border: 1px solid rgba(185, 73, 73, 0.35);
+  background: radial-gradient(circle at top, rgba(185, 73, 73, 0.22), transparent 58%), rgba(0,0,0,0.32);
+}
+
+.patient-zero-banner__icon svg {
+  width: 82px;
+  height: 82px;
+  filter: drop-shadow(0 8px 16px rgba(0,0,0,0.35));
+}
+
+.patient-zero-banner__copy {
+  display: grid;
+  gap: 10px;
+}
+
+.patient-zero-banner__copy h2 {
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: 0.08em;
+}
+
+.patient-zero-banner__copy p {
+  margin: 0;
+  color: #d5c2bc;
+  line-height: 1.5;
+}
+
+.patient-zero-banner__meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.patient-zero-banner__actions {
+  display: grid;
+  gap: 10px;
+}
+
+.patient-zero-button {
+  padding: 14px 16px;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.patient-zero-button--arm {
+  border-color: rgba(185, 73, 73, 0.7);
+  background: linear-gradient(180deg, rgba(160, 40, 40, 0.28), rgba(160, 40, 40, 0.12));
+}
+
+.patient-zero-button--disarm {
+  border-color: rgba(110, 118, 132, 0.65);
+  background: linear-gradient(180deg, rgba(62, 66, 74, 0.38), rgba(62, 66, 74, 0.16));
+}
+
+.patient-zero-card {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.patient-zero-note {
+  min-height: 96px;
+  background: rgba(9, 10, 12, 0.8);
+  border-color: rgba(185, 73, 73, 0.3);
+}
+
+.patient-zero-note__hint {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.patient-zero-capabilities {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.patient-zero-capability {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(185, 73, 73, 0.22);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.02);
+}
+
+.patient-zero-capability strong {
+  color: #f0ddd6;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.75rem;
+}
+
+.patient-zero-capability span {
+  color: #cdbab3;
+  line-height: 1.45;
+}
+
+.patient-zero-report {
+  display: grid;
+  gap: 8px;
+}
+
+body[data-patient-zero="enabled"] {
+  background:
+    radial-gradient(circle at top, rgba(185, 73, 73, 0.16), transparent 42%),
+    linear-gradient(180deg, #110a0c 0%, #08090d 100%);
+}
+
+body[data-patient-zero="enabled"] .topbar,
+body[data-patient-zero="enabled"] .status-strip,
+body[data-patient-zero="enabled"] .tabs,
+body[data-patient-zero="enabled"] .panel {
+  border-color: rgba(185, 73, 73, 0.3);
+  background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent), #161015;
+}
+
+body[data-patient-zero="enabled"] .brand__icon {
+  background: #311519;
+  border-color: rgba(185, 73, 73, 0.45);
+}
+
+body[data-patient-zero="enabled"] .brand__icon span,
+body[data-patient-zero="enabled"] .brand__icon span::before,
+body[data-patient-zero="enabled"] .brand__icon span::after {
+  background: #d96c6c;
+}
+
+body[data-patient-zero="enabled"] .tabs__button--patient-zero.is-active {
+  border-color: rgba(225, 116, 116, 0.8);
+  background: linear-gradient(180deg, rgba(140, 32, 32, 0.42), rgba(140, 32, 32, 0.18));
+}
+
 @media (max-width: 1120px) {
   .workspace {
     grid-template-columns: 1fr;
@@ -537,5 +706,9 @@ textarea {
     grid-template-columns: 1fr;
     grid-template-rows: repeat(4, minmax(180px, auto));
     min-height: unset;
+  }
+
+  .patient-zero-banner {
+    grid-template-columns: 1fr;
   }
 }
