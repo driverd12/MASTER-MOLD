@@ -6,6 +6,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 eval "$("${REPO_ROOT}/scripts/export_dotenv_env.sh" "${REPO_ROOT}")"
 LAUNCH_DIR="${HOME}/Library/LaunchAgents"
 DOMAIN="gui/$(id -u)"
+MCP_PORT="${MCP_HTTP_PORT:-${ANAMNESIS_MCP_HTTP_PORT:-8787}}"
+HTTP_URL="${TRICHAT_MCP_URL:-http://127.0.0.1:${MCP_PORT}/}"
+HTTP_ORIGIN="${TRICHAT_MCP_ORIGIN:-http://127.0.0.1}"
 
 MCP_LABEL="com.mcplayground.mcp.server"
 AUTO_LABEL="com.mcplayground.imprint.autosnapshot"
@@ -18,6 +21,10 @@ WORKER_PLIST="${LAUNCH_DIR}/${WORKER_LABEL}.plist"
 KEEPALIVE_PLIST="${LAUNCH_DIR}/${KEEPALIVE_LABEL}.plist"
 MLX_PLIST="${LAUNCH_DIR}/${MLX_LABEL}.plist"
 GUI_FALLBACK_SESSION="mcplayground-http"
+TOKEN_FILE="${REPO_ROOT}/data/imprint/http_bearer_token"
+if [[ -z "${MCP_HTTP_BEARER_TOKEN:-}" && -f "${TOKEN_FILE}" ]]; then
+  export MCP_HTTP_BEARER_TOKEN="$(cat "${TOKEN_FILE}")"
+fi
 
 is_loaded() {
   local label="$1"
@@ -73,6 +80,55 @@ bootstrap_if_exists() {
   fi
 }
 
+terminate_repo_listener() {
+  local pid="$1"
+  [[ -n "${pid}" ]] || return 0
+  local command_line
+  command_line="$(ps -o command= -p "${pid}" 2>/dev/null || true)"
+  if [[ -z "${command_line}" ]]; then
+    return 0
+  fi
+  if [[ "${command_line}" != *"${REPO_ROOT}"* && "${command_line}" != *"dist/server.js"* ]]; then
+    return 0
+  fi
+  kill "${pid}" >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5; do
+    if ! kill -0 "${pid}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  kill -9 "${pid}" >/dev/null 2>&1 || true
+}
+
+clear_repo_http_runtime() {
+  tmux kill-session -t "${GUI_FALLBACK_SESSION}" >/dev/null 2>&1 || true
+  if command -v lsof >/dev/null 2>&1; then
+    local port_pids=""
+    port_pids="$(lsof -tiTCP:${MCP_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+    if [[ -n "${port_pids}" ]]; then
+      while IFS= read -r pid; do
+        terminate_repo_listener "${pid}"
+      done <<< "${port_pids}"
+    fi
+  fi
+}
+
+wait_for_mcp_ready() {
+  [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]] || return 1
+  local deadline=$((SECONDS + 45))
+  while (( SECONDS < deadline )); do
+    if curl -fsS --connect-timeout 1 --max-time 4 \
+      -H "Authorization: Bearer ${MCP_HTTP_BEARER_TOKEN}" \
+      -H "Origin: ${HTTP_ORIGIN}" \
+      "${HTTP_URL%/}/ready" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 case "${ACTION}" in
   on)
     if [[ ! -f "${MCP_PLIST}" || ! -f "${AUTO_PLIST}" || ! -f "${WORKER_PLIST}" || ! -f "${KEEPALIVE_PLIST}" || ( "${TRICHAT_MLX_SERVER_ENABLED:-0}" == "1" && ! -f "${MLX_PLIST}" ) ]]; then
@@ -90,19 +146,20 @@ case "${ACTION}" in
       bootout_if_exists "${WORKER_PLIST}"
       bootout_if_exists "${KEEPALIVE_PLIST}"
       bootout_if_exists "${MLX_PLIST}"
+      clear_repo_http_runtime
       bootstrap_if_exists "${MCP_PLIST}"
+      launchctl kickstart -k "${DOMAIN}/${MCP_LABEL}" >/dev/null 2>&1 || true
+      wait_for_mcp_ready
       bootstrap_if_exists "${AUTO_PLIST}"
       bootstrap_if_exists "${WORKER_PLIST}"
       bootstrap_if_exists "${KEEPALIVE_PLIST}"
       bootstrap_if_exists "${MLX_PLIST}"
-      launchctl kickstart -k "${DOMAIN}/${MCP_LABEL}" >/dev/null 2>&1 || true
       launchctl kickstart -k "${DOMAIN}/${AUTO_LABEL}" >/dev/null 2>&1 || true
       launchctl kickstart -k "${DOMAIN}/${WORKER_LABEL}" >/dev/null 2>&1 || true
       launchctl kickstart -k "${DOMAIN}/${KEEPALIVE_LABEL}" >/dev/null 2>&1 || true
       if [[ -f "${MLX_PLIST}" ]]; then
         launchctl kickstart -k "${DOMAIN}/${MLX_LABEL}" >/dev/null 2>&1 || true
       fi
-      tmux kill-session -t "${GUI_FALLBACK_SESSION}" >/dev/null 2>&1 || true
     fi
     ;;
   off)

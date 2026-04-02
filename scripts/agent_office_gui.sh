@@ -84,6 +84,7 @@ print_status() {
   fi
   if ready_ok; then
     ready="true"
+    health="true"
   fi
   if [[ "${ready}" == "true" ]]; then
     if tmux has-session -t "${FALLBACK_SESSION}" >/dev/null 2>&1; then

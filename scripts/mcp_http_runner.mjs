@@ -17,7 +17,14 @@ async function main() {
   const port = process.env.MCP_HTTP_PORT || process.env.ANAMNESIS_MCP_HTTP_PORT || "8787";
   const host = process.env.MCP_HTTP_HOST || "127.0.0.1";
   const busSocketPath = resolveRunnerBusSocketPath(repoRoot);
+  const targetEntry = process.env.MCP_HTTP_RUNNER_ENTRY || path.join(repoRoot, "dist", "server.js");
+  const targetArgs = process.env.MCP_HTTP_RUNNER_ARGS
+    ? JSON.parse(process.env.MCP_HTTP_RUNNER_ARGS)
+    : ["--http", "--http-port", port];
   process.env.TRICHAT_BUS_SOCKET_PATH = busSocketPath;
+  let child = null;
+  let releaseLock = () => {};
+  let shuttingDown = false;
 
   const lock = await acquireRunnerSingletonLock(repoRoot, "mcp-http-runner", 20000);
   if (!lock.ok) {
@@ -26,15 +33,61 @@ async function main() {
     return;
   }
 
-  const release = () => lock.release();
-  process.on("exit", release);
+  let released = false;
+  releaseLock = () => {
+    if (released) return;
+    released = true;
+    lock.release();
+  };
+
+  const waitForChildExit = (timeoutMs = 5000) =>
+    new Promise((resolve) => {
+      if (!child || child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        try {
+          child?.kill("SIGKILL");
+        } catch {}
+        finish();
+      }, timeoutMs);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        finish();
+      });
+    });
+
+  const shutdown = async (exitCode, signal = "SIGTERM") => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    try {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill(signal);
+        } catch {}
+        await waitForChildExit();
+      }
+    } finally {
+      releaseLock();
+    }
+    process.exit(exitCode);
+  };
+
+  process.on("exit", releaseLock);
   process.on("SIGINT", () => {
-    release();
-    process.exit(130);
+    void shutdown(130, "SIGINT");
   });
   process.on("SIGTERM", () => {
-    release();
-    process.exit(143);
+    void shutdown(143, "SIGTERM");
   });
 
   const cleared = await waitForServerResourcesToClear({
@@ -48,28 +101,31 @@ async function main() {
     process.stderr.write(
       `[mcp.http.runner] resources did not clear before startup (port=${cleared.portState} bus=${cleared.busState})\n`
     );
-    release();
+    releaseLock();
     process.exit(75);
     return;
   }
 
-  const child = spawn(process.execPath, [path.join(repoRoot, "dist", "server.js"), "--http", "--http-port", port], {
+  child = spawn(process.execPath, [targetEntry, ...targetArgs], {
     cwd: repoRoot,
     env: process.env,
     stdio: "inherit",
   });
 
   child.on("exit", (code, signal) => {
-    release();
+    releaseLock();
+    if (shuttingDown) {
+      return;
+    }
     if (signal) {
-      process.kill(process.pid, signal);
+      process.exit(signal === "SIGINT" ? 130 : 143);
       return;
     }
     process.exit(code ?? 0);
   });
 
   child.on("error", (error) => {
-    release();
+    releaseLock();
     process.stderr.write(`[mcp.http.runner] failed: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });
