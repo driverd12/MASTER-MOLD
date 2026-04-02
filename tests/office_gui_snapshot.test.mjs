@@ -145,6 +145,7 @@ test("office gui snapshot surfaces control-plane rollup signals", () => {
         privileged_access: {
           summary: {
             root_execution_ready: true,
+            credential_verified: true,
             account: "mcagent",
             target_user: "root",
             patient_zero_armed: true,
@@ -152,6 +153,9 @@ test("office gui snapshot surfaces control-plane rollup signals", () => {
             helper_ready: true,
             secret_path: "/Users/dan.driver/.codex/secrets/mcagent_admin_password",
             blockers: [],
+            last_verified_at: "2026-04-01T17:05:01.000Z",
+            last_verification_ok: true,
+            last_verification_error: null,
             last_actor: "ring-leader",
             last_command: "pmset sleepnow",
             last_exit_code: 0,
@@ -204,6 +208,7 @@ test("office gui snapshot surfaces control-plane rollup signals", () => {
   assert.equal(snapshot.summary.patient_zero.report.activity_summary.length, 2);
   assert.equal(snapshot.summary.control_plane.patient_zero_enabled, true);
   assert.equal(snapshot.summary.privileged_access.root_execution_ready, true);
+  assert.equal(snapshot.summary.privileged_access.credential_verified, true);
   assert.equal(snapshot.summary.privileged_access.account, "mcagent");
   assert.equal(snapshot.summary.control_plane.privileged_root_ready, true);
 });

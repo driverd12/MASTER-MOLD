@@ -438,6 +438,11 @@ function summarizeControlPlane(
       typeof privilegedAccessSummaryRecord.helper_ready === "boolean"
         ? privilegedAccessSummaryRecord.helper_ready
         : false,
+    credential_verified:
+      typeof privilegedAccessSummaryRecord.credential_verified === "boolean"
+        ? privilegedAccessSummaryRecord.credential_verified
+        : false,
+    last_verification_error: readString(privilegedAccessSummaryRecord.last_verification_error),
   };
   return {
     permission_profile: permission.resolved_profile_id,
@@ -516,7 +521,11 @@ export function operatorBrief(storage: Storage, input: z.infer<typeof operatorBr
     `- disabled_feature_flags: ${controlPlaneSummary.feature_flags.disabled_count}/${controlPlaneSummary.feature_flags.total_count}`,
     `- desktop_control: ${controlPlaneSummary.desktop_control.enabled ? `enabled (eyes=${controlPlaneSummary.desktop_control.observe_ready ? "yes" : "no"}, hands=${controlPlaneSummary.desktop_control.act_ready ? "yes" : "no"}, ears=${controlPlaneSummary.desktop_control.listen_ready ? "yes" : "no"})` : "disabled"}`,
     `- patient_zero: ${controlPlaneSummary.patient_zero.enabled ? `${controlPlaneSummary.patient_zero.posture} (profile=${controlPlaneSummary.patient_zero.permission_profile}, browser=${controlPlaneSummary.patient_zero.browser_ready ? "yes" : "no"}, root=${controlPlaneSummary.patient_zero.root_shell_enabled ? "yes" : "no"})` : "standby"}`,
-    `- privileged_access: ${controlPlaneSummary.privileged_access.root_execution_ready ? `ready via ${controlPlaneSummary.privileged_access.account}` : `not-ready (patient_zero=${controlPlaneSummary.privileged_access.patient_zero_armed ? "armed" : "standby"}, secret=${controlPlaneSummary.privileged_access.secret_present ? "yes" : "no"}, helper=${controlPlaneSummary.privileged_access.helper_ready ? "yes" : "no"})`}`,
+    `- privileged_access: ${
+      controlPlaneSummary.privileged_access.root_execution_ready
+        ? `ready via ${controlPlaneSummary.privileged_access.account}`
+        : `not-ready (patient_zero=${controlPlaneSummary.privileged_access.patient_zero_armed ? "armed" : "standby"}, secret=${controlPlaneSummary.privileged_access.secret_present ? "yes" : "no"}, helper=${controlPlaneSummary.privileged_access.helper_ready ? "yes" : "no"}, verified=${controlPlaneSummary.privileged_access.credential_verified ? "yes" : "no"}, error=${controlPlaneSummary.privileged_access.last_verification_error ?? "none"})`
+    }`,
     "",
     renderBulletSection("Success criteria", delegationBrief.success_criteria),
     "",

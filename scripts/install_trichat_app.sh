@@ -2,12 +2,14 @@
 set -euo pipefail
 
 APP_NAME="Agent Office"
+APP_NAME_EXPLICIT=0
 INSTALL_DIR="/Applications"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRANSPORT="stdio"
 TERMINAL_MODE="terminal"
 ICON_PATH=""
 SURFACE="web"
+LAUNCHER="office"
 
 usage() {
   cat <<'USAGE'
@@ -19,6 +21,7 @@ Options:
   --transport <mode>     stdio (default) or http
   --terminal <mode>      terminal (default) or alacritty
   --surface <mode>       web (default) or tmux
+  --launcher <mode>      office (default) or suite
   --name <app-name>      App name (default: Agent Office)
   --install-dir <path>   Install directory (default: /Applications)
   --repo-root <path>     Repository root (default: current repo)
@@ -83,9 +86,15 @@ while [[ $# -gt 0 ]]; do
       SURFACE="$2"
       shift 2
       ;;
+    --launcher)
+      [[ $# -ge 2 ]] || fail "--launcher requires office|suite"
+      LAUNCHER="$2"
+      shift 2
+      ;;
     --name)
       [[ $# -ge 2 ]] || fail "--name requires a value"
       APP_NAME="$2"
+      APP_NAME_EXPLICIT=1
       shift 2
       ;;
     --install-dir)
@@ -123,12 +132,20 @@ case "${SURFACE}" in
   *) fail "--surface must be web or tmux (got: ${SURFACE})" ;;
 esac
 
+case "${LAUNCHER}" in
+  office|suite) ;;
+  *) fail "--launcher must be office or suite (got: ${LAUNCHER})" ;;
+esac
+
 REPO_ROOT="$(cd "${REPO_ROOT}" && pwd)"
 eval "$("${REPO_ROOT}/scripts/export_dotenv_env.sh" "${REPO_ROOT}")"
 if [[ "${TRANSPORT}" == "stdio" && -n "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
   TRANSPORT="http"
 fi
 INSTALL_DIR="$(mkdir -p "${INSTALL_DIR}" && cd "${INSTALL_DIR}" && pwd)"
+if [[ "${APP_NAME_EXPLICIT}" != "1" && "${LAUNCHER}" == "suite" ]]; then
+  APP_NAME="Agentic Suite"
+fi
 APP_PATH="${INSTALL_DIR}/${APP_NAME}.app"
 
 require_command osacompile
@@ -145,7 +162,9 @@ if [[ -n "${ICON_PATH}" ]]; then
   [[ -f "${ICON_PATH}" ]] || fail "icon file does not exist: ${ICON_PATH}"
 fi
 
-if [[ "${SURFACE}" == "web" ]]; then
+if [[ "${LAUNCHER}" == "suite" ]]; then
+  LAUNCH_SCRIPT="TRICHAT_AUTONOMY_ENSURE_ON_ENTRY=\${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1} TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} ./scripts/agentic_suite_launch.sh open"
+elif [[ "${SURFACE}" == "web" ]]; then
   LAUNCH_SCRIPT="TRICHAT_AUTONOMY_ENSURE_ON_ENTRY=\${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1} TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} ./scripts/agent_office_gui.sh open"
 else
   LAUNCH_SCRIPT="TRICHAT_AUTONOMY_ENSURE_ON_ENTRY=\${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1} TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} npm run trichat:office:tmux"
@@ -174,7 +193,11 @@ trap cleanup EXIT
 
 if [[ -z "${ICON_PATH}" ]]; then
   TMP_ICON_SOURCE="$(mktemp -t agent-office-icon-XXXXXX).png"
-  python3 "${REPO_ROOT}/scripts/generate_agent_office_icon.py" --out "${TMP_ICON_SOURCE}"
+  if [[ "${LAUNCHER}" == "suite" ]]; then
+    python3 "${REPO_ROOT}/scripts/generate_agentic_suite_icon.py" --out "${TMP_ICON_SOURCE}"
+  else
+    python3 "${REPO_ROOT}/scripts/generate_agent_office_icon.py" --out "${TMP_ICON_SOURCE}"
+  fi
   ICON_PATH="${TMP_ICON_SOURCE}"
 fi
 

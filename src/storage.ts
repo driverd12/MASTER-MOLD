@@ -11511,6 +11511,10 @@ export class Storage {
     account?: string;
     secret_path?: string;
     audit_required?: boolean;
+    last_verified_at?: string | null;
+    last_verification_ok?: boolean | null;
+    last_verification_error?: string | null;
+    last_secret_fingerprint?: string | null;
     last_executed_at?: string | null;
     last_actor?: string | null;
     last_command?: string | null;
@@ -11524,6 +11528,15 @@ export class Storage {
         account: params.account ?? existing.account,
         secret_path: params.secret_path ?? existing.secret_path,
         audit_required: params.audit_required ?? existing.audit_required,
+        last_verified_at: params.last_verified_at === undefined ? existing.last_verified_at : params.last_verified_at,
+        last_verification_ok:
+          params.last_verification_ok === undefined ? existing.last_verification_ok : params.last_verification_ok,
+        last_verification_error:
+          params.last_verification_error === undefined
+            ? existing.last_verification_error
+            : params.last_verification_error,
+        last_secret_fingerprint:
+          params.last_secret_fingerprint === undefined ? existing.last_secret_fingerprint : params.last_secret_fingerprint,
         last_executed_at: params.last_executed_at === undefined ? existing.last_executed_at : params.last_executed_at,
         last_actor: params.last_actor === undefined ? existing.last_actor : params.last_actor,
         last_command: params.last_command === undefined ? existing.last_command : params.last_command,
@@ -11548,6 +11561,10 @@ export class Storage {
           account: normalized.account,
           secret_path: normalized.secret_path,
           audit_required: normalized.audit_required,
+          last_verified_at: normalized.last_verified_at,
+          last_verification_ok: normalized.last_verification_ok,
+          last_verification_error: normalized.last_verification_error,
+          last_secret_fingerprint: normalized.last_secret_fingerprint,
           last_executed_at: normalized.last_executed_at,
           last_actor: normalized.last_actor,
           last_command: normalized.last_command,

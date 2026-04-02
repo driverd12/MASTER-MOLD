@@ -360,6 +360,14 @@ npm run trichat:app:install
 
 By default the app opens the built-in `/office/` GUI and keeps the tmux-backed Agent Office substrate available underneath it. If you do not pass `--icon`, it generates its own built-in office mascot icon.
 
+Install the umbrella launcher for the broader local suite:
+
+```bash
+npm run agentic:suite:app:install
+```
+
+That launcher brings up the Agent Office web surface and opens the local desktop tools listed in `AGENTIC_SUITE_OPEN_APPS` (defaults to `Codex,Cursor`).
+
 Keyboard controls inside the TUI:
 
 - `1` office

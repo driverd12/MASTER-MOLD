@@ -3,7 +3,7 @@ import { summarizeDesktopControlState } from "../desktop_control_plane.js";
 import { summarizePatientZeroState } from "../patient_zero_plane.js";
 import { Storage } from "../storage.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
-import { buildPrivilegedAccessStatus } from "./privileged_exec.js";
+import { buildPrivilegedAccessStatus, verifyPrivilegedAccess } from "./privileged_exec.js";
 
 const sourceSchema = z.object({
   source_client: z.string().optional(),
@@ -179,6 +179,7 @@ export function patientZeroControl(storage: Storage, input: z.infer<typeof patie
           allow_listen: desktopState.allow_listen,
           operator_note: note,
         });
+        verifyPrivilegedAccess(storage, input);
         return buildPayload(storage);
       }
 

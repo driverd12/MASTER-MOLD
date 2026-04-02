@@ -29,6 +29,10 @@ export type PrivilegedAccessStateRecord = {
   secret_path: string;
   patient_zero_required: true;
   audit_required: boolean;
+  last_verified_at: string | null;
+  last_verification_ok: boolean | null;
+  last_verification_error: string | null;
+  last_secret_fingerprint: string | null;
   last_executed_at: string | null;
   last_actor: string | null;
   last_command: string | null;
@@ -46,6 +50,10 @@ export function getDefaultPrivilegedAccessState(): PrivilegedAccessStateRecord {
     secret_path: path.join(os.homedir(), ".codex", "secrets", "mcagent_admin_password"),
     patient_zero_required: true,
     audit_required: true,
+    last_verified_at: null,
+    last_verification_ok: null,
+    last_verification_error: null,
+    last_secret_fingerprint: null,
     last_executed_at: null,
     last_actor: null,
     last_command: null,
@@ -66,6 +74,11 @@ export function normalizePrivilegedAccessState(value: unknown, updatedAt: string
     secret_path: readString(input.secret_path) ?? base.secret_path,
     patient_zero_required: true,
     audit_required: readBoolean(input.audit_required, base.audit_required),
+    last_verified_at: readString(input.last_verified_at),
+    last_verification_ok:
+      typeof input.last_verification_ok === "boolean" ? input.last_verification_ok : base.last_verification_ok,
+    last_verification_error: readString(input.last_verification_error),
+    last_secret_fingerprint: readString(input.last_secret_fingerprint),
     last_executed_at: readString(input.last_executed_at),
     last_actor: readString(input.last_actor),
     last_command: readString(input.last_command),
@@ -83,6 +96,7 @@ export function summarizePrivilegedAccessState(
     user_exists?: boolean;
     secret_present?: boolean;
     helper_ready?: boolean;
+    secret_fingerprint?: string | null;
   } | null
 ) {
   const runtimeState = runtime && typeof runtime === "object" ? runtime : {};
@@ -90,11 +104,17 @@ export function summarizePrivilegedAccessState(
   const userExists = Boolean(runtimeState.user_exists);
   const secretPresent = Boolean(runtimeState.secret_present);
   const helperReady = Boolean(runtimeState.helper_ready);
+  const secretFingerprint = readString(runtimeState.secret_fingerprint);
+  const verificationFresh =
+    Boolean(state.last_verification_ok) &&
+    Boolean(state.last_verified_at) &&
+    (!secretPresent || state.last_secret_fingerprint === secretFingerprint);
   const rootExecutionReady =
     patientZeroArmed &&
     userExists &&
     secretPresent &&
-    helperReady;
+    helperReady &&
+    verificationFresh;
   const blockers: string[] = [];
   if (!patientZeroArmed) {
     blockers.push("patient_zero_disarmed");
@@ -108,6 +128,13 @@ export function summarizePrivilegedAccessState(
   if (!helperReady) {
     blockers.push("privileged_helper_unavailable");
   }
+  if (secretPresent && helperReady && userExists) {
+    if (state.last_verification_ok === false) {
+      blockers.push("credential_invalid");
+    } else if (!verificationFresh) {
+      blockers.push("credential_unverified");
+    }
+  }
   return {
     account: state.account,
     target_user: state.target_user,
@@ -118,6 +145,10 @@ export function summarizePrivilegedAccessState(
     user_exists: userExists,
     secret_present: secretPresent,
     helper_ready: helperReady,
+    credential_verified: verificationFresh,
+    last_verified_at: state.last_verified_at,
+    last_verification_ok: state.last_verification_ok,
+    last_verification_error: state.last_verification_error,
     root_execution_ready: rootExecutionReady,
     blockers,
     audit_required: state.audit_required,

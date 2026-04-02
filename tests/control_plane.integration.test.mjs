@@ -401,6 +401,7 @@ test("privileged.exec only runs when Patient Zero is armed and logs every privil
     });
     assert.equal(initial.summary.account, "mcagent");
     assert.equal(initial.summary.root_execution_ready, false);
+    assert.equal(initial.summary.credential_verified, false);
     assert.equal(initial.summary.patient_zero_armed, false);
 
     await assert.rejects(
@@ -428,6 +429,7 @@ test("privileged.exec only runs when Patient Zero is armed and logs every privil
     });
     assert.equal(armed.summary.patient_zero_armed, true);
     assert.equal(armed.summary.secret_present, true);
+    assert.equal(armed.summary.credential_verified, true);
     assert.equal(armed.summary.root_execution_ready, true);
 
     const executed = await callTool(client, "privileged.exec", {

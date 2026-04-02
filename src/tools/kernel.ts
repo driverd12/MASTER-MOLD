@@ -2226,6 +2226,8 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
         patient_zero_armed: privilegedAccess.summary.patient_zero_armed,
         secret_present: privilegedAccess.summary.secret_present,
         helper_ready: privilegedAccess.summary.helper_ready,
+        credential_verified: privilegedAccess.summary.credential_verified,
+        last_verification_error: privilegedAccess.summary.last_verification_error,
       },
       tool_catalog: toolCatalogSummary,
       permission_profiles: {

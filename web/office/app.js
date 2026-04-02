@@ -203,7 +203,8 @@
         "Root Lane",
         (privilegedAccess.root_execution_ready ? "ready" : "not-ready") +
           " | account " + String(privilegedAccess.account || "mcagent") +
-          " | secret " + (privilegedAccess.secret_present ? "yes" : "no")
+          " | secret " + (privilegedAccess.secret_present ? "yes" : "no") +
+          " | verified " + (privilegedAccess.credential_verified ? "yes" : "no")
       ]
     );
     els.statusStrip.innerHTML = chips
@@ -432,8 +433,11 @@
       '<div class="metric"><span>Account</span><strong>' + escapeHtml(String(privilegedAccess.account || "mcagent")) + '</strong></div>' +
       '<div class="metric"><span>Target user</span><strong>' + escapeHtml(String(privilegedAccess.target_user || "root")) + '</strong></div>' +
       '<div class="metric"><span>Root ready</span><strong>' + escapeHtml(privilegedAccess.root_execution_ready ? "yes" : "no") + '</strong></div>' +
+      '<div class="metric"><span>Credential verified</span><strong>' + escapeHtml(privilegedAccess.credential_verified ? "yes" : "no") + '</strong></div>' +
       '<div class="metric"><span>Secret present</span><strong>' + escapeHtml(privilegedAccess.secret_present ? "yes" : "no") + '</strong></div>' +
       '<div class="metric"><span>Helper ready</span><strong>' + escapeHtml(privilegedAccess.helper_ready ? "yes" : "no") + '</strong></div>' +
+      '<div class="metric"><span>Last verify</span><strong>' + escapeHtml(String(privilegedAccess.last_verified_at || "none")) + '</strong></div>' +
+      '<div class="metric"><span>Verify error</span><strong>' + escapeHtml(String(privilegedAccess.last_verification_error || "none")) + '</strong></div>' +
       '<div class="metric"><span>Secret path</span><strong>' + escapeHtml(String(privilegedAccess.secret_path || "n/a")) + '</strong></div>' +
       '<div class="metric"><span>Last privileged actor</span><strong>' + escapeHtml(String(privilegedAccess.last_actor || "none")) + '</strong></div>' +
       '<div class="metric"><span>Last privileged command</span><strong>' + escapeHtml(String(privilegedAccess.last_command || "none")) + '</strong></div>' +

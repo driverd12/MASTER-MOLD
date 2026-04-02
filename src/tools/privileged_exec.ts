@@ -18,7 +18,7 @@ const sourceSchema = z.object({
 
 export const privilegedExecSchema = z
   .object({
-    action: z.enum(["status", "execute"]).default("status"),
+    action: z.enum(["status", "verify", "execute"]).default("status"),
     mutation: mutationSchema.optional(),
     command: z.string().min(1).max(400).optional(),
     args: z.array(z.string().max(4000)).max(256).optional(),
@@ -28,10 +28,10 @@ export const privilegedExecSchema = z
     ...sourceSchema.shape,
   })
   .superRefine((value, ctx) => {
-    if (value.action === "execute" && !value.mutation) {
+    if ((value.action === "verify" || value.action === "execute") && !value.mutation) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "mutation is required for action=execute",
+        message: "mutation is required for action=verify and action=execute",
         path: ["mutation"],
       });
     }
@@ -91,7 +91,7 @@ function runCommand(
   };
 }
 
-function actorLabel(input: z.infer<typeof privilegedExecSchema>) {
+function actorLabel(input: Pick<z.infer<typeof privilegedExecSchema>, "source_agent" | "source_client">) {
   return String(input.source_agent || input.source_client || "operator").trim() || "operator";
 }
 
@@ -100,6 +100,18 @@ function secretPathExists(secretPath: string) {
     return fs.statSync(secretPath).isFile();
   } catch {
     return false;
+  }
+}
+
+function readSecretFingerprint(secretPath: string) {
+  try {
+    const stats = fs.statSync(secretPath);
+    if (!stats.isFile()) {
+      return null;
+    }
+    return `${Math.trunc(stats.mtimeMs)}:${stats.size}`;
+  } catch {
+    return null;
   }
 }
 
@@ -142,6 +154,7 @@ export function buildPrivilegedAccessStatus(storage: Storage) {
     user_exists: accountExists(state.account),
     secret_present: secretPresent,
     helper_ready: helperReady(),
+    secret_fingerprint: readSecretFingerprint(state.secret_path),
   });
   return {
     state,
@@ -152,7 +165,7 @@ export function buildPrivilegedAccessStatus(storage: Storage) {
 
 function appendPrivilegedEvent(
   storage: Storage,
-  input: z.infer<typeof privilegedExecSchema>,
+  input: Pick<z.infer<typeof privilegedExecSchema>, "source_agent" | "source_client" | "source_model">,
   eventType: string,
   status: string,
   summary: string,
@@ -169,6 +182,159 @@ function appendPrivilegedEvent(
     source_model: input.source_model,
     source_agent: input.source_agent ?? "operator",
   });
+}
+
+function runPrivilegedHelper(params: {
+  account: string;
+  target_user: string;
+  secret_path: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  timeout_ms: number;
+  env?: Record<string, string>;
+}) {
+  const password = readLocalSecret(params.secret_path);
+  const fingerprint = readSecretFingerprint(params.secret_path);
+  if (!password) {
+    return {
+      ok: false,
+      exitCode: 1,
+      output: "",
+      durationMs: null as number | null,
+      fingerprint,
+      error: `privileged secret missing at ${params.secret_path}; run ./scripts/provision_mcagent_secret.sh`,
+    };
+  }
+  const helperPayload = {
+    account: params.account,
+    target_user: params.target_user,
+    password,
+    command: params.command,
+    args: params.args,
+    cwd: params.cwd,
+    timeout_seconds: Number((params.timeout_ms / 1000).toFixed(3)),
+    env: params.env ?? {},
+  };
+  const helper = runCommand("python3", [privilegedExecScriptPath], {
+    input: JSON.stringify(helperPayload),
+    timeoutMs: params.timeout_ms + 5000,
+  });
+  let parsed: Record<string, unknown> | null = null;
+  if (helper.stdout.trim()) {
+    try {
+      parsed = JSON.parse(helper.stdout.trim()) as Record<string, unknown>;
+    } catch {
+      parsed = null;
+    }
+  }
+  const exitCode =
+    typeof parsed?.code === "number" && Number.isFinite(parsed.code)
+      ? Math.trunc(parsed.code)
+      : typeof helper.status === "number"
+        ? helper.status
+        : 1;
+  const ok = Boolean(parsed?.ok) && exitCode === 0;
+  const output = compactText(
+    String(parsed?.output ?? helper.stderr ?? helper.stdout ?? helper.error ?? ""),
+    8000
+  );
+  const durationMs =
+    typeof parsed?.duration_ms === "number" && Number.isFinite(parsed.duration_ms)
+      ? Math.trunc(parsed.duration_ms)
+      : null;
+  return {
+    ok,
+    exitCode,
+    output,
+    durationMs,
+    fingerprint,
+    error: null as string | null,
+  };
+}
+
+export function verifyPrivilegedAccess(
+  storage: Storage,
+  input: Pick<z.infer<typeof privilegedExecSchema>, "source_agent" | "source_client" | "source_model">
+) {
+  const status = buildPrivilegedAccessStatus(storage);
+  const eventInput = {
+    source_agent: input.source_agent,
+    source_client: input.source_client,
+    source_model: input.source_model,
+  } satisfies Pick<z.infer<typeof privilegedExecSchema>, "source_agent" | "source_client" | "source_model">;
+  const verificationAt = new Date().toISOString();
+  const baseDetails = {
+    account: status.state.account,
+    target_user: status.state.target_user,
+    patient_zero_armed: status.summary.patient_zero_armed,
+    secret_path: status.state.secret_path,
+  };
+
+  if (!status.summary.patient_zero_armed || !status.summary.user_exists || !status.summary.secret_present || !status.summary.helper_ready) {
+    storage.setPrivilegedAccessState({
+      last_verified_at: verificationAt,
+      last_verification_ok: false,
+      last_verification_error: status.summary.blockers.join(", "),
+      last_secret_fingerprint: readSecretFingerprint(status.state.secret_path),
+    });
+    appendPrivilegedEvent(
+      storage,
+      eventInput,
+      "privileged.exec.verify_failed",
+      "error",
+      `Privileged verification failed for ${actorLabel(eventInput)}.`,
+      {
+        ...baseDetails,
+        blockers: status.summary.blockers,
+      }
+    );
+    return buildPrivilegedAccessStatus(storage);
+  }
+
+  appendPrivilegedEvent(
+    storage,
+    eventInput,
+    "privileged.exec.verify_requested",
+    "in_progress",
+    `Privileged verification requested by ${actorLabel(eventInput)}.`,
+    baseDetails
+  );
+  const verification = runPrivilegedHelper({
+    account: status.state.account,
+    target_user: status.state.target_user,
+    secret_path: status.state.secret_path,
+    command: "/usr/bin/id",
+    args: ["-u"],
+    cwd: repoRoot,
+    timeout_ms: 30000,
+  });
+  const verified =
+    process.env.MCP_PRIVILEGED_EXEC_DRY_RUN === "1"
+      ? verification.ok
+      : verification.ok && verification.output.trim() === "0";
+  storage.setPrivilegedAccessState({
+    last_verified_at: verificationAt,
+    last_verification_ok: verified,
+    last_verification_error: verified ? null : compactText(verification.output || verification.error || "verification failed", 400),
+    last_secret_fingerprint: verification.fingerprint,
+  });
+  appendPrivilegedEvent(
+    storage,
+    eventInput,
+    verified ? "privileged.exec.verified" : "privileged.exec.verify_failed",
+    verified ? "completed" : "error",
+    verified
+      ? `Privileged verification completed for ${actorLabel(eventInput)}.`
+      : `Privileged verification failed for ${actorLabel(eventInput)}.`,
+    {
+      ...baseDetails,
+      exit_code: verification.exitCode,
+      duration_ms: verification.durationMs,
+      output_excerpt: compactText(verification.output, 240),
+    }
+  );
+  return buildPrivilegedAccessStatus(storage);
 }
 
 function executePrivilegedCommand(storage: Storage, input: z.infer<typeof privilegedExecSchema>) {
@@ -212,8 +378,7 @@ function executePrivilegedCommand(storage: Storage, input: z.infer<typeof privil
     );
     throw new Error(`configured privileged account '${status.state.account}' is not available on this host`);
   }
-  const password = readLocalSecret(status.state.secret_path);
-  if (!password) {
+  if (!status.summary.secret_present) {
     appendPrivilegedEvent(
       storage,
       input,
@@ -255,45 +420,29 @@ function executePrivilegedCommand(storage: Storage, input: z.infer<typeof privil
   );
 
   const startedAt = new Date().toISOString();
-  const helperPayload = {
+  const helper = runPrivilegedHelper({
     account: status.state.account,
     target_user: status.state.target_user,
-    password,
+    secret_path: status.state.secret_path,
     command,
     args,
     cwd: input.cwd?.trim() || repoRoot,
-    timeout_seconds: Number((input.timeout_ms / 1000).toFixed(3)),
+    timeout_ms: input.timeout_ms,
     env: input.env ?? {},
-  };
-  const helper = runCommand("python3", [privilegedExecScriptPath], {
-    input: JSON.stringify(helperPayload),
-    timeoutMs: input.timeout_ms + 5000,
   });
-  let parsed: Record<string, unknown> | null = null;
-  if (helper.stdout.trim()) {
-    try {
-      parsed = JSON.parse(helper.stdout.trim()) as Record<string, unknown>;
-    } catch {
-      parsed = null;
-    }
+  if (helper.error) {
+    throw new Error(helper.error);
   }
-  const exitCode =
-    typeof parsed?.code === "number" && Number.isFinite(parsed.code)
-      ? Math.trunc(parsed.code)
-      : typeof helper.status === "number"
-        ? helper.status
-        : 1;
-  const ok = Boolean(parsed?.ok) && exitCode === 0;
-  const output = compactText(
-    String(parsed?.output ?? helper.stderr ?? helper.stdout ?? helper.error ?? ""),
-    8000
-  );
-  const durationMs =
-    typeof parsed?.duration_ms === "number" && Number.isFinite(parsed.duration_ms)
-      ? Math.trunc(parsed.duration_ms)
-      : null;
+  const exitCode = helper.exitCode;
+  const ok = helper.ok;
+  const output = helper.output;
+  const durationMs = helper.durationMs;
 
   const nextState = storage.setPrivilegedAccessState({
+    last_verified_at: startedAt,
+    last_verification_ok: ok,
+    last_verification_error: ok ? null : compactText(output || "privileged execution failed", 400),
+    last_secret_fingerprint: helper.fingerprint,
     last_executed_at: startedAt,
     last_actor: actorLabel(input),
     last_command: commandExcerpt,
@@ -337,6 +486,15 @@ function executePrivilegedCommand(storage: Storage, input: z.infer<typeof privil
 export function privilegedExec(storage: Storage, input: z.infer<typeof privilegedExecSchema>) {
   if (input.action === "status") {
     return buildPrivilegedAccessStatus(storage);
+  }
+  if (input.action === "verify") {
+    return runIdempotentMutation({
+      storage,
+      tool_name: "privileged.exec",
+      mutation: input.mutation!,
+      payload: input,
+      execute: () => verifyPrivilegedAccess(storage, input),
+    });
   }
   return runIdempotentMutation({
     storage,

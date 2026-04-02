@@ -762,6 +762,7 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
       },
       privileged_access: {
         root_execution_ready: Boolean(privilegedAccessSummary.root_execution_ready),
+        credential_verified: Boolean(privilegedAccessSummary.credential_verified),
         account: String(privilegedAccessSummary.account ?? "mcagent"),
         target_user: String(privilegedAccessSummary.target_user ?? "root"),
         patient_zero_armed: Boolean(privilegedAccessSummary.patient_zero_armed),
@@ -769,6 +770,12 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
         helper_ready: Boolean(privilegedAccessSummary.helper_ready),
         secret_path: String(privilegedAccessSummary.secret_path ?? ""),
         blockers: asList(privilegedAccessSummary.blockers).map((entry) => String(entry)),
+        last_verified_at: String(privilegedAccessSummary.last_verified_at ?? ""),
+        last_verification_ok:
+          typeof privilegedAccessSummary.last_verification_ok === "boolean"
+            ? privilegedAccessSummary.last_verification_ok
+            : null,
+        last_verification_error: String(privilegedAccessSummary.last_verification_error ?? ""),
         last_executed_at: String(privilegedAccessSummary.last_executed_at ?? ""),
         last_actor: String(privilegedAccessSummary.last_actor ?? ""),
         last_command: String(privilegedAccessSummary.last_command ?? ""),
