@@ -53,6 +53,42 @@ resolve_transport() {
   printf 'stdio\n'
 }
 
+fetch_ready_json() {
+  if [[ -z "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
+    return 0
+  fi
+  curl -fsS \
+    -H "Authorization: Bearer ${MCP_HTTP_BEARER_TOKEN}" \
+    -H "Origin: ${HTTP_ORIGIN}" \
+    "${HTTP_URL%/}/ready" 2>/dev/null || true
+}
+
+bootstrap_status_stdio() {
+  MCP_AUTONOMY_BOOTSTRAP_ON_START=0 \
+    MCP_AUTONOMY_MAINTAIN_ON_START=0 \
+    TRICHAT_BUS_AUTOSTART=0 \
+    MCP_TOOL_CALL_TIMEOUT_MS="${AUTONOMY_STATUS_TIMEOUT_MS:-8000}" \
+    node ./scripts/mcp_tool_call.mjs \
+      --tool autonomy.bootstrap \
+      --args '{"action":"status","fast":true}' \
+      --transport stdio \
+      --stdio-command "${STDIO_COMMAND}" \
+      --stdio-args "${STDIO_ARGS}" \
+      --cwd "${REPO_ROOT}"
+}
+
+bootstrap_status_http() {
+  MCP_TOOL_CALL_TIMEOUT_MS="${AUTONOMY_STATUS_HTTP_TIMEOUT_MS:-15000}" \
+    MCP_HTTP_BEARER_TOKEN="${MCP_HTTP_BEARER_TOKEN}" \
+    node ./scripts/mcp_tool_call.mjs \
+      --tool autonomy.bootstrap \
+      --args '{"action":"status","fast":true}' \
+      --transport http \
+      --url "${HTTP_URL}" \
+      --origin "${HTTP_ORIGIN}" \
+      --cwd "${REPO_ROOT}"
+}
+
 parse_csv_arg() {
   local raw="${1:-}"
   node --input-type=module - "${raw}" <<'NODE'
@@ -260,15 +296,11 @@ NODE
 TRANSPORT="$(resolve_transport)"
 
 if [[ "${ACTION}" == "status" ]]; then
-  BOOTSTRAP_STATUS="$(MCP_TOOL_CALL_TIMEOUT_MS="${AUTONOMY_STATUS_TIMEOUT_MS:-8000}" node ./scripts/mcp_tool_call.mjs --tool autonomy.bootstrap --args '{"action":"status","fast":true}' --transport stdio --stdio-command "${STDIO_COMMAND}" --stdio-args "${STDIO_ARGS}" --cwd "${REPO_ROOT}")"
-  READY_JSON=""
-  if [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
-    READY_JSON="$(
-      curl -fsS \
-        -H "Authorization: Bearer ${MCP_HTTP_BEARER_TOKEN}" \
-        -H "Origin: ${HTTP_ORIGIN}" \
-        "${HTTP_URL%/}/ready" 2>/dev/null || true
-    )"
+  READY_JSON="$(fetch_ready_json)"
+  if [[ -n "${READY_JSON}" ]]; then
+    BOOTSTRAP_STATUS="$(bootstrap_status_http)"
+  else
+    BOOTSTRAP_STATUS="$(bootstrap_status_stdio)"
   fi
   if [[ -n "${READY_JSON}" ]]; then
     MAINTAIN_STATUS="$(python3 - "${READY_JSON}" <<'PY'
