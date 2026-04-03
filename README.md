@@ -20,6 +20,39 @@ The runtime also includes first-class TriChat orchestration tools (`trichat.*`) 
 - `feature.flag` for durable rollout state
 - `desktop.*`, `patient.zero`, and `privileged.exec` for explicit local desktop and privileged execution lanes
 
+## Documentation Hub
+
+Start here if you want the current docs map:
+
+- [Documentation Index](./docs/README.md)
+- [Quick Setup](./docs/SETUP.md)
+- [System Interconnects](./docs/SYSTEM_INTERCONNECTS.md)
+- [IDE + Agent Setup Guide](./docs/IDE_AGENT_SETUP.md)
+- [Transport Connection Guide](./docs/CONNECT.md)
+- [Provider Bridge Matrix](./docs/PROVIDER_BRIDGE_MATRIX.md)
+
+Root-level companion files intentionally left outside `docs/`:
+
+- `AGENTS.md` for coding-agent operating instructions
+- `GEMINI.md` for Gemini-specific local notes
+
+## Layered Runtime Map
+
+```mermaid
+flowchart TD
+  Operator["Operator Surfaces<br/>README / docs / Agent Office GUI / tmux / shell wrappers"] --> Clients["IDE + Terminal Clients<br/>Codex / Cursor / Gemini CLI / GitHub Copilot CLI / shell sessions / gh"]
+  Clients --> Transport["MCP Transport Layer<br/>HTTP / STDIO / launchd / app launchers"]
+  Transport --> Kernel["MCP Kernel Layer<br/>toolRegistry / server.ts / core tools / office snapshot"]
+  Kernel --> Control["Control-Plane Layer<br/>goal.* / plan.* / task.* / kernel.summary / operator.brief / tool.search / permission.profile / warm.cache / feature.flag / budget.ledger"]
+  Kernel --> Autonomy["Autonomy Fabric Layer<br/>autonomy.maintain / autonomy.command / goal.autorun / reaction.engine / eval / optimizer"]
+  Kernel --> Orchestration["Orchestration Fabric Layer<br/>trichat.* / council turns / tmux controller / runtime.worker / worker.fabric / model.router / provider.bridge"]
+  Kernel --> Local["Local Host Control Layer<br/>desktop.* / patient.zero / privileged.exec"]
+  Control --> State["Durable State Layer<br/>SQLite / warm cache / artifacts / runs / events / daemon configs / local secrets"]
+  Autonomy --> State
+  Orchestration --> State
+  Local --> State
+```
+
 ## MCP Capability Wireframe
 
 This is the operator-facing map of the current server surface.
@@ -153,6 +186,93 @@ flowchart LR
 ```
 
 Full diagrams for demos and technical walk-throughs: [System Interconnects](./docs/SYSTEM_INTERCONNECTS.md)
+
+## IDE, CLI, and Office Flow
+
+```mermaid
+flowchart LR
+  subgraph Entry["Entry Points"]
+    OfficeGUI["Agent Office GUI"]
+    OfficeTUI["Agent Office tmux"]
+    Suite["Agentic Suite.app"]
+    Shell["Terminal sessions<br/>bash / zsh / shell wrappers"]
+    Codex["Codex"]
+    Cursor["Cursor"]
+    Gemini["Gemini CLI"]
+    Copilot["GitHub Copilot CLI"]
+    GH["GitHub CLI (gh)"]
+  end
+
+  subgraph MCP["Local MCP Surfaces"]
+    HTTP["HTTP<br/>/ready /office/api/* / MCP POST"]
+    STDIO["STDIO<br/>client-launched MCP sessions"]
+  end
+
+  subgraph Runtime["MCPlayground Runtime"]
+    Registry["tool registry + capability discovery"]
+    Brief["kernel.summary / operator.brief / office.snapshot"]
+    Council["trichat council + autopilot"]
+    Workers["runtime.worker / worker.fabric / tmux lanes"]
+    LocalCtl["desktop.* / patient.zero / privileged.exec"]
+  end
+
+  subgraph State["State + Evidence"]
+    DB["SQLite"]
+    Cache["warm cache"]
+    Events["event trail / runs / artifacts / learning"]
+  end
+
+  OfficeGUI --> HTTP
+  OfficeTUI --> HTTP
+  Suite --> HTTP
+  Shell --> HTTP
+  Shell --> STDIO
+  Codex --> STDIO
+  Cursor --> STDIO
+  Gemini --> STDIO
+  Copilot --> STDIO
+  GH --> Shell
+
+  HTTP --> Registry
+  STDIO --> Registry
+  Registry --> Brief
+  Registry --> Council
+  Registry --> Workers
+  Registry --> LocalCtl
+  Brief --> DB
+  Council --> DB
+  Workers --> DB
+  LocalCtl --> DB
+  Brief --> Cache
+  Council --> Events
+  Workers --> Events
+  LocalCtl --> Events
+```
+
+## Patient Zero Toolkit Flow
+
+```mermaid
+flowchart TD
+  Operator["Operator"] --> Arm["patient.zero enable"]
+  Arm --> PZ["Patient Zero posture"]
+
+  PZ --> Desktop["Desktop lanes<br/>observe / act / listen / Safari"]
+  PZ --> Root["Privileged lane<br/>mcagent -> root"]
+  PZ --> Maintain["autonomy.maintain<br/>self-drive on"]
+  PZ --> Autopilot["trichat.autopilot<br/>execute enabled"]
+
+  Autopilot --> Toolkit["Terminal toolkit<br/>codex / cursor / gemini / gh"]
+  Autopilot --> Bridges["Bridge-capable agents<br/>codex / cursor / gemini / github-copilot"]
+  Autopilot --> Locals["Local office agents<br/>directors / leaves / local-imprint"]
+
+  Desktop --> Audit["event.* / run.* / operator surfaces"]
+  Root --> Audit
+  Maintain --> Audit
+  Autopilot --> Audit
+  Toolkit --> Audit
+  Bridges --> Audit
+  Locals --> Audit
+```
 
 ## Why This Template Exists
 
@@ -582,6 +702,8 @@ Pack authoring guide: [Domain Packs](./docs/DOMAIN_PACKS.md)
 
 Connection examples and client setup:
 
+- [Documentation Index](./docs/README.md)
+- [Quick Setup](./docs/SETUP.md)
 - [IDE + Agent Setup Guide](./docs/IDE_AGENT_SETUP.md)
 - [Transport Connection Guide](./docs/CONNECT.md)
 - [Coworker Quickstart (Cursor + Codex)](./docs/COWORKER_QUICKSTART_CURSOR_CODEX.md)
@@ -739,7 +861,11 @@ TRICHAT_TMUX_DRY_RUN=1 node scripts/mcp_tool_call.mjs \
 - `src/server.ts` core MCP runtime and tool registration
 - `src/tools/` core reusable tools
 - `src/domain-packs/` optional domain modules
+- `bridges/` bridge adapters and client-facing helper lanes
+- `config/` roster, bridge, and runtime configuration
 - `scripts/` operational scripts and smoke checks
-- `docs/` architecture, setup, and fork guides
+- `docs/` centralized human-facing docs, setup guides, and architecture diagrams
 - `tests/` integration and persistence tests
 - `data/` local runtime state and SQLite database
+- `web/office/` browser-based Agent Office GUI
+- `ui/` terminal-facing dashboard surfaces

@@ -1,6 +1,8 @@
 # System Interconnects
 
-This document is the current operator/demo reference for how the local MCP runtime, office surfaces, IDE bridges, autonomy fabric, and host-control lanes connect.
+This document is the current operator/demo reference for how the local MCP runtime, office surfaces, IDE bridges, terminal sessions, autonomy fabric, orchestration fabric, and host-control lanes connect.
+
+Start here for the centralized docs map: [Documentation Index](./README.md)
 
 ## 1. Control Plane Topology
 
@@ -19,6 +21,7 @@ flowchart LR
     Cursor["Cursor"]
     Gemini["Gemini CLI"]
     Copilot["GitHub Copilot CLI"]
+    GH["GitHub CLI"]
     Helper["scripts/mcp_tool_call.mjs"]
   end
 
@@ -51,6 +54,7 @@ flowchart LR
   Cursor --> STDIO
   Gemini --> STDIO
   Copilot --> STDIO
+  GH --> CLI
   Helper --> STDIO
   Helper --> HTTP
 
@@ -71,33 +75,132 @@ flowchart LR
   Local --> Secrets
 ```
 
-## 2. Autonomy and Agentic Fabric
+## 2. Layered Runtime Stack
 
 ```mermaid
 flowchart TD
-  Intake["Operator intake<br/>GUI / autonomy.ide_ingress / autonomy.command"] --> Goal["goal.create / goal.execute"]
-  Goal --> Plan["plan.* / task.compile / playbook.*"]
-  Plan --> Dispatch["plan.dispatch / dispatch.autorun / goal.autorun"]
-
-  Dispatch --> Council["trichat.autopilot / council turn / confidence gate"]
-  Council --> Directors["implementation-director / research-director / verification-director"]
-  Directors --> Leafs["code-smith / research-scout / quality-guard / local-imprint"]
-
-  Dispatch --> Workers["runtime.worker / worker.fabric / tmux controller"]
-  Workers --> LocalExec["direct shell / local commands / local MCP tools"]
-  Workers --> Bridges["provider.bridge / routed external-capable bridges"]
-
-  Council --> Evidence["run.* / event.* / artifact.* / experiment.*"]
-  Workers --> Evidence
-  LocalExec --> Evidence
-  Bridges --> Evidence
-
-  Evidence --> Learn["agent.learning.* / knowledge.* / memory.* / transcript.*"]
-  Learn --> Council
-  Learn --> Goal
+  Surface["Surface Layer<br/>README / docs / GUI / TUI / apps / shell wrappers"] --> Client["Client Layer<br/>Codex / Cursor / Gemini CLI / GitHub Copilot CLI / terminal sessions / gh"]
+  Client --> Transport["Transport Layer<br/>HTTP / STDIO / launchd / app launchers"]
+  Transport --> Kernel["Kernel Layer<br/>server.ts / tool registry / MCP handlers / office snapshot"]
+  Kernel --> Control["Control-Plane Layer<br/>goal.* / plan.* / task.* / operator.brief / kernel.summary"]
+  Kernel --> Policy["Governance Layer<br/>policy / preflight / postflight / ADR / decisions / incidents"]
+  Kernel --> Autonomy["Autonomy Fabric Layer<br/>autonomy.maintain / autonomy.command / goal.autorun / eval / optimizer"]
+  Kernel --> Orchestration["Orchestration Fabric Layer<br/>trichat.* / worker.fabric / runtime.worker / tmux controller / model.router / provider.bridge"]
+  Kernel --> Host["Host-Control Layer<br/>desktop.* / patient.zero / privileged.exec"]
+  Control --> State["State Layer<br/>SQLite / events / artifacts / ledgers / daemon configs / cache / secrets"]
+  Policy --> State
+  Autonomy --> State
+  Orchestration --> State
+  Host --> State
 ```
 
-## 3. Office + Bridge Connectivity
+## 3. IDE and Terminal Session Flow
+
+```mermaid
+flowchart LR
+  subgraph Sessions["Sessions and Clients"]
+    Shell["Terminal shells"]
+    Codex["Codex app / CLI session"]
+    Cursor["Cursor IDE"]
+    Gemini["Gemini CLI"]
+    Copilot["GitHub Copilot CLI"]
+    GH["GitHub CLI"]
+  end
+
+  subgraph Bridges["Bridge and Transport Surface"]
+    STDIO["STDIO sessions"]
+    HTTP["HTTP shared runtime"]
+    Provider["provider.bridge diagnostics + install/export"]
+  end
+
+  subgraph Server["MCP Server"]
+    Registry["toolRegistry / tool.search"]
+    Office["office.snapshot / office gui snapshot"]
+    Council["trichat.autopilot / trichat.turn / trichat.bus"]
+    Brief["kernel.summary / operator.brief"]
+  end
+
+  Shell --> HTTP
+  Shell --> STDIO
+  Codex --> STDIO
+  Cursor --> STDIO
+  Gemini --> STDIO
+  Copilot --> STDIO
+  GH --> Shell
+  Provider --> HTTP
+  STDIO --> Registry
+  HTTP --> Registry
+  Registry --> Office
+  Registry --> Council
+  Registry --> Brief
+```
+
+## 4. Autonomy, Orchestration, and Execution Fabrics
+
+```mermaid
+flowchart TD
+  subgraph Intake["Operator and IDE Intake"]
+    GUI["Agent Office GUI"]
+    TUI["Agent Office tmux"]
+    Ingress["autonomy.ide_ingress / autonomy.command / shell wrappers"]
+    IDEs["Codex / Cursor / Gemini CLI / GitHub Copilot CLI"]
+  end
+
+  subgraph Control["Control Plane"]
+    Goal["goal.* / plan.* / task.*"]
+    Brief["kernel.summary / operator.brief / office.snapshot"]
+    Flags["permission.profile / feature.flag / warm.cache / budget.ledger"]
+  end
+
+  subgraph Autonomy["Autonomy Fabric"]
+    Maintain["autonomy.maintain"]
+    Autorun["goal.autorun / dispatch.autorun"]
+    Eval["eval.* / optimizer / reaction.engine"]
+  end
+
+  subgraph Orchestration["Orchestration Fabric"]
+    Council["trichat.autopilot / council turn"]
+    Router["model.router / provider.bridge"]
+    Workers["worker.fabric / runtime.worker / tmux controller"]
+  end
+
+  subgraph Execution["Execution Lanes"]
+    LocalTools["Local MCP tools"]
+    CLI["Terminal CLI toolkit<br/>codex / cursor / gemini / gh"]
+    Agents["Local office agents<br/>directors / leaves / local-imprint"]
+    Desktop["desktop.* / patient.zero / privileged.exec"]
+  end
+
+  subgraph State["State and Evidence"]
+    DB["SQLite / daemon_configs / tasks / plans"]
+    Events["events / runs / artifacts / learning"]
+    Cache["warm cache / office snapshot cache"]
+  end
+
+  GUI --> Brief
+  TUI --> Brief
+  Ingress --> Goal
+  IDEs --> Goal
+  Goal --> Maintain
+  Goal --> Council
+  Brief --> Cache
+  Flags --> DB
+  Maintain --> Autorun
+  Maintain --> Eval
+  Autorun --> Council
+  Council --> Router
+  Council --> Workers
+  Router --> CLI
+  Workers --> Agents
+  Workers --> LocalTools
+  Desktop --> Events
+  CLI --> Events
+  Agents --> Events
+  LocalTools --> Events
+  Events --> DB
+```
+
+## 5. Office + Bridge Connectivity
 
 ```mermaid
 flowchart LR
@@ -113,6 +216,7 @@ flowchart LR
     GeminiBridge["Gemini bridge"]
     CopilotBridge["GitHub Copilot bridge"]
     CodexLane["Codex lane"]
+    ImprintLane["Local Imprint lane"]
   end
 
   subgraph Fabric["Autonomy Fabric"]
@@ -132,14 +236,16 @@ flowchart LR
   Provider --> GeminiBridge
   Provider --> CopilotBridge
   Sessions --> CodexLane
+  Sessions --> ImprintLane
   RuntimeWorkers --> CodexLane
   RuntimeWorkers --> CursorBridge
   RuntimeWorkers --> GeminiBridge
   RuntimeWorkers --> CopilotBridge
+  RuntimeWorkers --> ImprintLane
   Router --> Provider
 ```
 
-## 4. Local Host Control and Patient Zero
+## 6. Local Host Control and Patient Zero
 
 ```mermaid
 flowchart TD
@@ -147,7 +253,13 @@ flowchart TD
   Arm --> PZ["Patient Zero armed posture"]
 
   PZ --> Desktop["desktop.control / desktop.observe / desktop.act / desktop.listen"]
+  PZ --> Browser["Safari / browser actuation"]
   PZ --> Verify["privileged.exec action=verify"]
+  PZ --> Toolkit["Terminal toolkit<br/>codex / cursor / gemini / gh"]
+  PZ --> AgentPool["Local and bridge agents<br/>codex / cursor / gemini / github-copilot / local-imprint / directors / leaves"]
+  PZ --> Maintain["autonomy.maintain self-drive"]
+  PZ --> Autopilot["trichat.autopilot execute"]
+
   Verify --> Secret["~/.codex/secrets/mcagent_admin_password"]
   Verify --> Account["mcagent account"]
   Account --> Root["target user: root"]
@@ -155,12 +267,16 @@ flowchart TD
   Root --> Exec["privileged.exec action=execute"]
   Exec --> Audit["event.* runtime audit trail"]
   Desktop --> Audit
-  PZ --> Audit
+  Browser --> Audit
+  Toolkit --> Audit
+  AgentPool --> Audit
+  Maintain --> Audit
+  Autopilot --> Audit
 
   Audit --> Office["Agent Office GUI / operator.brief / kernel.summary"]
 ```
 
-## 5. Operational Notes
+## 7. Operational Notes
 
 - `/ready` is the authoritative HTTP readiness gate for the office launcher and automation wrappers.
 - `/health` is intentionally cheap and only proves that the listener is alive.
@@ -169,4 +285,9 @@ flowchart TD
   - Patient Zero is armed.
   - the `mcagent` secret exists outside the repo and SQLite.
   - the `privileged.exec` verifier has proved the `mcagent -> root` path.
+- When Patient Zero is armed, it also widens the active autonomy toolkit by enabling:
+  - maintain self-drive
+  - autopilot execute posture
+  - the terminal CLI toolkit (`codex`, `cursor`, `gemini`, `gh`)
+  - the local and bridge specialist pool, including `local-imprint`
 - Every privileged verification and execution attempt is written into the runtime event trail.
