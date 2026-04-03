@@ -1,5 +1,7 @@
 # MCPlayground Core Template
 
+![Patient Zero pixel art](./docs/assets/patient-zero-pixel.svg)
+
 MCPlayground Core Template is a local-first MCP server runtime designed to be reused across domains.
 
 The repository is intentionally split into two layers:
@@ -42,6 +44,7 @@ Start here if you want the current docs map:
 - [IDE + Agent Setup Guide](./docs/IDE_AGENT_SETUP.md)
 - [Transport Connection Guide](./docs/CONNECT.md)
 - [Provider Bridge Matrix](./docs/PROVIDER_BRIDGE_MATRIX.md)
+- [TriChat Compatibility Reference](./docs/TRICHAT_COMPATIBILITY_REFERENCE.md)
 
 Root-level companion files intentionally left outside `docs/`:
 
@@ -444,85 +447,15 @@ npm run start:core:http
 
 The older `trichat:*` script names are still present for compatibility, but the user-facing surface is the Agent Office and its council/autopilot fabric.
 
-Launch the BubbleTea TUI from the terminal:
+Quick launch:
 
 ```bash
 npm run trichat:tui
+npm run trichat:office:gui
+npm run autonomy:command -- "Take this objective from intake to durable execution."
 ```
 
-Plain chat now uses direct council replies by default. Use `/plan <message>` inside the TUI when you explicitly want the structured planning/orchestration path.
-
-Default roster:
-
-```bash
-codex,cursor,local-imprint
-```
-
-Switch the active council roster without editing code:
-
-```bash
-TRICHAT_AGENT_IDS=gemini,claude,local-imprint npm run trichat:tui
-```
-
-Launch the TUI against the local HTTP runtime:
-
-```bash
-npm run trichat:tui:http
-```
-
-Install or refresh the macOS app wrapper:
-
-```bash
-npm run trichat:app:install
-```
-
-Run launcher and bridge diagnostics before a demo:
-
-```bash
-npm run trichat:doctor
-```
-
-Inspect the effective roster:
-
-```bash
-npm run trichat:roster
-node ./scripts/trichat_roster.mjs
-node ./scripts/mcp_tool_call.mjs --tool trichat.roster --args '{}' --transport stdio --stdio-command node --stdio-args dist/server.js --cwd .
-```
-
-Clean stale probe threads, requeue eligible old autopilot failures, and prune untracked routine autopilot ADR residue:
-
-```bash
-npm run ring-leader:cleanup
-```
-
-Send one top-level objective into the autonomous stack so it bootstraps readiness, opens a durable goal, compiles bounded work, dispatches execution, and keeps background continuation alive:
-
-```bash
-npm run autonomy:command -- "Map the repo, implement the requested change, verify it, and keep going until the goal is truly complete."
-```
-
-Mirror an IDE/operator objective into transcript continuity, the office thread, and the same durable autonomous execution lane:
-
-```bash
-npm run autonomy:ide -- "Take what I say in the IDE, record it into MCP continuity, show it in the office, and run with it in the background."
-```
-
-Optional shell flags are available through the wrapper, for example:
-
-```bash
-./scripts/autonomy_command.sh --title "Morning autonomy smoke" --tag demo --accept "Verification evidence is attached." -- "Take this objective from intake to durable execution."
-./scripts/autonomy_ide_ingress.sh --session codex-ide --thread trichat-autopilot-internal --tag ide -- "Mirror this IDE objective into the office and keep the background workflow moving."
-```
-
-If you do not explicitly override `trichat_agent_ids`, IDE ingress now defaults to a local-first council:
-
-- `implementation-director`
-- `research-director`
-- `verification-director`
-- `local-imprint`
-
-That keeps the first attempt inside your local house agents before escalation.
+Full legacy command reference, roster commands, doctor flows, and validation examples now live in [TriChat Compatibility Reference](./docs/TRICHAT_COMPATIBILITY_REFERENCE.md).
 
 ## Agent Office Dashboard
 
@@ -552,21 +485,7 @@ npm run autonomy:intake:shell
 
 The intake desk now uses the same `autonomy.ide_ingress` path as the IDE wrapper, so office intake, Codex/IDE intake, transcript continuity, thread mirroring, memory capture, and durable background execution all stay on one real lane.
 
-This dashboard is MCP-backed and reads live state from:
-
-- `trichat.roster`
-- `trichat.workboard`
-- `trichat.tmux_controller`
-- `trichat.bus`
-- `trichat.adapter_telemetry`
-- `task.summary`
-- `trichat.summary`
-- `kernel.summary`
-- `patient.zero`
-- `privileged.exec`
-- `budget.ledger`
-- `feature.flag`
-- `warm.cache`
+This dashboard is MCP-backed and reads live state from office/orchestration tools, kernel summaries, Patient Zero state, privileged execution state, budgets, flags, and warm-cache surfaces. The compatibility-level tool list is kept in [TriChat Compatibility Reference](./docs/TRICHAT_COMPATIBILITY_REFERENCE.md).
 
 The `/office/` GUI is served directly by the HTTP transport. Under normal polling it prefers cached office snapshots; explicit operator actions and forced refreshes are the only paths that demand live snapshot work.
 
@@ -607,6 +526,8 @@ Keyboard controls inside the TUI:
 - `p` pause
 - `t` cycle theme
 - `q` quit
+
+Legacy command names, old app-installer naming, and compatibility branding notes now live in [TriChat Compatibility Reference](./docs/TRICHAT_COMPATIBILITY_REFERENCE.md).
 
 ## Borrowed Wins
 
@@ -813,62 +734,9 @@ npm run trichat:dogfood
 npm run trichat:soak:gate -- --hours 1 --interval-seconds 60
 ```
 
-Background upkeep is real, not advisory: launchd keepalive now drives `autonomy.maintain`, which keeps the control plane ready, keeps `goal.autorun_daemon` alive, refreshes bounded learning visibility, maintains tmux worker lanes, and runs the default eval suite only when it is due.
+Background upkeep is real, not advisory: launchd keepalive drives `autonomy.maintain`, which keeps the control plane ready, keeps `goal.autorun_daemon` alive, refreshes bounded learning visibility, maintains tmux worker lanes, and runs the default eval suite only when it is due.
 
-Alternate roster validation example:
-
-```bash
-TRICHAT_AGENT_IDS=gemini,claude,local-imprint npm run trichat:doctor
-```
-
-Office tmux controller dry-run example:
-
-```bash
-TRICHAT_TMUX_DRY_RUN=1 node scripts/mcp_tool_call.mjs \
-  --tool trichat.tmux_controller \
-  --args '{"action":"start","mutation":{"idempotency_key":"demo-start","side_effect_fingerprint":"demo-start"}}'
-```
-
-`trichat.tmux_controller` status/dispatch responses include a lightweight live dashboard payload for TUIs:
-
-- `dashboard.worker_load` (queue/load per worker)
-- `dashboard.worker_load[].lane_state` + `lane_signal` (idle/working/blocked/error lane detection from pane captures)
-- `dashboard.queue_age_seconds` + `dashboard.queue_depth`
-- `dashboard.failure_class` + `dashboard.failure_count`
-- `action="maintain"` performs unattended upkeep: pane sync, optional queue-driven worker scale-up, and blocked-lane nudge attempts for continuous long-running sessions
-
-Execution safety hardening:
-
-- protected DB artifacts (`hub.sqlite`, `-wal`, `-shm`, `-journal`) are now blocked from autopilot command plans and tmux dispatch tasks
-- direct autopilot shell execution also enforces this guardrail as a final pre-spawn check
-- local write-producing MCP tools (`adr.create`, `imprint.inbox.enqueue`, `imprint.snapshot`) now enforce protected-path checks before writing
-
-The office TUI interactive `/execute` path can route via tmux allocator (`TRICHAT_EXECUTE_BACKEND=auto|tmux|direct`) using:
-
-- `TRICHAT_TMUX_SESSION_NAME`
-- `TRICHAT_TMUX_WORKER_COUNT`
-- `TRICHAT_TMUX_MAX_QUEUE_PER_WORKER`
-- `TRICHAT_TMUX_SYNC_AFTER_DISPATCH`
-- `TRICHAT_TMUX_LOCK_LEASE_SECONDS`
-
-Optional fanout auto-dispatch (no manual `/execute`) can be enabled with `TRICHAT_AUTO_EXECUTE_AFTER_DECISION=1`.
-This path is tmux-dispatch-first for snappiness and will skip with a clear status if no runnable command plan is present.
-Use `TRICHAT_AUTO_EXECUTE_CYCLES` and `TRICHAT_AUTO_EXECUTE_BREAKER_FAILURES` to run bounded review/fix/feature/verify cycles with breaker halts.
-
-Autopilot can use tmux nested execution directly (`execute_backend=tmux|auto`) with dynamic worker budgeting from command complexity/priority:
-
-```bash
-TRICHAT_TMUX_DRY_RUN=1 node scripts/mcp_tool_call.mjs \
-  --tool trichat.autopilot \
-  --args '{
-    "action":"run_once",
-    "mutation":{"idempotency_key":"demo-autopilot","side_effect_fingerprint":"demo-autopilot"},
-    "execute_backend":"tmux",
-    "tmux_session_name":"trichat-autopilot-demo",
-    "tmux_worker_count":4,
-    "tmux_auto_scale_workers":true
-  }'
-```
+Extended validation flows, tmux dry-run examples, legacy env vars, and older compatibility-named autopilot examples now live in [TriChat Compatibility Reference](./docs/TRICHAT_COMPATIBILITY_REFERENCE.md).
 
 ## Repository Layout
 

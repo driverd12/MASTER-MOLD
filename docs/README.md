@@ -23,6 +23,7 @@ This is the centralized human-facing docs hub for MCPlayground Core Template.
 - [Coworker Quickstart (Cursor + Codex)](./COWORKER_QUICKSTART_CURSOR_CODEX.md)
 - [IDE + Agent Setup Guide](./IDE_AGENT_SETUP.md)
 - [Transport Connection Guide](./CONNECT.md)
+- [TriChat Compatibility Reference](./TRICHAT_COMPATIBILITY_REFERENCE.md)
 
 ## Methodology and Execution Design
 
@@ -56,4 +57,3 @@ Tool-specific companion files that remain at repo root on purpose:
 
 - `AGENTS.md`
 - `GEMINI.md`
-
