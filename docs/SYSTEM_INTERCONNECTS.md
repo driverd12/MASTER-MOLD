@@ -18,6 +18,7 @@ flowchart LR
 
   subgraph ClientBridges["IDE + Provider Bridges"]
     Codex["Codex desktop / CLI"]
+    Claude["Claude CLI"]
     Cursor["Cursor"]
     Gemini["Gemini CLI"]
     Copilot["GitHub Copilot CLI"]
@@ -79,7 +80,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-  Surface["Surface Layer<br/>README / docs / GUI / TUI / apps / shell wrappers"] --> Client["Client Layer<br/>Codex / Cursor / Gemini CLI / GitHub Copilot CLI / terminal sessions / gh"]
+  Surface["Surface Layer<br/>README / docs / GUI / TUI / apps / shell wrappers"] --> Client["Client Layer<br/>Codex / Claude CLI / Cursor / Gemini CLI / GitHub Copilot CLI / terminal sessions / gh"]
   Client --> Transport["Transport Layer<br/>HTTP / STDIO / launchd / app launchers"]
   Transport --> Kernel["Kernel Layer<br/>server.ts / tool registry / MCP handlers / office snapshot"]
   Kernel --> Control["Control-Plane Layer<br/>goal.* / plan.* / task.* / operator.brief / kernel.summary"]
@@ -101,6 +102,7 @@ flowchart LR
   subgraph Sessions["Sessions and Clients"]
     Shell["Terminal shells"]
     Codex["Codex app / CLI session"]
+    Claude["Claude CLI"]
     Cursor["Cursor IDE"]
     Gemini["Gemini CLI"]
     Copilot["GitHub Copilot CLI"]
@@ -123,6 +125,7 @@ flowchart LR
   Shell --> HTTP
   Shell --> STDIO
   Codex --> STDIO
+  Claude --> STDIO
   Cursor --> STDIO
   Gemini --> STDIO
   Copilot --> STDIO
@@ -143,7 +146,7 @@ flowchart TD
     GUI["Agent Office GUI"]
     TUI["Agent Office tmux"]
     Ingress["autonomy.ide_ingress / autonomy.command / shell wrappers"]
-    IDEs["Codex / Cursor / Gemini CLI / GitHub Copilot CLI"]
+    IDEs["Codex / Claude CLI / Cursor / Gemini CLI / GitHub Copilot CLI"]
   end
 
   subgraph Control["Control Plane"]

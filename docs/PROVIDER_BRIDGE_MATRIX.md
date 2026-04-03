@@ -36,6 +36,7 @@ Override with explicit `trichat_agent_ids` only when you intentionally want a di
 | Client / Provider | Connects into MCP | Ring leader can query outward | Local-only transport possible | Notes |
 | --- | --- | --- | --- | --- |
 | Codex | Yes | Yes | Yes for MCP, no for frontier model inference | Inbound via Codex MCP config; outward via `bridges/codex_bridge.py` |
+| Claude CLI | Yes | Yes | Yes for MCP transport, no for Claude model inference | Inbound via native `claude mcp add` / `add-json`; defaults to `stdio` on this host for local compatibility; outward via `bridges/claude_bridge.py`; live model use still depends on Claude auth state |
 | Cursor | Yes | Yes | Yes for MCP, no for cloud model inference | Inbound via both `~/.cursor/mcp.json` and workspace-local `.cursor/mcp.json`; outward via `bridges/cursor_bridge.py` |
 | Gemini CLI | Yes | Yes | Yes for MCP transport, no for Gemini model inference | Inbound via `~/.gemini/settings.json`; standalone `gemini` CLI binary; defaults to `stdio` for MCP reliability; outward via `bridges/gemini_bridge.py` |
 | GitHub Copilot CLI | Yes | Yes | Yes for MCP transport, no for Copilot model inference | Inbound via `~/.copilot/mcp-config.json`; current official standalone CLI is `copilot`; outbound council consultation is available through `bridges/copilot_bridge.py`, with MCP servers disabled on the Copilot council prompt path because the CLI rejects the full local tool catalog shape |
@@ -79,7 +80,7 @@ Codex install still uses the dedicated script:
 - gives `autonomy.bootstrap` the same bridge/backend truth so the control plane can seed hosted backends automatically
 - lets local-first councils stay primary while `autonomy.command`, `goal.execute`, and `plan.dispatch` add routed hosted agents only when the router says they are relevant
 - exports ready-to-import config snippets and a truthful ChatGPT remote manifest
-- installs the supported local JSON config paths for Cursor, Gemini CLI, and GitHub Copilot CLI, including workspace-local `.cursor/mcp.json`
+- installs the supported local client config paths for Claude CLI, Cursor, Gemini CLI, and GitHub Copilot CLI, including workspace-local `.cursor/mcp.json`
 - diagnoses bridge truth without conflating “configured” and “runtime connected”
 - preserves `autonomy.ide_ingress` as the one canonical ingress lane
 

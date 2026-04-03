@@ -30,7 +30,7 @@ When enabled, Patient Zero is the mode that ties the stack together:
 
 - office and council orchestration
 - autonomous continuation through `autonomy.maintain`
-- CLI and IDE bridge usage across Codex, Cursor, Gemini CLI, GitHub Copilot CLI, and `gh`
+- CLI and IDE bridge usage across Codex, Claude CLI, Cursor, Gemini CLI, GitHub Copilot CLI, and `gh`
 - local desktop/browser/root-capable host-control lanes
 - full auditability through runtime events, runs, ledgers, and operator surfaces
 
@@ -55,7 +55,7 @@ Root-level companion files intentionally left outside `docs/`:
 
 ```mermaid
 flowchart TD
-  Operator["Operator Surfaces<br/>README / docs / Agent Office GUI / tmux / shell wrappers"] --> Clients["IDE + Terminal Clients<br/>Codex / Cursor / Gemini CLI / GitHub Copilot CLI / shell sessions / gh"]
+  Operator["Operator Surfaces<br/>README / docs / Agent Office GUI / tmux / shell wrappers"] --> Clients["IDE + Terminal Clients<br/>Codex / Claude CLI / Cursor / Gemini CLI / GitHub Copilot CLI / shell sessions / gh"]
   Clients --> Transport["MCP Transport Layer<br/>HTTP / STDIO / launchd / app launchers"]
   Transport --> Kernel["MCP Kernel Layer<br/>toolRegistry / server.ts / core tools / office snapshot"]
   Kernel --> Control["Control-Plane Layer<br/>goal.* / plan.* / task.* / kernel.summary / operator.brief / tool.search / permission.profile / warm.cache / feature.flag / budget.ledger"]
@@ -137,6 +137,7 @@ flowchart LR
 
   subgraph Clients["IDE + Bridge Clients"]
     Codex["Codex"]
+    Claude["Claude CLI"]
     Cursor["Cursor"]
     Gemini["Gemini CLI"]
     Copilot["GitHub Copilot CLI"]
@@ -212,6 +213,7 @@ flowchart LR
     Suite["Agentic Suite.app"]
     Shell["Terminal sessions<br/>bash / zsh / shell wrappers"]
     Codex["Codex"]
+    Claude["Claude CLI"]
     Cursor["Cursor"]
     Gemini["Gemini CLI"]
     Copilot["GitHub Copilot CLI"]
@@ -398,6 +400,7 @@ npm run providers:diagnose -- claude-cli gemini-cli cursor github-copilot-cli
 Notes:
 
 - Claude CLI now defaults to stdio MCP transport on this host for better local compatibility while still mapping to the `claude` office agent and `autonomy.ide_ingress`.
+- Claude model use still depends on Claude Code being authenticated on the host; `provider.bridge diagnose` distinguishes configured MCP install from live authenticated runtime.
 - Gemini CLI now installs with an explicit trusted stdio config, working directory, and timeout in `~/.gemini/settings.json`.
 - Cursor is validated as configured on this host, but runtime MCP status still has to be checked in the Cursor UI because Cursor does not expose a local MCP status CLI on this machine.
 
@@ -664,7 +667,9 @@ npm run providers:install -- claude-cli cursor gemini-cli github-copilot-cli
 - `autonomy.bootstrap` seeds those eligible bridge backends automatically without replacing the local default backend
 - `autonomy.command`, `goal.execute`, and `plan.dispatch` use router output to augment local-first councils with relevant hosted agents instead of treating provider bridges as a separate side path
 - it exports config bundles for Claude CLI, Cursor, Gemini CLI, GitHub Copilot, and Codex
+- it installs Claude CLI through the native `claude mcp add` / `add-json` path instead of editing opaque hidden formats directly
 - it installs both global and workspace-local Cursor MCP config for better editor reliability
+- it defaults Claude CLI and Gemini CLI to stdio MCP transport on this host for better local compatibility
 - it defaults Gemini CLI to stdio MCP transport for better local compatibility
 - it preserves `autonomy.ide_ingress` as the one canonical operator/IDE ingress path
 

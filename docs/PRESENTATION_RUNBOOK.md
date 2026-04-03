@@ -30,7 +30,7 @@ npm run providers:export
 
 Call out the distinction:
 
-- inbound MCP clients: Codex, Cursor, Gemini CLI, GitHub Copilot CLI
+- inbound MCP clients: Codex, Claude CLI, Cursor, Gemini CLI, GitHub Copilot CLI
 - outbound live council agents today: Codex, Cursor, Gemini, Claude, local agents
 - ChatGPT/OpenAI custom MCP is remote-only, so the bundle exports a manifest instead of pretending local install exists
 

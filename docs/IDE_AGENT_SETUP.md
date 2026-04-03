@@ -138,7 +138,8 @@ npm run providers:export
 
 Truth boundary:
 
-- Cursor, Codex, Gemini CLI, and GitHub Copilot CLI can be configured as MCP clients here.
+- Cursor, Codex, Claude CLI, Gemini CLI, and GitHub Copilot CLI can be configured as MCP clients here.
+- Claude CLI installs through the native `claude mcp` flow and is treated truthfully as configured vs authenticated/runtime-ready.
 - ChatGPT/OpenAI custom MCP is documented as a remote-only path, not a fake local install.
 
 ## Common Troubleshooting
