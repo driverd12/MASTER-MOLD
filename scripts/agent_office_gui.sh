@@ -17,19 +17,37 @@ if [[ -z "${MCP_HTTP_BEARER_TOKEN:-}" && -f "${TOKEN_FILE}" ]]; then
 fi
 
 health_ok() {
-  curl -fsS --max-time 3 "${TRICHAT_HTTP_URL%/}/health" >/dev/null 2>&1
+  local attempt
+  for attempt in 1 2; do
+    if curl -fsS --connect-timeout 1 --max-time 5 "${TRICHAT_HTTP_URL%/}/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 listener_ok() {
   lsof -nP -iTCP:"${MCP_PORT}" -sTCP:LISTEN >/dev/null 2>&1
 }
 
-ready_ok() {
+ready_ok_once() {
   [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]] || return 1
-  curl -fsS --max-time 8 \
+  curl -fsS --connect-timeout 1 --max-time 12 \
     -H "Authorization: Bearer ${MCP_HTTP_BEARER_TOKEN}" \
     -H "Origin: ${TRICHAT_HTTP_ORIGIN}" \
     "${TRICHAT_HTTP_URL%/}/ready" >/dev/null 2>&1
+}
+
+ready_ok() {
+  local attempt
+  for attempt in 1 2 3; do
+    if ready_ok_once; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 start_via_launchd() {
@@ -53,7 +71,7 @@ ensure_http() {
   fi
 
   start_via_launchd
-  for attempt in 1 2 3 4 5 6; do
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
     if ready_ok; then
       stop_tmux_fallback
       return 0
@@ -62,7 +80,7 @@ ensure_http() {
   done
 
   start_via_tmux_fallback
-  for attempt in 1 2 3 4 5 6; do
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
     if ready_ok; then
       return 0
     fi
