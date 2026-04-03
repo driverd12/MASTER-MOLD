@@ -3,10 +3,10 @@ import { summarizeDesktopControlState } from "../desktop_control_plane.js";
 import { summarizePatientZeroState } from "../patient_zero_plane.js";
 import { Storage } from "../storage.js";
 import { getTriChatActiveAgentIds } from "../trichat_roster.js";
-import { getAutonomyMaintainRuntimeStatus } from "./autonomy_maintain.js";
+import { autonomyMaintain, getAutonomyMaintainRuntimeStatus } from "./autonomy_maintain.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
 import { buildPrivilegedAccessStatus, verifyPrivilegedAccess } from "./privileged_exec.js";
-import { getAutopilotStatus } from "./trichat.js";
+import { getAutopilotStatus, trichatAutopilotControl } from "./trichat.js";
 
 const sourceSchema = z.object({
   source_client: z.string().optional(),
@@ -52,7 +52,7 @@ function actorLabel(input: z.infer<typeof patientZeroSchema>) {
 }
 
 const PATIENT_ZERO_TERMINAL_TOOLKIT = ["codex", "cursor", "gemini", "gh"] as const;
-const PATIENT_ZERO_TERMINAL_ALLOWLIST = PATIENT_ZERO_TERMINAL_TOOLKIT.map((entry) => `${entry} `);
+const PATIENT_ZERO_TERMINAL_ALLOWLIST = PATIENT_ZERO_TERMINAL_TOOLKIT.map((entry) => `${entry}`);
 const PATIENT_ZERO_BRIDGE_AGENT_IDS = ["codex", "cursor", "gemini", "github-copilot", "local-imprint"] as const;
 const PATIENT_ZERO_LOCAL_AGENT_IDS = [
   "implementation-director",
@@ -233,8 +233,7 @@ async function syncAutonomyControl(
 
   try {
     if (enabled) {
-      await Promise.resolve(
-        invokeTool("autonomy.maintain", {
+      await autonomyMaintain(storage, invokeTool, {
           action: "start",
           mutation: deriveMutation(input.mutation!, "autonomy.maintain.start"),
           enable_self_drive: true,
@@ -242,11 +241,9 @@ async function syncAutonomyControl(
           source_client,
           source_agent,
           source_model,
-        })
-      );
+        } as any);
     } else if (maintainRuntime.running || maintainState?.enabled) {
-      await Promise.resolve(
-        invokeTool("autonomy.maintain", {
+      await autonomyMaintain(storage, invokeTool, {
           action: "start",
           mutation: deriveMutation(input.mutation!, "autonomy.maintain.advisory"),
           enable_self_drive: false,
@@ -254,8 +251,7 @@ async function syncAutonomyControl(
           source_client,
           source_agent,
           source_model,
-        })
-      );
+        } as any);
     } else {
       setPersistedMaintainSelfDrive(storage, false);
     }
@@ -265,42 +261,75 @@ async function syncAutonomyControl(
 
   try {
     if (enabled) {
+      const currentAutopilotStatus = getAutopilotStatus(storage);
       const specialistAgentIds = [
         ...new Set([
-          ...((Array.isArray(autopilotStatus.config.specialist_agent_ids)
-            ? autopilotStatus.config.specialist_agent_ids
+          ...((Array.isArray(currentAutopilotStatus.config.specialist_agent_ids)
+            ? currentAutopilotStatus.config.specialist_agent_ids
             : []) as string[]),
           ...PATIENT_ZERO_SPECIALIST_AGENT_IDS,
         ]),
       ];
       const commandAllowlist = [
         ...new Set([
-          ...((Array.isArray(autopilotStatus.config.command_allowlist)
-            ? autopilotStatus.config.command_allowlist
+          ...((Array.isArray(currentAutopilotStatus.config.command_allowlist)
+            ? currentAutopilotStatus.config.command_allowlist
             : []) as string[]),
           ...PATIENT_ZERO_TERMINAL_ALLOWLIST,
         ]),
       ];
-      await Promise.resolve(
-        invokeTool("trichat.autopilot", {
+      await trichatAutopilotControl(storage, invokeTool, {
           action: "start",
           mutation: deriveMutation(input.mutation!, "trichat.autopilot.start"),
           execute_enabled: true,
-          lead_agent_id: String(autopilotStatus.config.lead_agent_id ?? "ring-leader"),
+          lead_agent_id: String(currentAutopilotStatus.config.lead_agent_id ?? "ring-leader"),
           specialist_agent_ids: specialistAgentIds,
           command_allowlist: commandAllowlist,
           run_immediately: false,
-        })
-      );
+        });
+      const postSyncState = storage.getTriChatAutopilotState();
+      if (
+        postSyncState &&
+        (!buildAutonomyControlStatus(storage).toolkit.terminal_toolkit_ready ||
+          !buildAutonomyControlStatus(storage).toolkit.local_agent_spawn_ready)
+      ) {
+        storage.setTriChatAutopilotState({
+          enabled: postSyncState.enabled,
+          away_mode: postSyncState.away_mode,
+          interval_seconds: postSyncState.interval_seconds,
+          thread_id: postSyncState.thread_id,
+          thread_title: postSyncState.thread_title,
+          thread_status: postSyncState.thread_status,
+          objective: postSyncState.objective,
+          lead_agent_id: postSyncState.lead_agent_id,
+          specialist_agent_ids: specialistAgentIds,
+          max_rounds: postSyncState.max_rounds,
+          min_success_agents: postSyncState.min_success_agents,
+          bridge_timeout_seconds: postSyncState.bridge_timeout_seconds,
+          bridge_dry_run: postSyncState.bridge_dry_run,
+          execute_enabled: true,
+          command_allowlist: commandAllowlist,
+          execute_backend: postSyncState.execute_backend,
+          tmux_session_name: postSyncState.tmux_session_name,
+          tmux_worker_count: postSyncState.tmux_worker_count,
+          tmux_max_queue_per_worker: postSyncState.tmux_max_queue_per_worker,
+          tmux_auto_scale_workers: postSyncState.tmux_auto_scale_workers,
+          tmux_sync_after_dispatch: postSyncState.tmux_sync_after_dispatch,
+          confidence_threshold: postSyncState.confidence_threshold,
+          max_consecutive_errors: postSyncState.max_consecutive_errors,
+          lock_key: postSyncState.lock_key,
+          lock_lease_seconds: postSyncState.lock_lease_seconds,
+          adr_policy: postSyncState.adr_policy,
+          pause_reason: null,
+        });
+      }
     } else if (autopilotStatus.running || autopilotState?.enabled) {
-      await Promise.resolve(
-        invokeTool("trichat.autopilot", {
+      await trichatAutopilotControl(storage, invokeTool, {
           action: "start",
           mutation: deriveMutation(input.mutation!, "trichat.autopilot.advisory"),
           execute_enabled: false,
           run_immediately: false,
-        })
-      );
+        });
     } else {
       setPersistedAutopilotExecute(storage, false);
     }
@@ -375,6 +404,7 @@ export function buildPatientZeroReport(storage: Storage) {
     priority_pull: priorityPull,
     concern,
     desire,
+    autonomous_control_enabled: autonomyControl.autonomous_control_enabled,
     full_control_authority: fullControlAuthority,
     toolkit: autonomyControl.toolkit,
     activity_count: events.length,

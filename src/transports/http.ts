@@ -393,6 +393,29 @@ function writeOfficeSnapshotCache(payload: unknown) {
   fs.writeFileSync(officeSnapshotLatestCachePath(theme), body, "utf8");
 }
 
+function invalidateOfficeSnapshotCaches() {
+  lastReadySnapshotCache = null;
+  readySnapshotInflight = null;
+  officeSnapshotInflight.clear();
+  officeNodeSnapshotInflight.clear();
+  officeRawSnapshotInflight.clear();
+  officeRawSnapshotCache.clear();
+  const cacheDir = officeSnapshotCacheDir();
+  try {
+    if (!fs.existsSync(cacheDir) || !fs.statSync(cacheDir).isDirectory()) {
+      return;
+    }
+    for (const entry of fs.readdirSync(cacheDir)) {
+      if (!entry.endsWith(".json")) {
+        continue;
+      }
+      fs.rmSync(path.join(cacheDir, entry), { force: true });
+    }
+  } catch {
+    // Snapshot cache invalidation is best-effort only.
+  }
+}
+
 export async function startHttpTransport(createServer: () => Server, options: HttpOptions) {
   if (options.host !== "127.0.0.1" && options.host !== "localhost") {
     throw new Error("HTTP transport must bind to 127.0.0.1 or localhost");
@@ -1095,6 +1118,7 @@ async function maybeHandleOfficeRequest(
         env: officeEnv(origin),
         timeoutMs: 60000,
       });
+      invalidateOfficeSnapshotCaches();
       sendJson(res, 202, {
         ok: true,
         action,
@@ -1110,6 +1134,7 @@ async function maybeHandleOfficeRequest(
         env: officeEnv(origin),
         timeoutMs: 60000,
       });
+      invalidateOfficeSnapshotCaches();
       sendJson(res, 202, {
         ok: true,
         action,
@@ -1168,6 +1193,9 @@ async function maybeHandleOfficeRequest(
       return true;
     }
     const parsed = parseJsonText(result.stdout.trim());
+    if (result.code === 0) {
+      invalidateOfficeSnapshotCaches();
+    }
     sendJson(res, result.code === 0 ? 200 : 500, {
       ok: result.code === 0,
       action,

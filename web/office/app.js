@@ -6,6 +6,9 @@
     selectedAgentId: "",
     refreshHandle: null,
     snapshotRequest: false,
+    patientZeroNoteDraft: "",
+    patientZeroNoteDirty: false,
+    patientZeroLastSavedNote: "",
   };
 
   var els = {
@@ -421,7 +424,9 @@
       ["Audit", patientZero.autonomy_enabled ? "Operator-visible report mode active." : "Bounded audit mode only."],
     ];
     var activitySummary = Array.isArray(report.activity_summary) ? report.activity_summary : [];
-    var noteValue = String(patientZero.last_operator_note || "");
+    var noteValue = state.patientZeroNoteDirty
+      ? state.patientZeroNoteDraft
+      : String(patientZero.last_operator_note || "");
     els.patientZeroView.innerHTML =
       '<div class="patient-zero-grid">' +
       '<section class="patient-zero-banner">' +
@@ -515,6 +520,13 @@
         });
       });
     });
+    var patientZeroNoteNode = els.patientZeroView.querySelector("[data-patient-zero-note]");
+    if (patientZeroNoteNode) {
+      patientZeroNoteNode.addEventListener("input", function () {
+        state.patientZeroNoteDraft = String(patientZeroNoteNode.value || "");
+        state.patientZeroNoteDirty = state.patientZeroNoteDraft !== state.patientZeroLastSavedNote;
+      });
+    }
   }
 
   function renderEventsView() {
@@ -633,6 +645,17 @@
     state.snapshotRequest = getJson("/office/api/snapshot?" + params.toString())
       .then(function (payload) {
         state.snapshot = payload;
+        var patientZeroNote =
+          payload &&
+          payload.summary &&
+          payload.summary.patient_zero &&
+          typeof payload.summary.patient_zero.last_operator_note === "string"
+            ? payload.summary.patient_zero.last_operator_note
+            : "";
+        state.patientZeroLastSavedNote = patientZeroNote;
+        if (!state.patientZeroNoteDirty) {
+          state.patientZeroNoteDraft = patientZeroNote;
+        }
         if (!state.selectedAgentId && payload.agents && payload.agents.length && payload.agents[0].agent) {
           state.selectedAgentId = payload.agents[0].agent.agent_id || "";
         }
@@ -661,7 +684,9 @@
     var refreshSeconds = state.bootstrap && state.bootstrap.refresh_interval_seconds ? Number(state.bootstrap.refresh_interval_seconds) : 2;
     var intervalMs = Math.max(2000, refreshSeconds * 1000);
     state.refreshHandle = setInterval(function () {
-      fetchSnapshot().catch(function (error) {
+      var patientZeroEnabled = !!(state.snapshot && state.snapshot.summary && state.snapshot.summary.patient_zero && state.snapshot.summary.patient_zero.enabled);
+      var preferLive = patientZeroEnabled || state.activeTab === "patient-zero";
+      fetchSnapshot({ forceLive: preferLive }).catch(function (error) {
         setResultText("Snapshot refresh degraded: " + String(error));
         if (!state.snapshot) {
           renderLoadingShell("Snapshot retrying after a partial failure.");
@@ -677,6 +702,12 @@
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
     }).then(function (result) {
+      if (action === "patient_zero_enable" || action === "patient_zero_disable") {
+        var patientZeroNote = typeof payload.operator_note === "string" ? payload.operator_note.trim() : "";
+        state.patientZeroNoteDraft = patientZeroNote;
+        state.patientZeroLastSavedNote = patientZeroNote;
+        state.patientZeroNoteDirty = false;
+      }
       setResultText(JSON.stringify(result, null, 2));
       return fetchSnapshot({ forceLive: true, explicitForceLive: true });
     });

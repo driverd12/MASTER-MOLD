@@ -602,7 +602,9 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
   const patientZeroSummary = asDict(kernelPatientZero.summary || rawPatientZero.summary);
   const patientZeroReport = asDict(rawPatientZero.report);
   const patientZeroAutonomyControl = asDict(rawPatientZero.autonomy_control);
-  const patientZeroToolkit = asDict(patientZeroAutonomyControl.toolkit);
+  const patientZeroToolkit = asDict(patientZeroAutonomyControl.toolkit || patientZeroReport.toolkit);
+  const patientZeroReportedAutonomousControlEnabled = Boolean(patientZeroReport.autonomous_control_enabled);
+  const patientZeroReportedFullControlAuthority = Boolean(patientZeroReport.full_control_authority);
   const privilegedAccessSummary = asDict(kernelPrivilegedAccess.summary || rawPrivilegedAccess.summary || rawPrivilegedAccess);
   const threadId = String(raw.thread_id ?? "ring-leader-main").trim() || "ring-leader-main";
   const latestAutopilotSession = asList(agentSessions.sessions).find((entry) => {
@@ -640,17 +642,24 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
   ]);
   const autopilotSpecialistAgentIds = dedupe(asList(autopilotPool.specialist_agent_ids));
   const patientZeroAutonomousControlEnabled =
-    Boolean(patientZeroSummary.autonomy_enabled) &&
-    Boolean(maintainSelfDrive.enabled) &&
-    Boolean(autopilotConfig.execute_enabled);
+    Boolean(patientZeroSummary.autonomous_control_enabled) ||
+    patientZeroReportedAutonomousControlEnabled ||
+    (Boolean(patientZeroSummary.autonomy_enabled) &&
+      Boolean(maintainSelfDrive.enabled) &&
+      Boolean(autopilotConfig.execute_enabled) &&
+      Boolean(patientZeroToolkit.bridge_toolkit_ready) &&
+      Boolean(patientZeroToolkit.local_agent_spawn_ready) &&
+      Boolean(patientZeroToolkit.terminal_toolkit_ready));
   const patientZeroFullControlAuthority =
-    Boolean(patientZeroSummary.enabled) &&
-    Boolean(desktopControlSummary.observe_ready) &&
-    Boolean(desktopControlSummary.act_ready) &&
-    Boolean(desktopControlSummary.listen_ready) &&
-    Boolean(patientZeroSummary.browser_ready) &&
-    Boolean(privilegedAccessSummary.root_execution_ready) &&
-    patientZeroAutonomousControlEnabled;
+    Boolean(patientZeroSummary.full_control_authority) ||
+    patientZeroReportedFullControlAuthority ||
+    (Boolean(patientZeroSummary.enabled) &&
+      Boolean(desktopControlSummary.observe_ready) &&
+      Boolean(desktopControlSummary.act_ready) &&
+      Boolean(desktopControlSummary.listen_ready) &&
+      Boolean(patientZeroSummary.browser_ready) &&
+      Boolean(privilegedAccessSummary.root_execution_ready) &&
+      patientZeroAutonomousControlEnabled);
   const currentObjective = hasLiveExecutionContext
     ? compactSingleLine(
         currentTask.objective ||
