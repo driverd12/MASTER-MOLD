@@ -11,7 +11,7 @@ This repository ships with one workflow pack by default:
 
 - `agentic` GSD/autoresearch-inspired planner and verifier hooks for local development workflows.
 
-The runtime also includes first-class TriChat orchestration tools (`trichat.*`) for multi-agent turns, autonomous loops, and tmux-backed nested execution control, plus the newer local control-plane surfaces:
+The runtime also includes first-class office/orchestration tools (`trichat.*` under the hood) for multi-agent turns, autonomous loops, and tmux-backed nested execution control, plus the newer local control-plane surfaces:
 
 - `tool.search` for live capability discovery from the registered MCP tool registry
 - `permission.profile` for durable session permission inheritance across goals, plans, tasks, and sessions
@@ -19,6 +19,18 @@ The runtime also includes first-class TriChat orchestration tools (`trichat.*`) 
 - `warm.cache` for startup prefetch and cached operator surfaces
 - `feature.flag` for durable rollout state
 - `desktop.*`, `patient.zero`, and `privileged.exec` for explicit local desktop and privileged execution lanes
+
+## Patient Zero End-State
+
+`Patient Zero` is the intended end-state of this repo: a local-first operator partner that can take full bounded control of the host when explicitly armed.
+
+When enabled, Patient Zero is the mode that ties the stack together:
+
+- office and council orchestration
+- autonomous continuation through `autonomy.maintain`
+- CLI and IDE bridge usage across Codex, Cursor, Gemini CLI, GitHub Copilot CLI, and `gh`
+- local desktop/browser/root-capable host-control lanes
+- full auditability through runtime events, runs, ledgers, and operator surfaces
 
 ## Documentation Hub
 
@@ -45,7 +57,7 @@ flowchart TD
   Transport --> Kernel["MCP Kernel Layer<br/>toolRegistry / server.ts / core tools / office snapshot"]
   Kernel --> Control["Control-Plane Layer<br/>goal.* / plan.* / task.* / kernel.summary / operator.brief / tool.search / permission.profile / warm.cache / feature.flag / budget.ledger"]
   Kernel --> Autonomy["Autonomy Fabric Layer<br/>autonomy.maintain / autonomy.command / goal.autorun / reaction.engine / eval / optimizer"]
-  Kernel --> Orchestration["Orchestration Fabric Layer<br/>trichat.* / council turns / tmux controller / runtime.worker / worker.fabric / model.router / provider.bridge"]
+  Kernel --> Orchestration["Orchestration Fabric Layer<br/>office council / tmux controller / runtime.worker / worker.fabric / model.router / provider.bridge"]
   Kernel --> Local["Local Host Control Layer<br/>desktop.* / patient.zero / privileged.exec"]
   Control --> State["Durable State Layer<br/>SQLite / warm cache / artifacts / runs / events / daemon configs / local secrets"]
   Autonomy --> State
@@ -66,7 +78,7 @@ flowchart TD
   Kernel --> Control["Execution Control Plane<br/>goal.* / plan.* / dispatch.autorun / goal.autorun* / playbook.*"]
   Kernel --> Worker["Durable Worker Ops<br/>agent.session.* / agent.claim_next / agent.report_result / task.* / run.* / lock.* / event.*"]
   Kernel --> Evidence["Evidence + Governance<br/>artifact.* / experiment.* / policy.evaluate / preflight.check / postflight.verify / adr.create / decision.link / incident.*"]
-  Kernel --> Office["TriChat + Office Ops<br/>trichat.thread* / trichat.turn* / trichat.autopilot / trichat.tmux_controller / trichat.bus / trichat.adapter_telemetry / trichat.slo / trichat.chaos"]
+  Kernel --> Office["Office + Orchestration Ops<br/>trichat.thread* / trichat.turn* / trichat.autopilot / trichat.tmux_controller / trichat.bus / trichat.adapter_telemetry / trichat.slo / trichat.chaos"]
   Kernel --> Health["Runtime + Recovery<br/>kernel.summary / health.* / migration.status / backups / corruption quarantine"]
   Kernel --> Learning["Bounded Agent Learning<br/>agent.learning_* / mentorship notes / MCP memory / ADR trail"]
 
@@ -96,14 +108,14 @@ flowchart TD
   DirVerify --> QualityGuard["quality-guard<br/>leaf SME for verification and release checks"]
 
   Ring --> Claim["agent.claim_next<br/>claim bounded work"]
-  Claim --> Council["TriChat council turn<br/>confidence + plan substance + policy gates"]
+  Claim --> Council["Office council turn<br/>confidence + plan substance + policy gates"]
   Council --> Execute["Execution router<br/>direct command / tmux dispatch / fallback task batch"]
   Execute --> Leafs["Leaf / SME agents<br/>single-owner bounded tasks"]
   Leafs --> Report["agent.report_result<br/>artifacts / evidence / outcomes / learning signal"]
   Report --> Learn["Bounded learning ledger<br/>prefer / avoid / proof bars / rollback discipline"]
   Learn --> Ring
 
-  Execute --> Tmux["trichat.tmux_controller<br/>worker lanes / queue discipline / office telemetry"]
+  Execute --> Tmux["office tmux controller<br/>worker lanes / queue discipline / office telemetry"]
   Tmux --> Dashboard["Agent Office Dashboard<br/>desk work / chat / break / sleep sprites"]
 ```
 
@@ -136,7 +148,7 @@ flowchart LR
   subgraph Kernel["MCPlayground MCP Server"]
     Registry["toolRegistry + tool.search"]
     Control["goal.* / plan.* / task.* / agent.session.* / operator.brief / kernel.summary"]
-    Fabric["trichat.* / worker.fabric / runtime.worker / model.router / provider.bridge"]
+    Fabric["office orchestration / worker.fabric / runtime.worker / model.router / provider.bridge"]
     Flags["permission.profile / feature.flag / budget.ledger / warm.cache"]
     Local["desktop.* / patient.zero / privileged.exec"]
   end
@@ -211,7 +223,7 @@ flowchart LR
   subgraph Runtime["MCPlayground Runtime"]
     Registry["tool registry + capability discovery"]
     Brief["kernel.summary / operator.brief / office.snapshot"]
-    Council["trichat council + autopilot"]
+    Council["office council + autopilot"]
     Workers["runtime.worker / worker.fabric / tmux lanes"]
     LocalCtl["desktop.* / patient.zero / privileged.exec"]
   end
@@ -259,7 +271,7 @@ flowchart TD
   PZ --> Desktop["Desktop lanes<br/>observe / act / listen / Safari"]
   PZ --> Root["Privileged lane<br/>mcagent -> root"]
   PZ --> Maintain["autonomy.maintain<br/>self-drive on"]
-  PZ --> Autopilot["trichat.autopilot<br/>execute enabled"]
+  PZ --> Autopilot["office autopilot<br/>trichat.autopilot execute enabled"]
 
   Autopilot --> Toolkit["Terminal toolkit<br/>codex / cursor / gemini / gh"]
   Autopilot --> Bridges["Bridge-capable agents<br/>codex / cursor / gemini / github-copilot"]
@@ -298,7 +310,7 @@ Use this framing with stakeholders:
 flowchart LR
   A["Cursor / Codex / IDE Clients"] --> K["Local MCP Kernel"]
   B["Inbox Workers / tmux / Background Automation"] --> K
-  C["TriChat / Council UI"] --> K
+  C["Office / Council UI"] --> K
   D["Future External Adapters"] --> K
 
   K --> E["Control Plane
@@ -428,7 +440,9 @@ npm run start:core
 npm run start:core:http
 ```
 
-## TriChat TUI
+## Office TUI and Council Shells
+
+The older `trichat:*` script names are still present for compatibility, but the user-facing surface is the Agent Office and its council/autopilot fabric.
 
 Launch the BubbleTea TUI from the terminal:
 
@@ -596,7 +610,7 @@ Keyboard controls inside the TUI:
 
 ## Borrowed Wins
 
-The current office/TriChat environment intentionally borrows and reinterprets the strongest open-source ideas from:
+The current office/autonomy environment intentionally borrows and reinterprets the strongest open-source ideas from:
 
 - [RALPH TUI](https://github.com/subsy/ralph-tui): multi-pane operator UX, persistent dashboard feel, session-oriented monitoring, and a more playful terminal surface
 - [Get Shit Done](https://github.com/gsd-build/get-shit-done): bounded work packets, single-owner delegation, and orchestration that stays simple while the system grows complex
@@ -649,7 +663,7 @@ Key variables:
 - `MCP_HTTP_BEARER_TOKEN` auth token for HTTP transport
 - `MCP_HTTP_ALLOWED_ORIGINS` comma-separated local origins
 - `MCP_DOMAIN_PACKS` comma-separated pack ids (`agentic`, etc.); defaults to `agentic`, set `none` to disable all packs
-- `TRICHAT_AGENT_IDS` comma-separated active TriChat roster
+- `TRICHAT_AGENT_IDS` comma-separated active office council roster
 - `TRICHAT_GEMINI_CMD` override full Gemini bridge command
 - `TRICHAT_CLAUDE_CMD` override full Claude bridge command
 - `TRICHAT_GEMINI_EXECUTABLE` / `TRICHAT_GEMINI_ARGS` provider CLI override
@@ -684,7 +698,7 @@ Core runtime tools include:
 - Workflow methodology: `playbook.*` including `playbook.run`, `pack.hooks.list`, `pack.plan.generate`, `pack.verify.run`
 - Decision and incident logging: `adr.create`, `decision.link`, `incident.*`
 - Runtime ops: `health.*`, `migration.status`, `imprint.*`, `imprint.inbox.*`
-- TriChat orchestration: `trichat.*` (`roster`, `thread/message/turn`, `autopilot`, `tmux_controller`, `bus`, `adapter_telemetry`, `chaos`, `slo`)
+- Office orchestration: `trichat.*` (`roster`, `thread/message/turn`, `autopilot`, `tmux_controller`, `bus`, `adapter_telemetry`, `chaos`, `slo`)
 - Control-plane discovery and rollout: `tool.search`, `permission.profile`, `feature.flag`, `warm.cache`
 - Budget and cost visibility: `budget.ledger`
 - Local host control: `desktop.control`, `desktop.observe`, `desktop.act`, `desktop.listen`, `patient.zero`, `privileged.exec`
@@ -786,7 +800,7 @@ npm run launchd:install
 npm run it:http:validate
 ```
 
-TriChat reliability checks:
+Office and council reliability checks:
 
 ```bash
 npm run trichat:bridges:test
@@ -807,7 +821,7 @@ Alternate roster validation example:
 TRICHAT_AGENT_IDS=gemini,claude,local-imprint npm run trichat:doctor
 ```
 
-TriChat tmux controller dry-run example:
+Office tmux controller dry-run example:
 
 ```bash
 TRICHAT_TMUX_DRY_RUN=1 node scripts/mcp_tool_call.mjs \
@@ -829,7 +843,7 @@ Execution safety hardening:
 - direct autopilot shell execution also enforces this guardrail as a final pre-spawn check
 - local write-producing MCP tools (`adr.create`, `imprint.inbox.enqueue`, `imprint.snapshot`) now enforce protected-path checks before writing
 
-TriChat TUI interactive `/execute` can route via tmux allocator (`TRICHAT_EXECUTE_BACKEND=auto|tmux|direct`) using:
+The office TUI interactive `/execute` path can route via tmux allocator (`TRICHAT_EXECUTE_BACKEND=auto|tmux|direct`) using:
 
 - `TRICHAT_TMUX_SESSION_NAME`
 - `TRICHAT_TMUX_WORKER_COUNT`
