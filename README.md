@@ -1,6 +1,6 @@
 # MCPlayground Core Template
 
-![Patient Zero pixel art](./docs/assets/patient-zero-pixel.svg)
+<img src="./docs/assets/patient-zero-banner-v2.svg" alt="Patient Zero pixel-art banner showing Agent Office, MCP Server, and the local agent crew" width="100%" />
 
 MCPlayground Core Template is a local-first MCP server runtime designed to be reused across domains.
 
