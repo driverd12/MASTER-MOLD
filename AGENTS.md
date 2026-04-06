@@ -39,3 +39,51 @@ Build and harden a robust MCP server with real agentic tooling so a local ring l
 - Persist the ring leader's current work contract into durable session metadata so the dashboard can recover the last source objective, selected strategy, delegate target, evidence bar, rollback notes, and execution backlog even after daemon restarts.
 - Harden the ring leader against stale failures by tracking confidence, plan substance, recovery evidence, and bounded fallback chains.
 - Default local specialists should be reliable additions to the team, not cosmetic personas.
+
+## Cursor Cloud specific instructions
+
+### Services
+
+This is a Node.js + TypeScript MCP server with Python bridges. No Docker, no external databases — it uses embedded SQLite via `better-sqlite3`.
+
+| Service | How to run | Notes |
+|---|---|---|
+| MCP Server (STDIO) | `npm run start:stdio` | Single-client mode for IDE integration |
+| MCP Server (HTTP) | `npm run start:http` | Multi-client mode on port 8787, requires `MCP_HTTP_BEARER_TOKEN` |
+| Python tests | `npm run test:python` | Runs bridge + test discovery under `bridges/` and `tests/` |
+
+### Build and test
+
+Standard commands per `package.json`:
+- **Build**: `npm run build` (compiles TypeScript from `src/` to `dist/`)
+- **Test**: `npm test` (builds first, then runs Python tests + Node.js test runner)
+- **Smoke**: `npm run mvp:smoke` (quick STDIO-based smoke check)
+
+### Environment
+
+- Node.js 22 (`.nvmrc`), npm as package manager (`package-lock.json`)
+- `.env` must exist (copy from `.env.example`); minimal values: `ANAMNESIS_HUB_DB_PATH=./data/hub.sqlite`, `MCP_HTTP_BEARER_TOKEN=change-me`, `MCP_HTTP_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1`
+- The `data/` directory is auto-created by the server for SQLite state
+
+### Known test failures in cloud VM
+
+8 of 180 tests fail due to environment constraints (not code bugs):
+- `desktop control` tests require macOS
+- `runtime.worker` worktree isolation tests need specific git state
+- `autonomy.maintain` and `office.snapshot` tests have timing/environment dependencies
+- `benchmark.run` toolchain-inheritance tests assume macOS shell utilities
+
+### MCP tool calls via HTTP
+
+Use the included helper script for ad-hoc tool calls against a running HTTP server:
+```
+MCP_HTTP_BEARER_TOKEN=change-me node ./scripts/mcp_tool_call.mjs \
+  --tool <tool_name> --args '<json>' \
+  --transport http --url http://127.0.0.1:8787/ --origin http://127.0.0.1
+```
+
+### Gotchas
+
+- The `memory.append` tool requires a `mutation` object with `idempotency_key`, `side_effect_fingerprint`, and `confirm` fields — not just `content`.
+- No ESLint or Prettier is configured; there is no separate lint command.
+- Python 3 is needed for `npm run test:python` (bridge tests). No `requirements.txt` — the Python code uses only stdlib.
