@@ -82,8 +82,46 @@ MCP_HTTP_BEARER_TOKEN=change-me node ./scripts/mcp_tool_call.mjs \
   --transport http --url http://127.0.0.1:8787/ --origin http://127.0.0.1
 ```
 
+### MCP client setup on macOS
+
+The repo has a built-in `provider.bridge` tool that generates and installs configs for all supported MCP clients. This is the canonical way to set up the server for IDE/CLI use.
+
+**One-command install for all local clients:**
+```bash
+npm run providers:install -- cursor claude-cli codex gemini-cli github-copilot-cli
+```
+
+**Or export config bundles for manual review first:**
+```bash
+npm run providers:export
+```
+
+Per-client details (see also `docs/IDE_AGENT_SETUP.md` and `docs/COWORKER_QUICKSTART_CURSOR_CODEX.md`):
+
+| Client | Config path | Transport | Install method |
+|---|---|---|---|
+| Cursor | `~/.cursor/mcp.json` + `<repo>/.cursor/mcp.json` | HTTP (preferred) or STDIO | `npm run providers:install -- cursor` |
+| Claude CLI | `~/.claude.json` (via `claude mcp add`) | STDIO proxy → HTTP fallback | `npm run providers:install -- claude-cli` |
+| Codex | `~/.codex/config.toml` (via `codex mcp add`) | STDIO | `npm run providers:install -- codex` or `npm run codex:mcp:register` |
+| Gemini CLI | `~/.gemini/settings.json` | STDIO proxy → HTTP fallback | `npm run providers:install -- gemini-cli` |
+| GitHub Copilot CLI | `~/.copilot/mcp-config.json` | HTTP | `npm run providers:install -- github-copilot-cli` |
+| VS Code Copilot | `<repo>/.vscode/mcp.json` | HTTP or STDIO | Export-only: `npm run providers:export` |
+| ChatGPT | Remote MCP only | HTTP (remote) | Not a local install — see `chatgpt-developer-mode.md` in export bundle |
+
+**For multi-client (HTTP) mode**, start the persistent HTTP daemon first:
+```bash
+npm run start:http
+```
+Cursor, Copilot CLI, and VS Code Copilot prefer this shared HTTP transport. Claude CLI and Gemini CLI use an auto-proxy that tries HTTP first and falls back to STDIO.
+
+**For single-client (STDIO) mode**, the IDE launches the server process directly — no daemon needed.
+
+**Workspace-local configs** (`.cursor/mcp.json`, `.vscode/mcp.json`) are gitignored. They are generated locally by the provider bridge install flow.
+
 ### Gotchas
 
 - The `memory.append` tool requires a `mutation` object with `idempotency_key`, `side_effect_fingerprint`, and `confirm` fields — not just `content`.
 - No ESLint or Prettier is configured; there is no separate lint command.
 - Python 3 is needed for `npm run test:python` (bridge tests). No `requirements.txt` — the Python code uses only stdlib.
+- ChatGPT/OpenAI custom MCP is truthfully remote-only — do not present it as a local install.
+- When running `npm run providers:install`, the HTTP server must be running for HTTP-transport clients. STDIO clients work without the daemon.
