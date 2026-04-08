@@ -1736,6 +1736,19 @@ test("optimizer promotes stronger org-program candidates and task.compile applie
     assert.equal(kernel.org_programs.optimized_role_count, 1);
     assert.ok(kernel.org_programs.candidate_version_count >= 1);
     assert.equal(kernel.org_programs.roles.some((role) => role.role_id === "implementation-director" && role.last_optimizer_run_at), true);
+    assert.equal(kernel.self_improvement.strategy, "optimizer-led-org-program-mutation");
+    assert.equal(kernel.self_improvement.program.baseline_policy, "active_role_version");
+    assert.equal(kernel.self_improvement.program.recursion_guardrail, "no_free_form_recursive_self_improvement");
+    assert.equal(kernel.overview.self_improvement.optimized_role_count, 1);
+    assert.equal(kernel.overview.self_improvement.accepted_run_count, 1);
+    const optimizerLedger = kernel.self_improvement.roles.find((role) => role.role_id === "implementation-director");
+    assert.ok(optimizerLedger);
+    assert.equal(optimizerLedger.last_promoted, true);
+    assert.equal(optimizerLedger.last_run_verdict, "accepted");
+    assert.equal(optimizerLedger.last_run_status, "completed");
+    assert.equal(optimizerLedger.last_candidate_version_id, stepped.candidate_version.version_id);
+    assert.equal(optimizerLedger.last_candidate_label, stepped.candidate_version.version_id);
+    assert.ok(Array.isArray(optimizerLedger.last_focus_areas) && optimizerLedger.last_focus_areas.includes("verification_first"));
   } finally {
     await session.client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -290,6 +290,43 @@ type OrgProgramSummary = {
   }>;
 };
 
+type SelfImprovementSummary = {
+  enabled: boolean;
+  strategy: string;
+  program: {
+    steering_surface: string;
+    baseline_policy: string;
+    mutation_scope: string;
+    promotion_policy: string;
+    evidence_sources: string[];
+    recursion_guardrail: string;
+  };
+  optimized_role_count: number;
+  accepted_run_count: number;
+  rejected_run_count: number;
+  last_run_at: string | null;
+  roles: Array<{
+    role_id: string;
+    title: string;
+    lane: string | null;
+    last_run_at: string | null;
+    last_improvement: number | null;
+    last_promoted: boolean;
+    last_focus_areas: string[];
+    last_baseline_version_id: string | null;
+    last_candidate_version_id: string | null;
+    last_experiment_id: string | null;
+    last_experiment_status: string | null;
+    last_experiment_run_id: string | null;
+    last_run_status: string | null;
+    last_run_verdict: string | null;
+    last_candidate_label: string | null;
+    last_observed_metric: number | null;
+    last_delta: number | null;
+    last_artifact_id: string | null;
+  }>;
+};
+
 type WorkflowExportSummary = {
   bundle_count: number;
   metrics_count: number;
@@ -1329,6 +1366,82 @@ function summarizeOrgPrograms(storage: Storage): OrgProgramSummary {
   };
 }
 
+function summarizeSelfImprovement(storage: Storage): SelfImprovementSummary {
+  const state: OrgProgramsStateRecord | null = storage.getOrgProgramsState();
+  const program = {
+    steering_surface: "org.program + optimizer",
+    baseline_policy: "active_role_version",
+    mutation_scope: "bounded_doctrine_delegation_evaluation",
+    promotion_policy: "measured_improvement_threshold",
+    evidence_sources: ["experiment_runs", "optimizer.scorecard_artifacts", "role.optimizer.metadata"],
+    recursion_guardrail: "no_free_form_recursive_self_improvement",
+  };
+  if (!state) {
+    return {
+      enabled: false,
+      strategy: "optimizer-led-org-program-mutation",
+      program,
+      optimized_role_count: 0,
+      accepted_run_count: 0,
+      rejected_run_count: 0,
+      last_run_at: null,
+      roles: [],
+    };
+  }
+
+  const roles = [...state.roles]
+    .map((role) => {
+      const optimizer = isRecord(role.metadata.optimizer) ? role.metadata.optimizer : null;
+      const lastRunAt = readString(optimizer?.last_run_at);
+      const lastExperimentId = readString(optimizer?.last_experiment_id);
+      const lastExperimentRunId = readString(optimizer?.last_experiment_run_id);
+      const lastExperiment = lastExperimentId ? storage.getExperimentById(lastExperimentId) : null;
+      const lastExperimentRun = lastExperimentRunId ? storage.getExperimentRunById(lastExperimentRunId) : null;
+      return {
+        role_id: role.role_id,
+        title: role.title,
+        lane: role.lane,
+        last_run_at: lastRunAt,
+        last_improvement: readFiniteNumber(optimizer?.last_improvement),
+        last_promoted: optimizer?.last_promoted === true,
+        last_focus_areas:
+          Array.isArray(optimizer?.last_focus_areas)
+            ? [...new Set(optimizer.last_focus_areas.map((entry) => String(entry ?? "").trim()).filter(Boolean))]
+            : [],
+        last_baseline_version_id: readString(optimizer?.last_baseline_version_id),
+        last_candidate_version_id: readString(optimizer?.last_candidate_version_id),
+        last_experiment_id: lastExperimentId,
+        last_experiment_status: lastExperiment?.status ?? null,
+        last_experiment_run_id: lastExperimentRunId,
+        last_run_status: lastExperimentRun?.status ?? null,
+        last_run_verdict: lastExperimentRun?.verdict ?? null,
+        last_candidate_label: lastExperimentRun?.candidate_label ?? null,
+        last_observed_metric: lastExperimentRun?.observed_metric ?? null,
+        last_delta: lastExperimentRun?.delta ?? null,
+        last_artifact_id: readString(optimizer?.last_artifact_id),
+      };
+    })
+    .sort((left, right) => {
+      const leftKey = left.last_run_at ?? "";
+      const rightKey = right.last_run_at ?? "";
+      if (leftKey !== rightKey) {
+        return rightKey.localeCompare(leftKey);
+      }
+      return left.role_id.localeCompare(right.role_id);
+    });
+
+  return {
+    enabled: state.enabled,
+    strategy: "optimizer-led-org-program-mutation",
+    program,
+    optimized_role_count: roles.filter((role) => role.last_run_at !== null).length,
+    accepted_run_count: roles.filter((role) => role.last_run_verdict === "accepted").length,
+    rejected_run_count: roles.filter((role) => role.last_run_verdict === "rejected").length,
+    last_run_at: roles.find((role) => role.last_run_at !== null)?.last_run_at ?? null,
+    roles,
+  };
+}
+
 function summarizeMaintenanceSubsystem(params: {
   enabled: boolean;
   interval_seconds: number;
@@ -1752,6 +1865,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
   const evalSummary = summarizeEvalSuites(storage);
   const observabilitySummary = summarizeObservability(storage);
   const orgProgramSummary = summarizeOrgPrograms(storage);
+  const selfImprovementSummary = summarizeSelfImprovement(storage);
   const autonomyMaintainState = storage.getAutonomyMaintainState();
   const autonomyMaintainSummary = summarizeAutonomyMaintain(autonomyMaintainState, storage);
   const reactionEngineSummary = summarizeReactionEngine(storage.getReactionEngineState());
@@ -2165,6 +2279,14 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
         candidate_version_count: orgProgramSummary.candidate_version_count,
         optimized_role_count: orgProgramSummary.optimized_role_count,
       },
+      self_improvement: {
+        enabled: selfImprovementSummary.enabled,
+        optimized_role_count: selfImprovementSummary.optimized_role_count,
+        accepted_run_count: selfImprovementSummary.accepted_run_count,
+        rejected_run_count: selfImprovementSummary.rejected_run_count,
+        last_run_at: selfImprovementSummary.last_run_at,
+        strategy: selfImprovementSummary.strategy,
+      },
       swarm: {
         active_profile_count: swarmSummary.active_profile_count,
         checkpoint_artifact_count: swarmSummary.checkpoint_artifact_count,
@@ -2282,6 +2404,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     evals: evalSummary,
     observability: observabilitySummary,
     org_programs: orgProgramSummary,
+    self_improvement: selfImprovementSummary,
     swarm: swarmSummary,
     autonomy_maintain: autonomyMaintainSummary,
     reaction_engine: reactionEngineSummary,

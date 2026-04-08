@@ -171,6 +171,26 @@ Intentionally out of scope:
 - arbitrary workflow-graph mutation
 - free-form recursive self-improvement
 
+## AutoAgent
+
+Source:
+- [AutoAgent README](https://github.com/kevinrgu/autoagent)
+
+Upstream wins we implemented:
+
+| Upstream idea | Local status | Local implementation |
+| --- | --- | --- |
+| Human-steered improvement program | `adapted` | `org.program` doctrine plus explicit `optimizer.step` focus/objective inputs steer the mutation loop |
+| Baseline -> candidate -> measured keep/discard loop | `implemented` | `optimizer.*`, `experiment.*`, and `optimizer.scorecard` artifacts record candidate evaluation before promotion |
+| Durable experiment ledger visible to operators and agents | `implemented` | SQLite `experiments` / `experiment_runs` plus `kernel.summary.self_improvement` expose the current measured optimization history |
+| Narrow mutation surface instead of broad self-rewrites | `adapted` | The optimizer only mutates role doctrine/delegation/evaluation surfaces, and `autonomy.maintain` explicitly forbids free-form recursive self-improvement |
+
+Intentionally out of scope:
+
+- Harbor task runner and its benchmark branch workflow
+- single-file self-modifying `agent.py` harness
+- overnight recursive repo mutation outside bounded optimizer doctrine changes
+
 ## jayminwest / overstory
 
 Source:
