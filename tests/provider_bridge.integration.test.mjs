@@ -1,12 +1,85 @@
 import assert from "node:assert/strict";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { runCommandProbe } from "../dist/tools/provider_bridge.js";
+
+const execFileAsync = promisify(execFile);
 
 const REPO_ROOT = process.cwd();
+
+test(
+  "provider.bridge hard-kills timed out CLI probes so hung clients cannot freeze the server loop",
+  { concurrency: false, timeout: 10_000 },
+  () => {
+    const startedAt = Date.now();
+    const probe = runCommandProbe(
+      process.execPath,
+      ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+      { timeout: 100 }
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(probe.timed_out, true);
+    assert.equal(probe.signal, "SIGKILL");
+    assert.ok(elapsedMs < 3_000, `expected bounded probe time, saw ${elapsedMs}ms`);
+  }
+);
+
+test("provider.bridge status trusts Claude config state without shelling out to a hanging CLI probe", { concurrency: false }, async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-provider-bridge-claude-config-shortcut-"));
+  const homeDir = path.join(tempDir, "home");
+  const binDir = path.join(tempDir, "bin");
+  fs.mkdirSync(homeDir, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  createFakeClaudeCli(path.join(binDir, "claude"));
+  fs.writeFileSync(
+    path.join(homeDir, ".claude.json"),
+    JSON.stringify(
+      {
+        mcpServers: {
+          mcplayground: {
+            type: "http",
+            url: "http://127.0.0.1:8787/",
+          },
+        },
+      },
+      null,
+      2
+    )
+  );
+
+  const session = await openClient({
+    ANAMNESIS_HUB_DB_PATH: path.join(tempDir, "hub.sqlite"),
+    HOME: homeDir,
+    PATH: `${binDir}:${process.env.PATH || ""}`,
+    CLAUDE_HANG_MCP_GET: "1",
+    MCP_HTTP_BEARER_TOKEN: "provider-bridge-shortcut-token",
+    TRICHAT_MCP_URL: "http://127.0.0.1:8787/",
+    TRICHAT_MCP_ORIGIN: "http://127.0.0.1",
+  });
+
+  try {
+    const startedAt = Date.now();
+    const status = await callTool(session.client, "provider.bridge", {
+      action: "status",
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(status.ok, true);
+    assert.equal(status.clients.find((entry) => entry.client_id === "claude-cli")?.installed, true);
+    assert.ok(elapsedMs < 2_000, `expected Claude config shortcut, saw ${elapsedMs}ms`);
+  } finally {
+    await session.client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
 
 test("provider.bridge reports truthful client and outbound council coverage", { concurrency: false }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-provider-bridge-status-"));
@@ -541,6 +614,217 @@ test("provider.bridge diagnose treats Claude as connected from MCP config plus a
   }
 });
 
+test("provider.bridge diagnose uses cached diagnostics by default and does not block the server", { concurrency: false }, async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-provider-bridge-diagnose-cache-"));
+  const homeDir = path.join(tempDir, "home");
+  fs.mkdirSync(homeDir, { recursive: true });
+
+  const session = await openClient({
+    ANAMNESIS_HUB_DB_PATH: path.join(tempDir, "hub.sqlite"),
+    HOME: homeDir,
+    MCP_HTTP_BEARER_TOKEN: "provider-bridge-diagnose-cache-token",
+    TRICHAT_MCP_URL: "http://127.0.0.1:8787/",
+    TRICHAT_MCP_ORIGIN: "http://127.0.0.1",
+  });
+
+  try {
+    // First call with force_live populates the cache
+    const first = await callTool(session.client, "provider.bridge", {
+      action: "diagnose",
+      force_live: true,
+    });
+    assert.equal(first.ok, true);
+    assert.equal(first.cached, false);
+
+    // Second call without force_live should return cached result fast
+    const startedAt = Date.now();
+    const second = await callTool(session.client, "provider.bridge", {
+      action: "diagnose",
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(second.ok, true);
+    assert.equal(second.cached, true);
+    assert.equal(second.stale, false);
+    assert.ok(elapsedMs < 2_000, `expected cached diagnose to be fast, saw ${elapsedMs}ms`);
+    assert.ok(second.diagnostics.length > 0, "cache should contain diagnostics");
+  } finally {
+    await session.client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("provider.bridge diagnose force_live bypasses cache and runs live probes", { concurrency: false }, async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-provider-bridge-diagnose-force-"));
+  const homeDir = path.join(tempDir, "home");
+  fs.mkdirSync(homeDir, { recursive: true });
+
+  const session = await openClient({
+    ANAMNESIS_HUB_DB_PATH: path.join(tempDir, "hub.sqlite"),
+    HOME: homeDir,
+    MCP_HTTP_BEARER_TOKEN: "provider-bridge-diagnose-force-token",
+    TRICHAT_MCP_URL: "http://127.0.0.1:8787/",
+    TRICHAT_MCP_ORIGIN: "http://127.0.0.1",
+    PROVIDER_BRIDGE_DIAGNOSTICS_CACHE_SECONDS: "300",
+  });
+
+  try {
+    // First call populates cache
+    const first = await callTool(session.client, "provider.bridge", {
+      action: "diagnose",
+      force_live: true,
+    });
+    assert.equal(first.ok, true);
+    assert.equal(first.cached, false);
+
+    // Second call with force_live should bypass the fresh cache
+    const second = await callTool(session.client, "provider.bridge", {
+      action: "diagnose",
+      force_live: true,
+    });
+    assert.equal(second.ok, true);
+    assert.equal(second.cached, false);
+    assert.equal(second.stale, false);
+  } finally {
+    await session.client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("provider.bridge over HTTP: /health stays responsive during status calls and force_live is rejected", { concurrency: false, timeout: 60_000 }, async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-provider-bridge-http-health-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const busPath = path.join(tempDir, "trichat.bus.sock");
+  const bearerToken = "provider-bridge-http-health-token";
+  const httpPort = await reservePort();
+
+  const child = spawn("node", ["dist/server.js", "--http", "--http-port", String(httpPort)], {
+    cwd: REPO_ROOT,
+    env: inheritedEnv({
+      MCP_HTTP: "1",
+      MCP_HTTP_PORT: String(httpPort),
+      MCP_HTTP_HOST: "127.0.0.1",
+      MCP_HTTP_BEARER_TOKEN: bearerToken,
+      ANAMNESIS_HUB_DB_PATH: dbPath,
+      TRICHAT_BUS_SOCKET_PATH: busPath,
+      TRICHAT_MCP_URL: `http://127.0.0.1:${httpPort}/`,
+      TRICHAT_MCP_ORIGIN: "http://127.0.0.1",
+      // Disable background daemons to keep the test focused
+      TRICHAT_RING_LEADER_AUTOSTART: "0",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "0",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "0",
+    }),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    // Wait for /health to become available
+    await waitForHealth(`http://127.0.0.1:${httpPort}/health`, 15_000);
+
+    // Fire a provider.bridge status call via mcp_tool_call.mjs (goes through the MCP session)
+    const toolCallPromise = execFileAsync(
+      "node",
+      [
+        "./scripts/mcp_tool_call.mjs",
+        "--tool", "provider.bridge",
+        "--args", JSON.stringify({ action: "status" }),
+        "--transport", "http",
+        "--url", `http://127.0.0.1:${httpPort}/`,
+        "--origin", "http://127.0.0.1",
+        "--cwd", REPO_ROOT,
+      ],
+      {
+        cwd: REPO_ROOT,
+        env: inheritedEnv({ MCP_HTTP_BEARER_TOKEN: bearerToken }),
+        maxBuffer: 8 * 1024 * 1024,
+      }
+    );
+
+    // While the tool call is in flight, /health must respond quickly
+    const healthStart = Date.now();
+    const healthBody = await fetchHttpText(`http://127.0.0.1:${httpPort}/health`);
+    const healthMs = Date.now() - healthStart;
+    const health = JSON.parse(healthBody);
+    assert.equal(health.ok, true);
+    assert.ok(healthMs < 2_000, `/health took ${healthMs}ms during provider.bridge status — expected < 2s`);
+
+    // Wait for the status call to finish and verify it succeeded
+    const statusResult = await toolCallPromise;
+    const statusParsed = JSON.parse(statusResult.stdout);
+    assert.equal(statusParsed.ok, true);
+
+    // Verify force_live is rejected over HTTP
+    const forceLiveResult = await execFileAsync(
+      "node",
+      [
+        "./scripts/mcp_tool_call.mjs",
+        "--tool", "provider.bridge",
+        "--args", JSON.stringify({ action: "diagnose", force_live: true }),
+        "--transport", "http",
+        "--url", `http://127.0.0.1:${httpPort}/`,
+        "--origin", "http://127.0.0.1",
+        "--cwd", REPO_ROOT,
+      ],
+      {
+        cwd: REPO_ROOT,
+        env: inheritedEnv({ MCP_HTTP_BEARER_TOKEN: bearerToken }),
+        maxBuffer: 8 * 1024 * 1024,
+      }
+    );
+    const forceLiveParsed = JSON.parse(forceLiveResult.stdout);
+    assert.equal(forceLiveParsed.ok, false);
+    assert.match(forceLiveParsed.error, /force_live.*not available.*HTTP/i);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", () => resolve()));
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+async function reservePort() {
+  const server = http.createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to reserve port");
+  }
+  const { port } = address;
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  return port;
+}
+
+function fetchHttpText(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    http.get(url, { headers }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        if ((response.statusCode ?? 500) >= 400) {
+          reject(new Error(`${response.statusCode} ${body}`));
+          return;
+        }
+        resolve(body);
+      });
+    }).on("error", reject);
+  });
+}
+
+async function waitForHealth(url, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      await fetchHttpText(url);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw lastError ?? new Error(`Timed out waiting for ${url}`);
+}
+
 async function openClient(extraEnv) {
   const transport = new StdioClientTransport({
     command: "node",
@@ -660,6 +944,11 @@ if len(args) >= 2 and args[0] == "mcp" and args[1] == "add":
     sys.exit(0)
 
 if len(args) >= 2 and args[0] == "mcp" and args[1] == "get":
+    if os.environ.get("CLAUDE_HANG_MCP_GET") == "1":
+        import signal, time
+        signal.signal(signal.SIGTERM, lambda *_args: None)
+        while True:
+            time.sleep(1)
     name = args[-1]
     data = load_store()
     if name in data:

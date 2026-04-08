@@ -474,32 +474,18 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
   );
   const autonomyMaintainState = asRecord(autonomyMaintain.state);
   const persistedProviderBridgeGeneratedAt =
-    String(autonomyMaintainState.last_provider_bridge_check_at ?? "").trim() || new Date().toISOString();
+    String(autonomyMaintainState.last_provider_bridge_check_at ?? autonomyMaintainState.updated_at ?? "").trim() ||
+    new Date().toISOString();
   const persistedProviderBridgeDiagnostics = Array.isArray(autonomyMaintainState.provider_bridge_diagnostics)
     ? autonomyMaintainState.provider_bridge_diagnostics
     : [];
   const persistedProviderBridgeStale = providerBridgeDiagnosticsStale(autonomyMaintainState);
-  const liveProviderBridgeDiagnostics = safe<ReturnType<typeof resolveProviderBridgeDiagnostics>>(
-    "provider_bridge.live_diagnostics",
-    {
-      generated_at: persistedProviderBridgeGeneratedAt,
-      cached: persistedProviderBridgeDiagnostics.length > 0,
-      diagnostics: persistedProviderBridgeDiagnostics,
-    },
-    () => resolveProviderBridgeDiagnostics({ workspace_root: process.cwd(), probe_timeout_ms: 1500 })
-  );
-  const selectedProviderBridgeDiagnostics =
-    persistedProviderBridgeDiagnostics.length > 0 && !persistedProviderBridgeStale
-      ? {
-          generated_at: persistedProviderBridgeGeneratedAt,
-          cached: true,
-          stale: false,
-          diagnostics: persistedProviderBridgeDiagnostics,
-        }
-      : {
-          ...liveProviderBridgeDiagnostics,
-          stale: persistedProviderBridgeStale && liveProviderBridgeDiagnostics.generated_at === persistedProviderBridgeGeneratedAt,
-        };
+  const selectedProviderBridgeDiagnostics = {
+    generated_at: persistedProviderBridgeGeneratedAt,
+    cached: persistedProviderBridgeDiagnostics.length > 0,
+    stale: persistedProviderBridgeStale,
+    diagnostics: persistedProviderBridgeDiagnostics,
+  };
   const providerBridge = safe<ProviderBridgePayload>(
     "provider_bridge",
     {
@@ -516,10 +502,13 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
         buildKernelPayload(storage, taskSummaryPayload, agentSessions)
       )
     : {};
-  const providerReadyAgentIds = providerBridge.diagnostics.diagnostics
-    .filter((entry) => entry.status === "connected" || entry.status === "configured")
-    .map((entry) => String(entry.office_agent_id || "").trim().toLowerCase())
-    .filter(Boolean);
+  const providerReadyAgentIds =
+    selectedProviderBridgeDiagnostics.stale === true
+      ? []
+      : providerBridge.diagnostics.diagnostics
+          .filter((entry) => entry.status === "connected" || entry.status === "configured")
+          .map((entry) => String(entry.office_agent_id || "").trim().toLowerCase())
+          .filter(Boolean);
   if (providerReadyAgentIds.length) {
     const rosterPayload = roster as Record<string, unknown>;
     const activeAgentIds = Array.isArray(rosterPayload.active_agent_ids) ? (rosterPayload.active_agent_ids as unknown[]) : [];

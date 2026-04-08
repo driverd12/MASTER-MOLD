@@ -273,6 +273,74 @@ class AgentOfficeDashboardTests(unittest.TestCase):
         self.assertIn("research-scout", ids)
         self.assertIn("local-imprint", roster["active_agent_ids"])
         self.assertIn("code-smith", roster["active_agent_ids"])
+        self.assertEqual(roster["source"], "config-fallback")
+
+    def test_fetch_snapshot_rehydrates_roster_from_config_fallback_when_direct_fanout_is_empty(self) -> None:
+        caller = MODULE.McpToolCaller(
+            repo_root=REPO_ROOT,
+            transport="stdio",
+            url="http://127.0.0.1:8787/",
+            origin="http://127.0.0.1",
+            stdio_command="node",
+            stdio_args="dist/server.js",
+            retries=0,
+            retry_delay_seconds=0.05,
+            tool_timeout_seconds=1.0,
+        )
+        fallback_roster = {
+            "source": "config-fallback",
+            "active_agent_ids": ["ring-leader"],
+            "agents": [{"agent_id": "ring-leader", "display_name": "Ring Leader"}],
+        }
+        calls = []
+
+        def call_tool_side_effect(tool_name: str, _args: dict) -> dict:
+            calls.append(tool_name)
+            if tool_name == "office.snapshot":
+                raise RuntimeError("office snapshot down")
+            payloads = {
+                "trichat.roster": {},
+                "trichat.workboard": {"latest_turn": {"selected_agent": "ring-leader"}},
+                "trichat.tmux_controller": {},
+                "task.summary": {},
+                "task.list": {"tasks": []},
+                "agent.session_list": {"sessions": []},
+                "trichat.adapter_telemetry": {"states": []},
+                "trichat.bus": {"events": []},
+                "trichat.summary": {},
+                "kernel.summary": {},
+                "agent.learning_summary": {"top_agents": []},
+                "trichat.autopilot": {},
+                "autonomy.maintain": {
+                    "subsystems": {
+                        "provider_bridge": {
+                            "generated_at": "2026-04-08T16:00:00Z",
+                            "cached": True,
+                            "stale": False,
+                            "diagnostics": [
+                                {
+                                    "client_id": "gemini-cli",
+                                    "display_name": "Gemini CLI",
+                                    "office_agent_id": "gemini",
+                                    "status": "connected",
+                                    "detail": "persisted dashboard heartbeat",
+                                }
+                            ],
+                        }
+                    }
+                },
+                "runtime.worker": {},
+                "operator.brief": {},
+            }
+            return payloads.get(tool_name, {})
+
+        with mock.patch.object(MODULE, "build_config_roster_fallback", return_value=fallback_roster):
+            with mock.patch.object(MODULE.McpToolCaller, "call_tool", side_effect=call_tool_side_effect):
+                snapshot = MODULE.fetch_snapshot(caller, "ring-leader-main", "night")
+
+        self.assertEqual(snapshot.roster, fallback_roster)
+        self.assertEqual(snapshot.provider_bridge["diagnostics"]["diagnostics"][0]["detail"], "persisted dashboard heartbeat")
+        self.assertNotIn("provider.bridge", calls)
 
     def test_select_display_agents_keeps_director_chain(self) -> None:
         roster = {

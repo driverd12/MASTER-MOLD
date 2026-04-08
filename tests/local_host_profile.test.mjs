@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captureLocalHostProfile, deriveLocalExecutionBudget } from "../dist/local_host_profile.js";
+import {
+  captureLocalHostProfile,
+  deriveLocalExecutionBudget,
+  isLocalHostSafeForAutonomyEval,
+  resolveLocalHostHealthState,
+} from "../dist/local_host_profile.js";
 
 test("captureLocalHostProfile returns bounded real local recommendations", () => {
   const profile = captureLocalHostProfile();
@@ -111,4 +116,98 @@ test("deriveLocalExecutionBudget pushes harder only when healthy headroom exists
   assert.ok(aggressive.runtime_worker_max_active > constrained.runtime_worker_max_active);
   assert.ok(aggressive.tmux_recommended_worker_count >= constrained.tmux_recommended_worker_count);
   assert.ok(aggressive.tmux_target_queue_per_worker <= constrained.tmux_target_queue_per_worker);
+});
+
+test("retained swap alone does not degrade a high-headroom local host or block autonomy eval", () => {
+  const healthState = resolveLocalHostHealthState({
+    thermal_pressure: "nominal",
+    memory_available_gb: 38,
+    memory_free_percent: 79,
+    swap_used_gb: 4.4,
+    cpu_utilization: 0.36,
+  });
+  assert.equal(healthState, "healthy");
+  assert.equal(
+    isLocalHostSafeForAutonomyEval({
+      generated_at: new Date().toISOString(),
+      platform: "darwin",
+      arch: "arm64",
+      cpu_count: 16,
+      performance_cpu_count: 12,
+      efficiency_cpu_count: 4,
+      memory_total_gb: 48,
+      memory_available_gb: 38,
+      memory_free_percent: 79,
+      swap_used_gb: 4.4,
+      disk_free_gb: 200,
+      thermal_pressure: "nominal",
+      cpu_utilization: 0.36,
+      health_state: healthState,
+      safe_worker_count: 8,
+      safe_max_queue_per_worker: 6,
+      max_local_model_concurrency: 2,
+      full_gpu_access: true,
+      accelerator_kind: "apple-metal",
+      gpu_vendor: "Apple",
+      gpu_model: "Apple M4 Max",
+      gpu_api: "metal",
+      gpu_family: "spdisplays_metal4",
+      gpu_core_count: 40,
+      gpu_memory_total_gb: 48,
+      gpu_memory_available_gb: 38,
+      gpu_utilization: null,
+      unified_memory: true,
+      mlx_python: "/opt/homebrew/bin/python3",
+      mlx_available: true,
+      mlx_lm_available: true,
+    }),
+    true
+  );
+});
+
+test("retained swap still degrades low-headroom hosts and keeps autonomy eval deferred", () => {
+  const healthState = resolveLocalHostHealthState({
+    thermal_pressure: "nominal",
+    memory_available_gb: 14,
+    memory_free_percent: 22,
+    swap_used_gb: 4.4,
+    cpu_utilization: 0.41,
+  });
+  assert.equal(healthState, "degraded");
+  assert.equal(
+    isLocalHostSafeForAutonomyEval({
+      generated_at: new Date().toISOString(),
+      platform: "darwin",
+      arch: "arm64",
+      cpu_count: 16,
+      performance_cpu_count: 12,
+      efficiency_cpu_count: 4,
+      memory_total_gb: 48,
+      memory_available_gb: 14,
+      memory_free_percent: 22,
+      swap_used_gb: 4.4,
+      disk_free_gb: 200,
+      thermal_pressure: "nominal",
+      cpu_utilization: 0.41,
+      health_state: healthState,
+      safe_worker_count: 4,
+      safe_max_queue_per_worker: 3,
+      max_local_model_concurrency: 1,
+      full_gpu_access: true,
+      accelerator_kind: "apple-metal",
+      gpu_vendor: "Apple",
+      gpu_model: "Apple M4 Max",
+      gpu_api: "metal",
+      gpu_family: "spdisplays_metal4",
+      gpu_core_count: 40,
+      gpu_memory_total_gb: 48,
+      gpu_memory_available_gb: 14,
+      gpu_utilization: null,
+      unified_memory: true,
+      mlx_python: "/opt/homebrew/bin/python3",
+      mlx_available: false,
+      mlx_lm_available: false,
+    }),
+    false
+  );
 });
