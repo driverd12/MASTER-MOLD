@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { probeLocalOllamaBackend, setLocalOllamaModelResidency } from "../local_backend_probe.js";
 import { probeLocalMlxBackend } from "../local_mlx_backend_probe.js";
-import { captureLocalHostProfile, deriveLocalExecutionBudget } from "../local_host_profile.js";
+import { captureLocalHostProfile, deriveLocalExecutionBudget, isLocalHostSafeForAutonomyEval } from "../local_host_profile.js";
 import { summarizeDesktopControlState } from "../desktop_control_plane.js";
 import { summarizePatientZeroState } from "../patient_zero_plane.js";
 import {
@@ -2261,16 +2261,25 @@ async function executeAutonomyMaintainPass(
           measuredThroughputTps = mlxProbe.throughput_tps ?? measuredThroughputTps;
         }
       }
+      const mlxProbeHealthy = mlxProbe
+        ? Boolean(mlxProbe.service_ok && mlxProbe.model_known && mlxProbe.benchmark_ok)
+        : localProfile.mlx_available && localProfile.mlx_lm_available;
+      const mlxModelKnown = mlxProbe ? mlxProbe.model_known : localProfile.mlx_available;
+      const mlxModelLoaded = mlxProbe ? mlxProbe.benchmark_ok : false;
       measuredSuccessRate = smoothRate(
         backend.success_rate,
-        Boolean(mlxProbe?.service_ok) || localProfile.mlx_available,
+        mlxProbe ? mlxProbeHealthy : localProfile.mlx_available && localProfile.mlx_lm_available,
         0.15
       );
       probeCapabilities = {
-        probe_healthy: mlxProbe?.service_ok ?? localProfile.mlx_available,
+        probe_healthy: mlxProbeHealthy,
         probe_generated_at: localProfile.generated_at,
-        probe_model_known: mlxProbe?.model_known ?? localProfile.mlx_available,
-        probe_model_loaded: mlxProbe?.service_ok ?? false,
+        probe_model_known: mlxModelKnown,
+        probe_model_loaded: mlxModelLoaded,
+        probe_benchmark_attempted: mlxProbe?.benchmark_attempted ?? false,
+        probe_benchmark_ok: mlxProbe?.benchmark_ok ?? false,
+        probe_benchmark_latency_ms: mlxProbe?.benchmark_latency_ms ?? null,
+        probe_throughput_tps: mlxProbe?.throughput_tps ?? null,
         recommended_parallel_requests: recommendedParallelRequests,
         mlx_python: localProfile.mlx_python,
         mlx_available: localProfile.mlx_available,
@@ -2311,20 +2320,20 @@ async function executeAutonomyMaintainPass(
           ...(localProfile.accelerator_kind === "apple-metal" ? ["apple-silicon", "unified-memory"] : []),
           ...(localProfile.mlx_lm_available ? ["fine-tuning"] : []),
           ...(mlxProbe?.benchmark_ok ? ["benchmarked"] : []),
-          mlxProbe?.service_ok ?? localProfile.mlx_available ? "probe-healthy" : "probe-down",
+          mlxProbeHealthy ? "probe-healthy" : "probe-down",
         ]),
       ];
-      if (!(mlxProbe?.service_ok ?? localProfile.mlx_available)) {
-        if (backendIsOptional) {
-          actions.push(`model.router.optional_probe_degraded:${backend.backend_id}`);
-        } else {
-          attention.push(`model.router.${backend.backend_id}.probe_failed`);
-        }
-      } else if (mlxProbe && !mlxProbe.model_known) {
+      if (mlxProbe && !mlxModelKnown) {
         if (backendIsOptional) {
           actions.push(`model.router.optional_model_missing:${backend.backend_id}`);
         } else {
           attention.push(`model.router.${backend.backend_id}.model_missing`);
+        }
+      } else if (!mlxProbeHealthy) {
+        if (backendIsOptional) {
+          actions.push(`model.router.optional_probe_degraded:${backend.backend_id}`);
+        } else {
+          attention.push(`model.router.${backend.backend_id}.probe_failed`);
         }
       }
     }
@@ -2391,13 +2400,7 @@ async function executeAutonomyMaintainPass(
   if (evalHealthBeforeRun.below_threshold) {
     attention.push(`eval.${input.eval_suite_id}.below_threshold`);
   }
-  const safeForEval =
-    runtimeWorkerActiveCount <= 0 &&
-    localProfile.health_state === "healthy" &&
-    localProfile.thermal_pressure !== "serious" &&
-    localProfile.thermal_pressure !== "critical" &&
-    localProfile.memory_free_percent >= 18 &&
-    localProfile.swap_used_gb < 4;
+  const safeForEval = runtimeWorkerActiveCount <= 0 && isLocalHostSafeForAutonomyEval(localProfile);
 
   const learning = buildAgentLearningOverview(storage, {
     limit: 250,

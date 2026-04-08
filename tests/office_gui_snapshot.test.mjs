@@ -955,3 +955,165 @@ test("office gui snapshot ignores stale provider diagnostics before marking agen
   assert.equal(copilot.evidence_source, "roster");
   assert.notEqual(copilot.evidence_source, "provider_bridge");
 });
+
+test("office gui snapshot keeps configured bridges sleeping even for active agents", () => {
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        active_agent_ids: ["gemini"],
+        agents: [{ agent_id: "gemini", display_name: "Gemini", coordination_tier: "support", role_lane: "support" }],
+      },
+      workboard: {},
+      tmux: {},
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: { sessions: [] },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {},
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: { state: {}, runtime: {}, due: {} },
+      provider_bridge: {
+        diagnostics: {
+          generated_at: new Date().toISOString(),
+          cached: true,
+          diagnostics: [{ client_id: "gemini-cli", display_name: "Gemini CLI", status: "configured", detail: "configured" }],
+        },
+      },
+    },
+    { theme: "dark" }
+  );
+
+  const gemini = snapshot.agents.find((entry) => entry.agent.agent_id === "gemini");
+  assert.ok(gemini);
+  assert.equal(gemini.state, "sleeping");
+  assert.equal(gemini.evidence_source, "provider_bridge");
+  assert.match(gemini.activity, /armed/i);
+});
+
+test("office gui snapshot keeps blocked provider signals blocked even for active agents", () => {
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        active_agent_ids: ["github-copilot"],
+        agents: [
+          {
+            agent_id: "github-copilot",
+            display_name: "GitHub Copilot",
+            coordination_tier: "support",
+            role_lane: "implementer",
+          },
+        ],
+      },
+      workboard: {},
+      tmux: {},
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: { sessions: [] },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {},
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: { state: {}, runtime: {}, due: {} },
+      provider_bridge: {
+        diagnostics: {
+          generated_at: new Date().toISOString(),
+          cached: true,
+          diagnostics: [
+            {
+              client_id: "github-copilot-cli",
+              display_name: "GitHub Copilot CLI",
+              status: "disconnected",
+              detail: "auth missing",
+            },
+          ],
+        },
+      },
+    },
+    { theme: "dark" }
+  );
+
+  const copilot = snapshot.agents.find((entry) => entry.agent.agent_id === "github-copilot");
+  assert.ok(copilot);
+  assert.equal(copilot.state, "blocked");
+  assert.equal(copilot.evidence_source, "provider_bridge");
+});
+
+test("office gui snapshot downgrades fallback-only active roster presence to sleeping", () => {
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        source: "config-fallback",
+        active_agent_ids: ["research-director"],
+        agents: [
+          {
+            agent_id: "research-director",
+            display_name: "Research Director",
+            coordination_tier: "director",
+            role_lane: "analyst",
+          },
+        ],
+      },
+      workboard: {},
+      tmux: {},
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: { sessions: [] },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {},
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: { state: {}, runtime: {}, due: {} },
+      provider_bridge: { diagnostics: { generated_at: "", cached: false, diagnostics: [] } },
+    },
+    { theme: "dark" }
+  );
+
+  const agent = snapshot.agents[0];
+  assert.equal(agent.state, "sleeping");
+  assert.equal(agent.location, "sofa");
+  assert.equal(agent.evidence_source, "roster");
+  assert.equal(agent.evidence_detail, "config-fallback");
+});

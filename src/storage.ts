@@ -39,6 +39,7 @@ type StorageGuardOptions = {
   startup_backup_enabled: boolean;
   startup_backup_max_bytes: number;
   startup_quick_check_enabled: boolean;
+  startup_quick_check_max_bytes: number;
   auto_restore_from_backup: boolean;
   allow_fresh_on_corruption: boolean;
   quarantine_dir: string;
@@ -1586,6 +1587,16 @@ export class Storage {
 
   private ensureStartupIntegrity(): void {
     if (!this.guardOptions.startup_quick_check_enabled) {
+      return;
+    }
+    const dbSizeBytes = databaseArtifactBytes(this.dbPath);
+    if (
+      this.guardOptions.startup_quick_check_max_bytes > 0 &&
+      dbSizeBytes > this.guardOptions.startup_quick_check_max_bytes
+    ) {
+      writeStorageGuardLog(
+        `[storage] startup quick_check skipped: database size ${dbSizeBytes} exceeds max ${this.guardOptions.startup_quick_check_max_bytes}`
+      );
       return;
     }
     const quickCheck = runQuickCheck(this.db);
@@ -14222,6 +14233,12 @@ function resolveStorageGuardOptions(dbPath: string): StorageGuardOptions {
       Number.MAX_SAFE_INTEGER
     ),
     startup_quick_check_enabled: parseBoolean(process.env.ANAMNESIS_HUB_RUN_QUICK_CHECK_ON_START, true),
+    startup_quick_check_max_bytes: parseBoundedInt(
+      process.env.ANAMNESIS_HUB_RUN_QUICK_CHECK_MAX_BYTES,
+      512 * 1024 * 1024,
+      0,
+      Number.MAX_SAFE_INTEGER
+    ),
     auto_restore_from_backup: parseBoolean(process.env.ANAMNESIS_HUB_AUTO_RESTORE_FROM_BACKUP, true),
     allow_fresh_on_corruption: parseBoolean(process.env.ANAMNESIS_HUB_ALLOW_FRESH_DB_ON_CORRUPTION, false),
     quarantine_dir: path.join(dbDir, "corrupt"),

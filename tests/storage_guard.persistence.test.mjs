@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Storage } from "../dist/storage.js";
 
 const REPO_ROOT = process.cwd();
 
@@ -105,6 +106,54 @@ test("storage guard skips startup backup when the database exceeds the startup s
   const backupDir = path.join(tempDir, "backups");
   const backups = fs.existsSync(backupDir) ? fs.readdirSync(backupDir) : [];
   assert.equal(backups.length, 0);
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("storage guard skips startup quick_check when the database exceeds the startup size threshold", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-storage-guard-skip-quick-check-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+
+  const initial = await openClient(dbPath, {
+    ANAMNESIS_HUB_STARTUP_BACKUP: "0",
+  });
+  try {
+    const health = await callTool(initial.client, "health.storage", {});
+    assert.equal(health.ok, true);
+  } finally {
+    await initial.client.close().catch(() => {});
+  }
+
+  const originalQuickCheckMax = process.env.ANAMNESIS_HUB_RUN_QUICK_CHECK_MAX_BYTES;
+  const originalStartupBackup = process.env.ANAMNESIS_HUB_STARTUP_BACKUP;
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+  let capturedStderr = "";
+  process.env.ANAMNESIS_HUB_RUN_QUICK_CHECK_MAX_BYTES = "1";
+  process.env.ANAMNESIS_HUB_STARTUP_BACKUP = "0";
+  process.stderr.write = (chunk, encoding, callback) => {
+    capturedStderr += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    return originalStderrWrite(chunk, encoding, callback);
+  };
+
+  const storage = new Storage(dbPath);
+  try {
+    storage.init();
+  } finally {
+    storage["db"]?.close?.();
+    process.stderr.write = originalStderrWrite;
+    if (originalQuickCheckMax === undefined) {
+      delete process.env.ANAMNESIS_HUB_RUN_QUICK_CHECK_MAX_BYTES;
+    } else {
+      process.env.ANAMNESIS_HUB_RUN_QUICK_CHECK_MAX_BYTES = originalQuickCheckMax;
+    }
+    if (originalStartupBackup === undefined) {
+      delete process.env.ANAMNESIS_HUB_STARTUP_BACKUP;
+    } else {
+      process.env.ANAMNESIS_HUB_STARTUP_BACKUP = originalStartupBackup;
+    }
+  }
+
+  assert.match(capturedStderr, /startup quick_check skipped/i);
 
   fs.rmSync(tempDir, { recursive: true, force: true });
 });

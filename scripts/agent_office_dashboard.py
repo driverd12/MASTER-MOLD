@@ -701,6 +701,28 @@ def build_config_roster_fallback(
     }
 
 
+def build_persisted_provider_bridge_payload(autonomy_maintain_payload: Dict[str, Any]) -> Dict[str, Any]:
+    maintain = as_dict(autonomy_maintain_payload)
+    subsystems = as_dict(maintain.get("subsystems"))
+    provider_bridge = as_dict(subsystems.get("provider_bridge"))
+    state = as_dict(maintain.get("state"))
+    diagnostics = [as_dict(entry) for entry in as_list(provider_bridge.get("diagnostics"))]
+    if not diagnostics:
+        diagnostics = [as_dict(entry) for entry in as_list(state.get("provider_bridge_diagnostics"))]
+    generated_at = provider_bridge.get("generated_at") or state.get("last_provider_bridge_check_at") or state.get("updated_at")
+    stale_value = provider_bridge.get("stale")
+    stale = bool(stale_value) if stale_value is not None else True
+    return {
+        "snapshot": {},
+        "diagnostics": {
+            "generated_at": generated_at,
+            "cached": bool(provider_bridge.get("cached")) or bool(diagnostics),
+            "stale": stale,
+            "diagnostics": diagnostics,
+        },
+    }
+
+
 def maybe_turn(workboard_payload: Dict[str, Any]) -> Dict[str, Any]:
     active = as_dict(workboard_payload.get("active_turn"))
     if active:
@@ -2988,7 +3010,6 @@ def fetch_snapshot(caller: McpToolCaller, thread_id: str, theme: str = "night") 
         "autopilot": ("trichat.autopilot", {"action": "status"}),
         "autonomy_maintain": ("autonomy.maintain", {"action": "status"}),
         "runtime_workers": ("runtime.worker", {"action": "status", "limit": 20}),
-        "provider_bridge": ("provider.bridge", {"action": "diagnose"}),
         "operator_brief": (
             "operator.brief",
             {
@@ -3015,6 +3036,7 @@ def fetch_snapshot(caller: McpToolCaller, thread_id: str, theme: str = "night") 
             except Exception as error:  # noqa: BLE001
                 results[name] = {}
                 errors.append(compact_single_line(f"{name}: {error}", 160))
+    results["provider_bridge"] = build_persisted_provider_bridge_payload(as_dict(results.get("autonomy_maintain", {})))
     if not as_list(as_dict(results.get("roster", {})).get("agents")):
         fallback_roster = build_config_roster_fallback(
             caller.repo_root,

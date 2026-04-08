@@ -325,6 +325,128 @@ test("autonomy.maintain refreshes local ollama backends with measured probe data
   }
 });
 
+test("autonomy.maintain does not mark partial-failure MLX backends as routing-ready for planning", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-next-wave-router-mlx-partial-failure-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const ollama = await startFakeOllamaServer({
+    models: [
+      {
+        name: "llama3.2:3b",
+        model: "llama3.2:3b",
+      },
+    ],
+  });
+  const mlx = await startPartialFailureFakeMlxServer();
+
+  const session = await openClient({
+    ANAMNESIS_HUB_DB_PATH: dbPath,
+    TRICHAT_BUS_SOCKET_PATH: path.join(tempDir, "trichat.bus.sock"),
+    TRICHAT_OLLAMA_URL: ollama.url,
+  });
+
+  try {
+    await callTool(session.client, "model.router", {
+      action: "configure",
+      mutation: nextMutation("model-router-mlx-partial-configure", "model.router.configure", () => mutationCounter++),
+      enabled: true,
+      strategy: "prefer_quality",
+      default_backend_id: "ollama-primary",
+    });
+
+    await callTool(session.client, "worker.fabric", {
+      action: "configure",
+      mutation: nextMutation("worker-fabric-mlx-partial-configure", "worker.fabric.configure", () => mutationCounter++),
+      enabled: true,
+      strategy: "resource_aware",
+    });
+
+    await callTool(session.client, "worker.fabric", {
+      action: "upsert_host",
+      mutation: nextMutation("worker-fabric-mlx-partial-host", "worker.fabric.upsert", () => mutationCounter++),
+      host: {
+        host_id: "local",
+        transport: "local",
+        workspace_root: REPO_ROOT,
+        worker_count: 1,
+        tags: ["local"],
+      },
+    });
+
+    await callTool(session.client, "model.router", {
+      action: "upsert_backend",
+      mutation: nextMutation("model-router-mlx-partial-upsert-mlx", "model.router.upsert.mlx", () => mutationCounter++),
+      backend: {
+        backend_id: "mlx-secondary",
+        provider: "mlx",
+        model_id: "mlx-community/Qwen2.5-Coder-3B-Instruct-4bit",
+        endpoint: mlx.url,
+        locality: "local",
+        host_id: "local",
+        context_window: 32768,
+        throughput_tps: 140,
+        latency_ms_p50: 20,
+        success_rate: 0.999,
+        tags: ["local", "mlx", "gpu"],
+      },
+    });
+
+    await callTool(session.client, "model.router", {
+      action: "upsert_backend",
+      mutation: nextMutation("model-router-mlx-partial-upsert-ollama", "model.router.upsert.ollama", () => mutationCounter++),
+      backend: {
+        backend_id: "ollama-primary",
+        provider: "ollama",
+        model_id: "llama3.2:3b",
+        endpoint: ollama.url,
+        host_id: "local",
+        locality: "local",
+        context_window: 8192,
+        throughput_tps: 20,
+        latency_ms_p50: 12,
+        success_rate: 0.7,
+        tags: ["local", "ollama", "gpu", "primary"],
+      },
+    });
+
+    await callTool(session.client, "autonomy.maintain", {
+      action: "run_once",
+      mutation: nextMutation("autonomy-maintain-mlx-partial", "autonomy.maintain.run_once", () => mutationCounter++),
+      ensure_bootstrap: false,
+      start_goal_autorun_daemon: false,
+      maintain_tmux_controller: false,
+      run_eval_if_due: false,
+      local_host_id: "local",
+      probe_ollama_url: ollama.url,
+    });
+
+    const status = await callTool(session.client, "model.router", { action: "status" });
+    const mlxBackend = status.state.backends.find((entry) => entry.backend_id === "mlx-secondary");
+    assert.ok(mlxBackend);
+    assert.equal(mlxBackend.capabilities.probe_healthy, false);
+    assert.equal(mlxBackend.capabilities.probe_model_known, false);
+    assert.equal(mlxBackend.capabilities.probe_model_loaded, false);
+    assert.equal(mlxBackend.capabilities.probe_benchmark_ok, false);
+    assert.match(String(mlxBackend.capabilities.probe_error), /origin is not allowed/i);
+
+    const route = await callTool(session.client, "model.router", {
+      action: "route",
+      task_kind: "planning",
+      context_tokens: 4000,
+      latency_budget_ms: 2000,
+      preferred_tags: ["local", "ollama", "gpu", "primary"],
+    });
+    assert.equal(route.selected_backend.backend_id, "ollama-primary");
+    assert.equal(route.ranked_backends[0].backend.backend_id, "ollama-primary");
+  } finally {
+    await session.client.close().catch(() => {});
+    await mlx.close();
+    await ollama.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("autonomy.maintain prewarms a cold local ollama backend when queued work exists", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-next-wave-router-prewarm-"));
   const dbPath = path.join(tempDir, "hub.sqlite");
@@ -1936,6 +2058,35 @@ async function startStatefulFakeOllamaServer() {
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Failed to bind fake Ollama server");
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () =>
+      new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
+}
+
+async function startPartialFailureFakeMlxServer() {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+    if (req.url === "/v1/models" || req.url === "/v1/chat/completions") {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Origin is not allowed for this endpoint." } }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to bind fake MLX server");
   }
   return {
     url: `http://127.0.0.1:${address.port}`,

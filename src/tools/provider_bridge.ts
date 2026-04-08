@@ -40,6 +40,7 @@ export const providerBridgeSchema = z
     db_path: z.string().min(1).optional(),
     workspace_root: z.string().min(1).optional(),
     probe_timeout_ms: z.number().int().min(250).max(30000).optional(),
+    force_live: z.boolean().default(false),
     ...sourceSchema.shape,
   })
   .superRefine((value, ctx) => {
@@ -174,6 +175,26 @@ const providerBridgeDiagnosticCache = new Map<
   }
 >();
 
+const providerBridgeStatusCache = new Map<
+  string,
+  {
+    captured_at: number;
+    statuses: ProviderBridgeClientStatus[];
+  }
+>();
+
+function isHttpServing() {
+  return process.env.MCP_HTTP === "1";
+}
+
+function providerBridgeStatusCacheTtlMs() {
+  const override = Number(process.env.PROVIDER_BRIDGE_STATUS_CACHE_SECONDS || "");
+  if (Number.isFinite(override) && override > 0) {
+    return Math.max(5_000, Math.round(override * 1000));
+  }
+  return 30_000;
+}
+
 function providerBridgeDiagnosticsCacheTtlMs() {
   const override = Number(process.env.PROVIDER_BRIDGE_DIAGNOSTICS_CACHE_SECONDS || "");
   if (Number.isFinite(override) && override > 0) {
@@ -200,7 +221,7 @@ function commandSucceeds(command: string, args: string[]) {
   return result.status === 0;
 }
 
-function runCommandProbe(
+export function runCommandProbe(
   command: string,
   args: string[],
   options: {
@@ -214,6 +235,7 @@ function runCommandProbe(
     env: options.env ?? process.env,
     encoding: "utf8",
     timeout: options.timeout ?? 5000,
+    killSignal: "SIGKILL",
   });
   return {
     status: result.status,
@@ -554,7 +576,7 @@ export function resolveProviderBridgeSnapshot(input: {
     workspace_root: workspaceRoot,
   });
   const serverName = input.server_name?.trim() || "mcplayground";
-  const clients = buildClientStatuses(workspaceRoot, transport, serverName);
+  const clients = buildClientStatusesCached(workspaceRoot, transport, serverName);
   const routerBackendCandidates = buildRouterBackendCandidates(clients);
   return {
     canonical_ingress_tool: "autonomy.ide_ingress",
@@ -772,6 +794,10 @@ function codexInstalled(configPath: string, serverName: string) {
 }
 
 function claudeInstalled(workspaceRoot: string, serverName: string) {
+  const configPath = resolveClientConfigPaths(workspaceRoot).claude;
+  if (jsonServerInstalled(configPath, serverName)) {
+    return true;
+  }
   if (!commandExists("claude")) {
     return false;
   }
@@ -1028,6 +1054,34 @@ function buildClientStatuses(
       notes: notes["chatgpt-developer-mode"],
     },
   ];
+}
+
+function buildClientStatusesCached(
+  workspaceRoot: string,
+  transport: ProviderBridgeTransportConfig,
+  serverName: string
+): ProviderBridgeClientStatus[] {
+  const cacheKey = JSON.stringify({
+    workspaceRoot,
+    serverName,
+    transportMode: transport.mode,
+  });
+  const cached = providerBridgeStatusCache.get(cacheKey);
+  const ttlMs = providerBridgeStatusCacheTtlMs();
+  if (cached && Date.now() - cached.captured_at <= ttlMs) {
+    return cached.statuses;
+  }
+  // When serving over HTTP, return stale cache rather than blocking the event
+  // loop with synchronous shell probes (commandExists, claudeInstalled, etc.).
+  if (isHttpServing() && cached) {
+    return cached.statuses;
+  }
+  const statuses = buildClientStatuses(workspaceRoot, transport, serverName);
+  providerBridgeStatusCache.set(cacheKey, {
+    captured_at: Date.now(),
+    statuses,
+  });
+  return statuses;
 }
 
 function resolveOutboundBridgeReady(agentId: string | null) {
@@ -1609,14 +1663,29 @@ export function resolveProviderBridgeDiagnostics(
     probeTimeoutMs: input.probe_timeout_ms ?? 5000,
   });
   const cached = providerBridgeDiagnosticCache.get(cacheKey);
-  if (!input.bypass_cache && cached && Date.now() - cached.captured_at <= providerBridgeDiagnosticsCacheTtlMs()) {
+  const ttlMs = providerBridgeDiagnosticsCacheTtlMs();
+  if (!input.bypass_cache && cached && Date.now() - cached.captured_at <= ttlMs) {
     return {
       generated_at: new Date(cached.captured_at).toISOString(),
       cached: true,
+      stale: false,
       diagnostics: cached.diagnostics,
     };
   }
-  const statuses = buildClientStatuses(workspaceRoot, transport, serverName);
+  // If we have stale cache and caller did not explicitly request live probes,
+  // return the stale entry immediately so the HTTP server is never blocked by
+  // synchronous CLI probes on the request path.
+  if (!input.bypass_cache && cached) {
+    return {
+      generated_at: new Date(cached.captured_at).toISOString(),
+      cached: true,
+      stale: true,
+      diagnostics: cached.diagnostics,
+    };
+  }
+  const statuses = input.bypass_cache
+    ? buildClientStatuses(workspaceRoot, transport, serverName)
+    : buildClientStatusesCached(workspaceRoot, transport, serverName);
   const diagnostics = runProviderDiagnostics(workspaceRoot, serverName, statuses, input.probe_timeout_ms ?? 5000);
   providerBridgeDiagnosticCache.set(cacheKey, {
     captured_at: Date.now(),
@@ -1625,6 +1694,7 @@ export function resolveProviderBridgeDiagnostics(
   return {
     generated_at: new Date().toISOString(),
     cached: false,
+    stale: false,
     diagnostics,
   };
 }
@@ -1909,6 +1979,18 @@ export async function providerBridge(
     }
 
     if (input.action === "diagnose") {
+      // Reject force_live over HTTP to prevent synchronous CLI probes from
+      // wedging the single-threaded HTTP server (/health, /ready, other MCP
+      // sessions).  Callers should use the default cached path or run
+      // force_live over stdio where blocking is acceptable.
+      const forceLive = input.force_live === true;
+      if (forceLive && isHttpServing()) {
+        return {
+          ok: false,
+          error: "force_live is not available over HTTP transport. Use the default cached diagnostics, or run force_live over stdio.",
+          hint: "Remove force_live or connect via stdio to run live probes without blocking the HTTP server.",
+        };
+      }
       const diagnostics = resolveProviderBridgeDiagnostics({
         workspace_root: input.workspace_root,
         transport: input.transport,
@@ -1918,7 +2000,7 @@ export async function providerBridge(
         stdio_args: input.stdio_args,
         db_path: input.db_path,
         server_name: input.server_name,
-        bypass_cache: true,
+        bypass_cache: forceLive,
         probe_timeout_ms: input.probe_timeout_ms,
       });
       return {
@@ -1928,6 +2010,7 @@ export async function providerBridge(
         server_name: snapshot.server_name,
         generated_at: diagnostics.generated_at,
         cached: diagnostics.cached,
+        stale: diagnostics.stale ?? false,
         diagnostics: diagnostics.diagnostics.filter((entry) => clients.includes(entry.client_id)),
         clients: selectedStatus,
       };
@@ -2026,6 +2109,9 @@ export async function providerBridge(
       });
     }
 
+    // Invalidate status cache after install so subsequent status/diagnose calls
+    // pick up the freshly installed config.
+    providerBridgeStatusCache.clear();
     const postInstallStatus = buildClientStatuses(workspaceRoot, transport, serverName).filter((entry) =>
       clients.includes(entry.client_id)
     );

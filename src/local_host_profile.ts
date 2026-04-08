@@ -150,7 +150,15 @@ function detectSwapUsedGb() {
   return Number((value * multiplier).toFixed(4));
 }
 
-function resolveHealthState(input: {
+function hasRetainedSwapHeadroom(input: {
+  memory_available_gb: number;
+  memory_free_percent: number;
+  cpu_utilization: number;
+}) {
+  return input.memory_available_gb >= 24 && input.memory_free_percent >= 35 && input.cpu_utilization < 0.9;
+}
+
+export function resolveLocalHostHealthState(input: {
   thermal_pressure: LocalThermalPressure;
   memory_available_gb: number;
   memory_free_percent: number;
@@ -161,6 +169,7 @@ function resolveHealthState(input: {
   if (input.degraded_signal) {
     return "degraded" as const;
   }
+  const retainedSwapPressure = input.swap_used_gb >= 4 && !hasRetainedSwapHeadroom(input);
   if (
     input.thermal_pressure === "critical" ||
     input.memory_available_gb < 4 ||
@@ -173,7 +182,7 @@ function resolveHealthState(input: {
     input.thermal_pressure === "serious" ||
     input.memory_available_gb < 8 ||
     input.memory_free_percent < 18 ||
-    input.swap_used_gb >= 4
+    retainedSwapPressure
   ) {
     return "degraded" as const;
   }
@@ -183,12 +192,36 @@ function resolveHealthState(input: {
       input.thermal_pressure !== "nominal" ||
       input.memory_available_gb < 12 ||
       input.memory_free_percent < 25 ||
-      input.swap_used_gb >= 2
+      (input.swap_used_gb >= 2 && !hasRetainedSwapHeadroom(input))
     )
   ) {
     return "degraded" as const;
   }
   return "healthy" as const;
+}
+
+export function isLocalHostSafeForAutonomyEval(
+  profile: Pick<
+    LocalHostProfile,
+    "health_state" | "thermal_pressure" | "memory_available_gb" | "memory_free_percent" | "swap_used_gb" | "cpu_utilization"
+  >
+) {
+  if (profile.health_state !== "healthy") {
+    return false;
+  }
+  if (profile.thermal_pressure === "serious" || profile.thermal_pressure === "critical") {
+    return false;
+  }
+  if (profile.memory_available_gb < 12 || profile.memory_free_percent < 18) {
+    return false;
+  }
+  if (profile.swap_used_gb >= 8) {
+    return false;
+  }
+  if (profile.swap_used_gb >= 4 && !hasRetainedSwapHeadroom(profile)) {
+    return false;
+  }
+  return true;
 }
 
 function recommendSafeWorkerCount(input: {
@@ -405,7 +438,7 @@ export function captureLocalHostProfile(input?: {
     memory_available_gb: memoryAvailableGb,
     workspace_root: input?.workspace_root ?? null,
   });
-  const healthState = resolveHealthState({
+  const healthState = resolveLocalHostHealthState({
     thermal_pressure: thermalPressure,
     memory_available_gb: memoryAvailableGb,
     memory_free_percent: memoryFreePercent,

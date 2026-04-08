@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Storage } from "../dist/storage.js";
 
 const REPO_ROOT = process.cwd();
 
@@ -98,7 +99,8 @@ test("office.snapshot returns a storage-backed GUI payload without depending on 
     assert.ok(snapshot.operator_brief.brief_markdown.includes("# Operator Brief"));
     assert.equal(typeof snapshot.provider_bridge.snapshot.canonical_ingress_tool, "string");
     assert.ok(Array.isArray(snapshot.provider_bridge.diagnostics.diagnostics));
-    assert.equal(snapshot.provider_bridge.diagnostics.cached, true);
+    assert.equal(typeof snapshot.provider_bridge.diagnostics.cached, "boolean");
+    assert.equal(typeof snapshot.provider_bridge.diagnostics.stale, "boolean");
     assert.equal(snapshot.autopilot.state.running, true);
     assert.equal(snapshot.autopilot.state.config.execute_enabled, true);
     for (const agentId of ["implementation-director", "research-director", "verification-director"]) {
@@ -151,6 +153,68 @@ test("office.snapshot metadata bypasses the warm office cache for dashboard-styl
     assert.equal(cached.cache.hit, true);
     assert.equal(live.cache.hit, false);
     assert.equal(live.task_summary.counts.pending, 1);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("office.snapshot direct reads stay storage-backed when persisted provider bridge diagnostics are stale", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-office-snapshot-stale-provider-bridge-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const staleGeneratedAt = new Date(Date.now() - 400_000).toISOString();
+
+  const client = await openClient({
+    ANAMNESIS_HUB_DB_PATH: dbPath,
+    TRICHAT_BUS_SOCKET_PATH: path.join(tempDir, "trichat.bus.sock"),
+  });
+
+  try {
+    const storage = new Storage(dbPath);
+    storage.setAutonomyMaintainState({
+      enabled: true,
+      local_host_id: "local",
+      interval_seconds: 120,
+      learning_review_interval_seconds: 300,
+      enable_self_drive: true,
+      self_drive_cooldown_seconds: 1800,
+      run_eval_if_due: true,
+      eval_interval_seconds: 21600,
+      eval_suite_id: "autonomy.control-plane",
+      minimum_eval_score: 75,
+      last_provider_bridge_check_at: staleGeneratedAt,
+      provider_bridge_diagnostics: [
+        {
+          client_id: "gemini-cli",
+          display_name: "Gemini CLI",
+          office_agent_id: "gemini",
+          available: true,
+          runtime_probed: true,
+          connected: true,
+          status: "connected",
+          detail: "persisted stale bridge sentinel",
+          notes: [],
+          command: "sentinel",
+          config_path: "/tmp/persisted-stale-bridge.json",
+        },
+      ],
+      last_actions: [],
+      last_attention: [],
+      last_error: null,
+    });
+
+    const snapshot = await callTool(client, "office.snapshot", {
+      thread_id: "ring-leader-main",
+      metadata: { source: "dashboard.direct" },
+    });
+
+    assert.equal(snapshot.cache.hit, false);
+    assert.equal(snapshot.provider_bridge.diagnostics.cached, true);
+    assert.equal(snapshot.provider_bridge.diagnostics.stale, true);
+    assert.equal(snapshot.provider_bridge.diagnostics.generated_at, staleGeneratedAt);
+    assert.equal(snapshot.provider_bridge.diagnostics.diagnostics.length, 1);
+    assert.equal(snapshot.provider_bridge.diagnostics.diagnostics[0].detail, "persisted stale bridge sentinel");
+    assert.equal(snapshot.roster.active_agent_ids.includes("gemini"), false);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

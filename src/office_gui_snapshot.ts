@@ -117,6 +117,10 @@ function buildCatalog(raw: Record<string, unknown>) {
   return catalog;
 }
 
+function isFallbackRoster(raw: Record<string, unknown>) {
+  return String(raw.source ?? "").trim().toLowerCase() === "config-fallback";
+}
+
 function buildTaskIndex(...payloads: Record<string, unknown>[]) {
   const index = new Map<string, Record<string, unknown>>();
   for (const payload of payloads) {
@@ -437,6 +441,7 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
   const runtimeWorkers = asDict(raw.runtime_workers);
 
   const catalog = buildCatalog(roster);
+  const fallbackRoster = isFallbackRoster(roster);
   const latestTurn = maybeTurn(workboard);
   const selectedAgentId = normalizeAgentId(latestTurn.selected_agent);
   const expectedAgents = new Set(dedupe(asList(latestTurn.expected_agents)));
@@ -498,7 +503,9 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
     } else if (provider && ["ready", "sleeping"].includes(provider.state)) {
       state = provider.state;
       location = provider.location;
-      activity = provider.activity;
+      activity = agent.active && provider.state === "sleeping"
+        ? `${provider.activity} (armed)`
+        : provider.activity;
       evidenceSource = "provider_bridge";
       evidenceDetail = provider.detail;
     } else if (blocked) {
@@ -524,11 +531,11 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
       evidenceSource = "task";
       evidenceDetail = owner.detail;
     } else if (agent.active) {
-      state = "ready";
-      location = "desk";
-      activity = "armed for the next bounded task";
+      state = fallbackRoster ? "sleeping" : "ready";
+      location = fallbackRoster ? "sofa" : "desk";
+      activity = fallbackRoster ? "waiting for roster recovery" : "armed for the next bounded task";
       evidenceSource = "roster";
-      evidenceDetail = "active-agent-pool";
+      evidenceDetail = fallbackRoster ? "config-fallback" : "active-agent-pool";
     } else {
       state = "offline";
       location = "ops";
