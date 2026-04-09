@@ -1,0 +1,70 @@
+{
+  "_description": "Canonical platform capability manifest for MCPlayground Core Template. Source of truth for prerequisites, browser defaults, and platform-specific paths.",
+  "prerequisites": {
+    "required": [
+      { "name": "node", "check": "node --version", "version_pattern": "^v(2[0-2])\\.", "min_version": "20.0.0", "install_hint": { "darwin": "brew install node@22", "linux": "curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs", "win32": "winget install OpenJS.NodeJS.LTS" } },
+      { "name": "npm", "check": "npm --version", "min_version": "9.0.0", "install_hint": { "darwin": "Bundled with Node.js", "linux": "Bundled with Node.js", "win32": "Bundled with Node.js" } },
+      { "name": "python3", "check": "python3 --version", "version_pattern": "Python (3\\.\\d+)", "min_version": "3.9.0", "install_hint": { "darwin": "brew install python@3.12", "linux": "sudo apt-get install -y python3 python3-venv", "win32": "winget install Python.Python.3.12" } },
+      { "name": "git", "check": "git --version", "install_hint": { "darwin": "xcode-select --install", "linux": "sudo apt-get install -y git", "win32": "winget install Git.Git" } }
+    ],
+    "recommended": [
+      { "name": "tmux", "check": "tmux -V", "install_hint": { "darwin": "brew install tmux", "linux": "sudo apt-get install -y tmux", "win32": "Not natively supported on Windows; use WSL" }, "note": "Required for ring-leader multi-agent orchestration and office tmux layout" },
+      { "name": "curl", "check": "curl --version", "install_hint": { "darwin": "Built-in", "linux": "sudo apt-get install -y curl", "win32": "Built-in on Windows 10+" } },
+      { "name": "lsof", "check": "lsof -v", "install_hint": { "darwin": "Built-in on macOS", "linux": "sudo apt-get install -y lsof", "win32": "Not typically available natively on Windows; use WSL or rely on browser-only flows" }, "note": "Needed for truthful office GUI listener checks on Unix hosts" },
+      { "name": "ollama", "check": "ollama --version", "install_hint": { "darwin": "brew install ollama", "linux": "curl -fsSL https://ollama.ai/install.sh | sh", "win32": "winget install Ollama.Ollama" }, "note": "Required for local model inference (MLX/llama backends)" }
+    ]
+  },
+  "browsers": {
+    "_description": "Default browser detection order per platform. First match wins.",
+    "darwin": [
+      { "name": "Google Chrome", "app_path": "/Applications/Google Chrome.app", "open_cmd": ["open", "-a", "Google Chrome"] },
+      { "name": "Microsoft Edge", "app_path": "/Applications/Microsoft Edge.app", "open_cmd": ["open", "-a", "Microsoft Edge"] },
+      { "name": "Firefox", "app_path": "/Applications/Firefox.app", "open_cmd": ["open", "-a", "Firefox"] },
+      { "name": "Safari", "app_path": "/Applications/Safari.app", "open_cmd": ["open", "-a", "Safari"] }
+    ],
+    "linux": [
+      { "name": "Google Chrome", "binary": "google-chrome", "open_cmd": ["google-chrome"] },
+      { "name": "Google Chrome (Stable)", "binary": "google-chrome-stable", "open_cmd": ["google-chrome-stable"] },
+      { "name": "Microsoft Edge", "binary": "microsoft-edge", "open_cmd": ["microsoft-edge"] },
+      { "name": "Firefox", "binary": "firefox", "open_cmd": ["firefox"] },
+      { "name": "xdg-open fallback", "binary": "xdg-open", "open_cmd": ["xdg-open"] }
+    ],
+    "win32": [
+      { "name": "Microsoft Edge", "binary": "msedge", "registry_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe", "program_files_path": "Microsoft\\Edge\\Application\\msedge.exe", "local_app_data_path": "Microsoft\\Edge\\Application\\msedge.exe", "open_cmd": ["cmd.exe", "/c", "start", "msedge"] },
+      { "name": "Google Chrome", "binary": "chrome", "registry_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe", "program_files_path": "Google\\Chrome\\Application\\chrome.exe", "local_app_data_path": "Google\\Chrome\\Application\\chrome.exe", "open_cmd": ["cmd.exe", "/c", "start", "chrome"] },
+      { "name": "Google Chrome (Alt)", "binary": "google-chrome", "program_files_path": "Google\\Chrome\\Application\\chrome.exe", "local_app_data_path": "Google\\Chrome\\Application\\chrome.exe", "open_cmd": ["cmd.exe", "/c", "start", "chrome"] },
+      { "name": "Firefox", "binary": "firefox", "program_files_path": "Mozilla Firefox\\firefox.exe", "local_app_data_path": "Mozilla Firefox\\firefox.exe", "open_cmd": ["cmd.exe", "/c", "start", "firefox"] },
+      { "name": "System default", "binary": "explorer", "open_cmd": ["cmd.exe", "/c", "start", ""] }
+    ]
+  },
+  "platforms": {
+    "darwin": { "service_manager": "launchd", "shell": "zsh", "node_paths": ["/opt/homebrew/bin/node", "/usr/local/bin/node"] },
+    "linux": { "service_manager": "systemd", "shell": "bash", "node_paths": ["/usr/bin/node", "/usr/local/bin/node"] },
+    "win32": { "service_manager": "none", "shell": "powershell", "node_paths": [] }
+  },
+  "launchers": {
+    "office_gui": {
+      "darwin": {
+        "supported": true,
+        "entrypoint": "node ./scripts/agent_office_gui.mjs",
+        "service_mode": "launchd-or-runner",
+        "required_tools": [],
+        "recommended_tools": []
+      },
+      "linux": {
+        "supported": true,
+        "entrypoint": "node ./scripts/agent_office_gui.mjs",
+        "service_mode": "runner",
+        "required_tools": [],
+        "recommended_tools": []
+      },
+      "win32": {
+        "supported": true,
+        "entrypoint": "node ./scripts/agent_office_gui.mjs",
+        "service_mode": "runner",
+        "required_tools": [],
+        "recommended_tools": []
+      }
+    }
+  }
+}

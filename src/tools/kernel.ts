@@ -359,6 +359,48 @@ type WorkflowExportSummary = {
   } | null;
 };
 
+type SetupDiagnosticsSummary = {
+  platform: {
+    platform: string;
+    arch: string;
+    browser_app: string | null;
+  };
+  bootstrap: {
+    self_start_ready: boolean;
+    last_ready_at: string | null;
+    blocker_count: number;
+    blockers: string[];
+  };
+  provider_bridge: {
+    client_count: number;
+    connected_count: number;
+    configured_count: number;
+    disconnected_count: number;
+    unavailable_count: number;
+    stale: boolean;
+    degraded: boolean;
+  };
+  desktop_lane: {
+    enabled: boolean;
+    stale: boolean;
+    observe_ready: boolean;
+    act_ready: boolean;
+    listen_ready: boolean;
+  };
+  browser_lane: {
+    desired_browser_app: string | null;
+    ready: boolean;
+    degraded: boolean;
+  };
+  fallback: {
+    core_usable: boolean;
+    browser_degraded: boolean;
+    provider_bridge_degraded: boolean;
+    desktop_degraded: boolean;
+  };
+  next_actions: string[];
+};
+
 type RuntimeWorkerSummary = {
   session_count: number;
   active_count: number;
@@ -1442,6 +1484,122 @@ function summarizeSelfImprovement(storage: Storage): SelfImprovementSummary {
   };
 }
 
+function summarizeSetupDiagnostics(params: {
+  autonomy_maintain: AutonomyMaintainSummary;
+  worker_fabric: HostFabricSummary;
+  model_router: ModelRouterSummary;
+  provider_bridge_entries: Array<Record<string, unknown>>;
+  provider_bridge_generated_at: string | null;
+  provider_bridge_stale: boolean;
+  desktop_control: ReturnType<typeof summarizeDesktopControlState>;
+  patient_zero: ReturnType<typeof summarizePatientZeroState>;
+}): SetupDiagnosticsSummary {
+  const bootstrapBlockerPrefixes = [
+    "worker.fabric.",
+    "cluster.topology.",
+    "model.router.",
+    "org.program.",
+    "benchmark.suite.",
+    "eval.suite.",
+    "trichat.autopilot.",
+  ];
+  const bootstrapBlockers = [...new Set(
+    (params.autonomy_maintain.last_attention ?? []).filter((entry) =>
+      bootstrapBlockerPrefixes.some((prefix) => entry.startsWith(prefix))
+    )
+  )];
+  const selfStartReady =
+    bootstrapBlockers.length === 0 && typeof params.autonomy_maintain.last_bootstrap_ready_at === "string";
+  const providerBridgeConnectedCount = params.provider_bridge_entries.filter(
+    (entry) => String(entry.status ?? "").trim().toLowerCase() === "connected"
+  ).length;
+  const providerBridgeConfiguredCount = params.provider_bridge_entries.filter(
+    (entry) => String(entry.status ?? "").trim().toLowerCase() === "configured"
+  ).length;
+  const providerBridgeDisconnectedCount = params.provider_bridge_entries.filter(
+    (entry) => String(entry.status ?? "").trim().toLowerCase() === "disconnected"
+  ).length;
+  const providerBridgeUnavailableCount = params.provider_bridge_entries.filter(
+    (entry) => String(entry.status ?? "").trim().toLowerCase() === "unavailable"
+  ).length;
+  const providerBridgeDegraded =
+    params.provider_bridge_stale ||
+    providerBridgeDisconnectedCount > 0 ||
+    (params.provider_bridge_entries.length > 0 && providerBridgeConnectedCount === 0 && providerBridgeConfiguredCount === 0);
+  const desktopDegraded =
+    params.desktop_control.enabled &&
+    (params.desktop_control.stale ||
+      (params.desktop_control.observe_enabled && !params.desktop_control.observe_ready) ||
+      (params.desktop_control.act_enabled && !params.desktop_control.act_ready) ||
+      (params.desktop_control.listen_enabled && !params.desktop_control.listen_ready));
+  const browserDegraded = params.patient_zero.enabled && params.patient_zero.browser_ready !== true;
+  const nextActions: string[] = [];
+  if (providerBridgeDegraded || browserDegraded || desktopDegraded) {
+    nextActions.push("Run `npm run doctor` for a single prerequisite, browser, and platform bootstrap report before debugging individual lanes.");
+  }
+  if (!selfStartReady) {
+    nextActions.push("Run `npm run autonomy:ensure` to seed or repair the core control plane before relying on local autonomy.");
+  }
+  if (providerBridgeDegraded) {
+    nextActions.push(
+      "Run `npm run providers:status` and then `npm run providers:diagnose -- <client-id>` for any disconnected or unavailable bridge clients."
+    );
+  }
+  if (browserDegraded) {
+    nextActions.push(
+      "Browser work will degrade visibly until the desktop/browser lane is available on this host; keep browser-required tasks operator-visible."
+    );
+  }
+  if (desktopDegraded) {
+    nextActions.push("Desktop control is degraded on this host; observation or actuation should stay bounded and explicit until the lane recovers.");
+  }
+  return {
+    platform: {
+      platform: process.platform,
+      arch: process.arch,
+      browser_app: params.patient_zero.browser_app ?? null,
+    },
+    bootstrap: {
+      self_start_ready: selfStartReady,
+      last_ready_at: params.autonomy_maintain.last_bootstrap_ready_at,
+      blocker_count: bootstrapBlockers.length,
+      blockers: bootstrapBlockers,
+    },
+    provider_bridge: {
+      client_count: params.provider_bridge_entries.length,
+      connected_count: providerBridgeConnectedCount,
+      configured_count: providerBridgeConfiguredCount,
+      disconnected_count: providerBridgeDisconnectedCount,
+      unavailable_count: providerBridgeUnavailableCount,
+      stale: params.provider_bridge_stale,
+      degraded: providerBridgeDegraded,
+    },
+    desktop_lane: {
+      enabled: params.desktop_control.enabled,
+      stale: params.desktop_control.stale,
+      observe_ready: params.desktop_control.observe_ready,
+      act_ready: params.desktop_control.act_ready,
+      listen_ready: params.desktop_control.listen_ready,
+    },
+    browser_lane: {
+      desired_browser_app: params.patient_zero.browser_app ?? null,
+      ready: params.patient_zero.browser_ready === true,
+      degraded: browserDegraded,
+    },
+    fallback: {
+      core_usable:
+        selfStartReady &&
+        params.worker_fabric.enabled_host_count > 0 &&
+        params.model_router.enabled_backend_count > 0 &&
+        params.autonomy_maintain.stale !== true,
+      browser_degraded: browserDegraded,
+      provider_bridge_degraded: providerBridgeDegraded,
+      desktop_degraded: desktopDegraded,
+    },
+    next_actions: nextActions,
+  };
+}
+
 function summarizeMaintenanceSubsystem(params: {
   enabled: boolean;
   interval_seconds: number;
@@ -1887,6 +2045,15 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
   const providerBridgeEntries = Array.isArray(providerBridgeDiagnostics.diagnostics)
     ? providerBridgeDiagnostics.diagnostics
     : [];
+  const providerBridgeAgeSeconds = ageSeconds(
+    typeof providerBridgeDiagnostics.generated_at === "string" ? providerBridgeDiagnostics.generated_at : null
+  );
+  const providerBridgeStale =
+    (typeof (providerBridgeDiagnostics as { stale?: unknown }).stale === "boolean"
+      ? ((providerBridgeDiagnostics as { stale?: boolean }).stale === true)
+      : false) ||
+    ((providerBridgeAgeSeconds ?? Number.POSITIVE_INFINITY) >
+      Math.max((autonomyMaintainState?.interval_seconds ?? 120) * 3, 300));
   const desktopControlState = storage.getDesktopControlState();
   const desktopControlSummary = summarizeDesktopControlState(desktopControlState);
   const patientZeroState = storage.getPatientZeroState();
@@ -1896,6 +2063,16 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     desktopControlState,
     privilegedAccess.summary as Record<string, unknown>
   );
+  const setupDiagnostics = summarizeSetupDiagnostics({
+    autonomy_maintain: autonomyMaintainSummary,
+    worker_fabric: workerFabricSummary,
+    model_router: modelRouterSummary,
+    provider_bridge_entries: providerBridgeEntries as Array<Record<string, unknown>>,
+    provider_bridge_generated_at: providerBridgeDiagnostics.generated_at,
+    provider_bridge_stale: providerBridgeStale,
+    desktop_control: desktopControlSummary,
+    patient_zero: patientZeroSummary,
+  });
   const goalSummaries = openGoals.map((goal) => {
     const plan = resolveGoalPlan(storage, goal);
     const steps = plan ? storage.listPlanSteps(plan.plan_id) : [];
@@ -2191,6 +2368,9 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
   if (providerBridgeDisconnectedCount > 0) {
     attention.push(`Provider bridges report ${providerBridgeDisconnectedCount} disconnected client session(s).`);
   }
+  if (setupDiagnostics.provider_bridge.stale) {
+    attention.push("Provider bridge diagnostics are stale; treat bridge readiness as degraded until they refresh.");
+  }
   if (warmCacheState.enabled && (!Number.isFinite(warmCacheAgeSeconds) || warmCacheAgeSeconds > Math.max(60, warmCacheState.interval_seconds * 2))) {
     attention.push("Warm-cache prefetch lane is stale and default operator surfaces may be serving cold reads.");
   }
@@ -2350,6 +2530,12 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
         browser_ready: patientZeroSummary.browser_ready,
         root_shell_enabled: patientZeroSummary.root_shell_enabled,
       },
+      setup_diagnostics: {
+        bootstrap_ready: setupDiagnostics.bootstrap.self_start_ready,
+        provider_bridge_degraded: setupDiagnostics.provider_bridge.degraded,
+        browser_ready: setupDiagnostics.browser_lane.ready,
+        core_usable: setupDiagnostics.fallback.core_usable,
+      },
       privileged_access: {
         root_execution_ready: privilegedAccess.summary.root_execution_ready,
         account: privilegedAccess.summary.account,
@@ -2430,6 +2616,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
         (!Number.isFinite(warmCacheAgeSeconds) || warmCacheAgeSeconds > Math.max(60, warmCacheState.interval_seconds * 2)),
     },
     feature_flags: featureFlagsSummary,
+    setup_diagnostics: setupDiagnostics,
     provider_bridge: {
       generated_at: providerBridgeDiagnostics.generated_at,
       cached: providerBridgeDiagnostics.cached,
@@ -2438,6 +2625,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       configured_count: providerBridgeEntries.filter((entry) => String(entry.status ?? "").trim().toLowerCase() === "configured").length,
       disconnected_count: providerBridgeDisconnectedCount,
       unavailable_count: providerBridgeEntries.filter((entry) => String(entry.status ?? "").trim().toLowerCase() === "unavailable").length,
+      stale: providerBridgeStale,
     },
     learning: {
       ...learningOverview,

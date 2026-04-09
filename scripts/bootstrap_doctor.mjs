@@ -1,0 +1,460 @@
+#!/usr/bin/env node
+// bootstrap_doctor.mjs — Cross-platform bootstrap health check
+// Reads scripts/platform_manifest.json and validates the local environment.
+// Usage: node scripts/bootstrap_doctor.mjs
+// Exit 0 = all required checks pass, 1 = at least one required check failed.
+
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ── Repo root ────────────────────────────────────────────────────────────────
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(__dirname, "..");
+
+// ── ANSI helpers ─────────────────────────────────────────────────────────────
+const isColorSupported =
+  process.env.FORCE_COLOR !== "0" &&
+  (process.env.FORCE_COLOR || process.stdout.isTTY);
+
+const c = {
+  reset: isColorSupported ? "\x1b[0m" : "",
+  bold: isColorSupported ? "\x1b[1m" : "",
+  dim: isColorSupported ? "\x1b[2m" : "",
+  green: isColorSupported ? "\x1b[32m" : "",
+  red: isColorSupported ? "\x1b[31m" : "",
+  yellow: isColorSupported ? "\x1b[33m" : "",
+  cyan: isColorSupported ? "\x1b[36m" : "",
+};
+
+const PASS = `${c.green}\u2713${c.reset}`;
+const FAIL = `${c.red}\u2717${c.reset}`;
+const WARN = `${c.yellow}\u25CB${c.reset}`;
+
+function write(line) {
+  process.stdout.write(line + "\n");
+}
+
+// ── Load manifest ────────────────────────────────────────────────────────────
+const manifestPath = resolve(ROOT, "scripts", "platform_manifest.json");
+if (!existsSync(manifestPath)) {
+  write(
+    `${c.red}[doctor] ERROR: platform manifest not found at ${manifestPath}${c.reset}`
+  );
+  write(
+    `${c.dim}         Expected scripts/platform_manifest.json in the repo root.${c.reset}`
+  );
+  process.exit(1);
+}
+
+let manifest;
+try {
+  manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+} catch (err) {
+  write(
+    `${c.red}[doctor] ERROR: failed to parse platform manifest: ${err.message}${c.reset}`
+  );
+  process.exit(1);
+}
+
+// ── Platform detection ───────────────────────────────────────────────────────
+const platform = process.platform; // darwin | linux | win32
+const arch = process.arch; // arm64 | x64 | ...
+
+write("");
+write(`${c.bold}[doctor]${c.reset} Platform: ${c.cyan}${platform} ${arch}${c.reset}`);
+
+// ── Utility: split a command string respecting simple quoting ────────────────
+function shellSplit(cmd) {
+  const tokens = [];
+  let current = "";
+  let inQuote = null;
+  for (const ch of cmd) {
+    if (!inQuote && (ch === '"' || ch === "'")) { inQuote = ch; continue; }
+    if (ch === inQuote) { inQuote = null; continue; }
+    if (!inQuote && /\s/.test(ch)) {
+      if (current.length) { tokens.push(current); current = ""; }
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length) tokens.push(current);
+  return tokens;
+}
+
+// ── Utility: run a command and return trimmed stdout, or null on failure ─────
+function run(cmd) {
+  // Parse command safely: first token is the binary, rest are individual args.
+  // Using shellSplit avoids breakage when paths contain spaces (e.g. Windows
+  // program-files paths or quoted arguments in the manifest check commands).
+  const parts = shellSplit(cmd);
+  const bin = parts[0];
+  const args = parts.slice(1);
+  try {
+    const stdout = execFileSync(bin, args, {
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+      // On Windows, use shell so that `where` etc. resolve correctly
+      shell: platform === "win32",
+    });
+    return stdout.trim();
+  } catch {
+    return null;
+  }
+}
+
+// ── Utility: check if output matches a version_pattern gate ──────────────────
+function matchesVersionPattern(output, patternStr) {
+  if (!output || !patternStr) return true;
+  return new RegExp(patternStr).test(output);
+}
+
+// ── Utility: extract a displayable version string from command output ─────────
+function extractVersion(output) {
+  if (!output) return null;
+  // Grab first semver-ish token (e.g. "v22.12.0" -> "22.12.0", "Python 3.12.4" -> "3.12.4")
+  const m = output.match(/(\d+\.\d+[\w.-]*)/);
+  return m ? m[1] : null;
+}
+
+function resolveWin32ProgramFilesPath(relativePath) {
+  if (platform !== "win32" || typeof relativePath !== "string" || relativePath.trim().length === 0) {
+    return null;
+  }
+  const roots = [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter(Boolean);
+  for (const root of roots) {
+    const candidate = resolve(root, relativePath);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function resolveWin32LocalAppDataPath(relativePath) {
+  if (platform !== "win32" || typeof relativePath !== "string" || relativePath.trim().length === 0) {
+    return null;
+  }
+  const root = process.env.LOCALAPPDATA;
+  if (!root) {
+    return null;
+  }
+  const candidate = resolve(root, relativePath);
+  return existsSync(candidate) ? candidate : null;
+}
+
+// ── Utility: compare semver loosely (major.minor.patch) ──────────────────────
+function semverGte(actual, required) {
+  if (!actual || !required) return true; // skip if we can't compare
+  const parse = (v) =>
+    v
+      .split(".")
+      .map((n) => parseInt(n, 10) || 0);
+  const a = parse(actual);
+  const r = parse(required);
+  for (let i = 0; i < 3; i++) {
+    const av = a[i] || 0;
+    const rv = r[i] || 0;
+    if (av > rv) return true;
+    if (av < rv) return false;
+  }
+  return true; // equal
+}
+
+// ── Check prerequisites ──────────────────────────────────────────────────────
+let requiredFails = 0;
+let recommendedMissing = 0;
+let launcherDegraded = false;
+
+function checkPrereq(item, isRequired) {
+  const output = run(item.check);
+  const version = extractVersion(output);
+  const hint =
+    item.install_hint && item.install_hint[platform]
+      ? item.install_hint[platform]
+      : null;
+
+  if (output === null) {
+    // Not found
+    if (isRequired) {
+      requiredFails++;
+      const hintStr = hint ? ` \u2014 ${hint}` : "";
+      write(`  ${FAIL} ${item.name} ${c.red}(not installed${hintStr})${c.reset}`);
+    } else {
+      recommendedMissing++;
+      const hintStr = hint ? ` \u2014 ${hint}` : "";
+      write(`  ${WARN} ${item.name} ${c.yellow}(not installed${hintStr})${c.reset}`);
+    }
+    return;
+  }
+
+  // Found — build display string
+  const versionStr = version || "";
+  const minStr = item.min_version
+    ? ` ${c.dim}(required \u2265${item.min_version})${c.reset}`
+    : "";
+
+  // Check version_pattern gate (e.g. node must be v20-v22)
+  if (
+    item.version_pattern &&
+    !matchesVersionPattern(output, item.version_pattern)
+  ) {
+    if (isRequired) {
+      requiredFails++;
+      const hintStr = hint ? ` \u2014 ${hint}` : "";
+      write(
+        `  ${FAIL} ${item.name} ${c.red}${versionStr} (version not supported${hintStr})${c.reset}`
+      );
+    } else {
+      recommendedMissing++;
+      write(
+        `  ${WARN} ${item.name} ${c.yellow}${versionStr} (version not supported)${c.reset}`
+      );
+    }
+    return;
+  }
+
+  if (item.min_version && version && !semverGte(version, item.min_version)) {
+    // Version too low
+    if (isRequired) {
+      requiredFails++;
+      write(
+        `  ${FAIL} ${item.name} ${c.red}${versionStr}${c.reset}${minStr} ${c.red}— update required${c.reset}`
+      );
+    } else {
+      recommendedMissing++;
+      write(
+        `  ${WARN} ${item.name} ${c.yellow}${versionStr}${c.reset}${minStr}`
+      );
+    }
+    return;
+  }
+
+  // All good
+  if (isRequired) {
+    write(`  ${PASS} ${item.name} ${versionStr}${minStr}`);
+  } else {
+    write(`  ${PASS} ${item.name} ${versionStr} ${c.dim}(recommended)${c.reset}`);
+  }
+}
+
+function findManifestTool(name) {
+  const all = [
+    ...(Array.isArray(manifest?.prerequisites?.required) ? manifest.prerequisites.required : []),
+    ...(Array.isArray(manifest?.prerequisites?.recommended) ? manifest.prerequisites.recommended : []),
+  ];
+  return all.find((entry) => entry?.name === name) || null;
+}
+
+function toolCheckCommand(name) {
+  const item = findManifestTool(name);
+  if (item?.check) {
+    return item.check;
+  }
+  if (platform === "win32") {
+    return `where ${name}`;
+  }
+  return `which ${name}`;
+}
+
+function toolInstallHint(name) {
+  const item = findManifestTool(name);
+  return item?.install_hint?.[platform] || null;
+}
+
+function checkLauncherTool(name, isRequired, reason) {
+  const output = run(toolCheckCommand(name));
+  const hint = toolInstallHint(name);
+  if (output === null) {
+    const hintStr = hint ? ` — ${hint}` : "";
+    if (isRequired) {
+      requiredFails++;
+      launcherDegraded = true;
+      write(`  ${FAIL} ${name} ${c.red}(needed for ${reason}${hintStr})${c.reset}`);
+    } else {
+      recommendedMissing++;
+      launcherDegraded = true;
+      write(`  ${WARN} ${name} ${c.yellow}(recommended for ${reason}${hintStr})${c.reset}`);
+    }
+    return;
+  }
+  const firstLine = String(output).split(/\r?\n/)[0];
+  const label = isRequired ? PASS : PASS;
+  const suffix = isRequired ? "" : ` ${c.dim}(fallback)${c.reset}`;
+  write(`  ${label} ${name} ${c.dim}(${firstLine})${c.reset}${suffix}`);
+}
+
+write(`${c.bold}[doctor]${c.reset} Prerequisites:`);
+
+for (const item of manifest.prerequisites.required) {
+  checkPrereq(item, true);
+}
+for (const item of manifest.prerequisites.recommended) {
+  checkPrereq(item, false);
+}
+
+// ── Browser detection ────────────────────────────────────────────────────────
+write(`${c.bold}[doctor]${c.reset} Browser:`);
+
+const browserList = manifest.browsers[platform] || [];
+let browserFound = false;
+
+for (const browser of browserList) {
+  if (platform === "darwin") {
+    // macOS: check app_path with fs.existsSync
+    if (browser.app_path && existsSync(browser.app_path)) {
+      write(`  ${PASS} ${browser.name} ${c.dim}(${browser.app_path})${c.reset}`);
+      browserFound = true;
+      break;
+    }
+  } else if (platform === "linux") {
+    // Linux: use `which` to find binary
+    if (browser.binary) {
+      const result = run(`which ${browser.binary}`);
+      if (result) {
+        write(`  ${PASS} ${browser.name} ${c.dim}(${result})${c.reset}`);
+        browserFound = true;
+        break;
+      }
+    }
+  } else if (platform === "win32") {
+    // Windows: prefer standard install roots, then per-user LocalAppData, then PATH lookups
+    const programFilesPath = resolveWin32ProgramFilesPath(browser.program_files_path);
+    if (programFilesPath) {
+      write(`  ${PASS} ${browser.name} ${c.dim}(${programFilesPath})${c.reset}`);
+      browserFound = true;
+      break;
+    }
+    const localAppDataPath = resolveWin32LocalAppDataPath(browser.local_app_data_path);
+    if (localAppDataPath) {
+      write(`  ${PASS} ${browser.name} ${c.dim}(${localAppDataPath})${c.reset}`);
+      browserFound = true;
+      break;
+    }
+    if (browser.binary) {
+      const result = run(`where ${browser.binary}`);
+      if (result) {
+        const firstLine = result.split(/\r?\n/)[0];
+        write(`  ${PASS} ${browser.name} ${c.dim}(${firstLine})${c.reset}`);
+        browserFound = true;
+        break;
+      }
+    }
+  }
+}
+
+if (!browserFound) {
+  write(`  ${WARN} ${c.yellow}No supported browser detected${c.reset}`);
+  recommendedMissing++;
+}
+
+// ── Build checks ─────────────────────────────────────────────────────────────
+write(`${c.bold}[doctor]${c.reset} Build:`);
+
+const nodeModulesExists = existsSync(resolve(ROOT, "node_modules"));
+if (nodeModulesExists) {
+  write(`  ${PASS} node_modules present`);
+} else {
+  requiredFails++;
+  write(
+    `  ${FAIL} node_modules ${c.red}missing \u2014 run: npm ci${c.reset}`
+  );
+}
+
+const distServerExists = existsSync(resolve(ROOT, "dist", "server.js"));
+if (distServerExists) {
+  write(`  ${PASS} dist/server.js present`);
+} else {
+  requiredFails++;
+  write(
+    `  ${FAIL} dist/server.js ${c.red}missing \u2014 run: npm run build${c.reset}`
+  );
+}
+
+// ── Config checks ────────────────────────────────────────────────────────────
+write(`${c.bold}[doctor]${c.reset} Config:`);
+
+const envExists = existsSync(resolve(ROOT, ".env"));
+if (envExists) {
+  write(`  ${PASS} .env present`);
+} else {
+  requiredFails++;
+  write(
+    `  ${FAIL} .env ${c.red}missing \u2014 copy .env.example to .env and configure${c.reset}`
+  );
+}
+
+const bearerTokenPath = resolve(
+  ROOT,
+  "data",
+  "imprint",
+  "http_bearer_token"
+);
+const bearerTokenExists = existsSync(bearerTokenPath);
+if (bearerTokenExists) {
+  write(`  ${PASS} bearer token configured`);
+} else {
+  write(
+    `  ${WARN} bearer token ${c.yellow}not found at data/imprint/http_bearer_token (needed for HTTP mode)${c.reset}`
+  );
+  recommendedMissing++;
+}
+
+// ── Launcher checks ──────────────────────────────────────────────────────────
+write(`${c.bold}[doctor]${c.reset} Office GUI Launcher:`);
+
+const officeGuiConfig = manifest?.launchers?.office_gui?.[platform] || null;
+const officeGuiEntrypoint =
+  typeof officeGuiConfig?.entrypoint === "string" && officeGuiConfig.entrypoint.trim().length > 0
+    ? officeGuiConfig.entrypoint.trim()
+    : "node ./scripts/agent_office_gui.mjs";
+const officeGuiEntrypointPath = officeGuiEntrypoint.startsWith("node ./")
+  ? resolve(ROOT, officeGuiEntrypoint.slice("node ./".length))
+  : resolve(ROOT, "scripts", "agent_office_gui.mjs");
+if (!existsSync(officeGuiEntrypointPath)) {
+  launcherDegraded = true;
+  recommendedMissing++;
+  write(`  ${WARN} ${c.yellow}${officeGuiEntrypoint} missing${c.reset}`);
+} else if (!officeGuiConfig || officeGuiConfig.supported !== true) {
+  launcherDegraded = true;
+  recommendedMissing++;
+  const reason =
+    officeGuiConfig && typeof officeGuiConfig.reason === "string" && officeGuiConfig.reason.trim().length > 0
+      ? officeGuiConfig.reason.trim()
+      : "launcher support is not declared for this host";
+  write(`  ${WARN} ${c.yellow}${reason}${c.reset}`);
+} else {
+  const serviceMode =
+    typeof officeGuiConfig.service_mode === "string" && officeGuiConfig.service_mode.trim().length > 0
+      ? officeGuiConfig.service_mode.trim()
+      : "runner";
+  write(`  ${PASS} native launcher ${c.dim}(${officeGuiEntrypoint}; mode=${serviceMode})${c.reset}`);
+  for (const tool of Array.isArray(officeGuiConfig.required_tools) ? officeGuiConfig.required_tools : []) {
+    checkLauncherTool(tool, true, "office GUI health/ready/status checks");
+  }
+  for (const tool of Array.isArray(officeGuiConfig.recommended_tools) ? officeGuiConfig.recommended_tools : []) {
+    checkLauncherTool(tool, false, "office GUI fallback startup");
+  }
+}
+
+// ── Summary ──────────────────────────────────────────────────────────────────
+write("");
+if (requiredFails === 0) {
+  const recNote =
+    recommendedMissing > 0
+      ? ` ${c.yellow}(${recommendedMissing} recommendation${recommendedMissing > 1 ? "s" : ""} missing)${c.reset}`
+      : "";
+  const readinessLabel = launcherDegraded ? "ready with launcher caveats" : "ready";
+  write(
+    `${c.bold}[doctor]${c.reset} Result: ${c.green}${c.bold}${readinessLabel}${c.reset}${recNote}`
+  );
+} else {
+  write(
+    `${c.bold}[doctor]${c.reset} Result: ${c.red}${c.bold}not ready${c.reset} \u2014 ${requiredFails} required check${requiredFails > 1 ? "s" : ""} failed`
+  );
+}
+
+write("");
+process.exit(requiredFails > 0 ? 1 : 0);

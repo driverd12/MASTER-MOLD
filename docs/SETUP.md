@@ -44,6 +44,7 @@ MCP_DOMAIN_PACKS=cfd
 ## 5. Verify
 
 ```bash
+npm run doctor
 npm test
 ```
 
@@ -85,7 +86,21 @@ Against an already-running HTTP server:
 MCP_SMOKE_TRANSPORT=http MCP_HTTP_BEARER_TOKEN=change-me ./scripts/mvp_smoke.sh
 ```
 
-## 8. Connect IDE/Agent
+## 8. Launch Agent Office
+
+Cross-platform office launcher:
+
+```bash
+npm run trichat:office:web
+```
+
+Status only:
+
+```bash
+npm run trichat:office:web:status
+```
+
+## 9. Connect IDE/Agent
 
 Point MCP client STDIO command to:
 

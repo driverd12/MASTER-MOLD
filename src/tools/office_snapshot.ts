@@ -15,7 +15,11 @@ import { summarizeAgentLearning } from "./agent_learning.js";
 import { getAutonomyMaintainRuntimeStatus } from "./autonomy_maintain.js";
 import { kernelSummary, summarizeAutonomyMaintain } from "./kernel.js";
 import { operatorBrief } from "./operator_brief.js";
-import { resolveProviderBridgeDiagnostics, resolveProviderBridgeSnapshot } from "./provider_bridge.js";
+import {
+  buildProviderBridgeOnboardingSummary,
+  resolveProviderBridgeDiagnostics,
+  resolveProviderBridgeSnapshot,
+} from "./provider_bridge.js";
 import { getReactionEngineRuntimeStatus } from "./reaction_engine.js";
 import { summarizeLiveRuntimeWorkers } from "./runtime_worker.js";
 import { taskList, taskSummary } from "./task.js";
@@ -193,6 +197,68 @@ function summarizeAutonomyMaintainState(storage: Storage) {
       eval: summary.eval_due,
     },
     subsystems: summary.subsystems,
+  };
+}
+
+function buildOfficeSetupDiagnostics(params: {
+  kernel: Record<string, unknown>;
+  providerBridge: {
+    diagnostics: ProviderBridgePayload["diagnostics"];
+    onboarding: ReturnType<typeof buildProviderBridgeOnboardingSummary>;
+  };
+  desktopControl: {
+    state: ReturnType<Storage["getDesktopControlState"]>;
+    summary: ReturnType<typeof summarizeDesktopControlState>;
+  };
+  patientZero: {
+    state: ReturnType<Storage["getPatientZeroState"]>;
+    summary: ReturnType<typeof summarizePatientZeroState>;
+    report: ReturnType<typeof buildPatientZeroReport>;
+  };
+}) {
+  const kernelSetup = asRecord(params.kernel.setup_diagnostics);
+  const kernelPlatform = asRecord(kernelSetup.platform);
+  const kernelFallback = asRecord(kernelSetup.fallback);
+  return {
+    source: "office.snapshot",
+    platform: {
+      platform: String(kernelPlatform.platform ?? process.platform),
+      arch: String(kernelPlatform.arch ?? process.arch),
+      browser_app: String(kernelPlatform.browser_app ?? params.patientZero.summary.browser_app ?? "").trim() || null,
+    },
+    provider_bridge: {
+      generated_at: params.providerBridge.diagnostics.generated_at,
+      cached: params.providerBridge.diagnostics.cached,
+      stale: params.providerBridge.diagnostics.stale ?? false,
+      connected_count: params.providerBridge.diagnostics.diagnostics.filter((entry) => entry.status === "connected").length,
+      configured_count: params.providerBridge.diagnostics.diagnostics.filter((entry) => entry.status === "configured").length,
+      disconnected_count: params.providerBridge.diagnostics.diagnostics.filter((entry) => entry.status === "disconnected").length,
+      unavailable_count: params.providerBridge.diagnostics.diagnostics.filter((entry) => entry.status === "unavailable").length,
+      onboarding: params.providerBridge.onboarding,
+    },
+    desktop_control: params.desktopControl.summary,
+    patient_zero: params.patientZero.summary,
+    fallback: {
+      core_usable:
+        typeof kernelFallback.core_usable === "boolean"
+          ? kernelFallback.core_usable
+          : params.providerBridge.diagnostics.stale !== true,
+      browser_degraded:
+        typeof kernelFallback.browser_degraded === "boolean"
+          ? kernelFallback.browser_degraded
+          : params.patientZero.summary.browser_ready !== true,
+      provider_bridge_degraded:
+        typeof kernelFallback.provider_bridge_degraded === "boolean"
+          ? kernelFallback.provider_bridge_degraded
+          : params.providerBridge.diagnostics.stale === true,
+      desktop_degraded:
+        typeof kernelFallback.desktop_degraded === "boolean"
+          ? kernelFallback.desktop_degraded
+          : params.desktopControl.summary.stale === true,
+    },
+    next_actions: Array.isArray(kernelSetup.next_actions)
+      ? kernelSetup.next_actions.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+      : [],
   };
 }
 
@@ -497,6 +563,13 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
       diagnostics: selectedProviderBridgeDiagnostics,
     })
   );
+  const providerBridgeOnboarding = buildProviderBridgeOnboardingSummary({
+    clients: providerBridge.snapshot.clients,
+    diagnostics: providerBridge.diagnostics.diagnostics,
+    server_name: providerBridge.snapshot.server_name,
+    generated_at: providerBridge.diagnostics.generated_at,
+    diagnostics_stale: providerBridge.diagnostics.stale ?? false,
+  });
   const kernel = input.include_kernel
     ? safe("kernel", buildKernelPayload(storage, taskSummaryPayload, agentSessions), () =>
         buildKernelPayload(storage, taskSummaryPayload, agentSessions)
@@ -527,6 +600,15 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     summary: summarizePatientZeroState(patientZeroState, desktopControlState, privilegedAccess.summary as Record<string, unknown>),
     report: buildPatientZeroReport(storage),
   };
+  const setupDiagnostics = buildOfficeSetupDiagnostics({
+    kernel: asRecord(kernel),
+    providerBridge: {
+      ...providerBridge,
+      onboarding: providerBridgeOnboarding,
+    },
+    desktopControl,
+    patientZero,
+  });
 
   return {
     generated_at: new Date().toISOString(),
@@ -548,10 +630,14 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     autonomy_maintain: autonomyMaintain,
     runtime_workers: runtimeWorkers,
     operator_brief: operatorBriefPayload,
-    provider_bridge: providerBridge,
+    provider_bridge: {
+      ...providerBridge,
+      onboarding: providerBridgeOnboarding,
+    },
     desktop_control: desktopControl,
     patient_zero: patientZero,
     privileged_access: privilegedAccess,
+    setup_diagnostics: setupDiagnostics,
     source: "office.snapshot",
   };
 }
@@ -580,6 +666,43 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
       };
       const cachedPayload = cached.payload as Record<string, unknown>;
       const cachedKernel = asRecord(cachedPayload.kernel);
+      const cachedProviderBridge = asRecord(cachedPayload.provider_bridge);
+      const cachedProviderBridgeSnapshot = asRecord(cachedProviderBridge.snapshot);
+      const cachedProviderBridgeDiagnostics = asRecord(cachedProviderBridge.diagnostics);
+      const cachedProviderBridgePayload = {
+        snapshot: {
+          ...cachedProviderBridgeSnapshot,
+          clients: Array.isArray(cachedProviderBridgeSnapshot.clients) ? cachedProviderBridgeSnapshot.clients : [],
+          server_name: String(cachedProviderBridgeSnapshot.server_name ?? "mcplayground"),
+        },
+        diagnostics: {
+          ...cachedProviderBridgeDiagnostics,
+          generated_at: String(cachedProviderBridgeDiagnostics.generated_at ?? new Date().toISOString()),
+          cached: cachedProviderBridgeDiagnostics.cached === true,
+          stale: cachedProviderBridgeDiagnostics.stale === true,
+          diagnostics: Array.isArray(cachedProviderBridgeDiagnostics.diagnostics)
+            ? cachedProviderBridgeDiagnostics.diagnostics
+            : [],
+        },
+        onboarding:
+          cachedProviderBridge.onboarding && typeof cachedProviderBridge.onboarding === "object"
+            ? (cachedProviderBridge.onboarding as ReturnType<typeof buildProviderBridgeOnboardingSummary>)
+            : buildProviderBridgeOnboardingSummary({
+                clients: Array.isArray(cachedProviderBridgeSnapshot.clients) ? cachedProviderBridgeSnapshot.clients : [],
+                diagnostics: Array.isArray(cachedProviderBridgeDiagnostics.diagnostics)
+                  ? cachedProviderBridgeDiagnostics.diagnostics
+                  : [],
+                server_name: String(cachedProviderBridgeSnapshot.server_name ?? "mcplayground"),
+                generated_at: String(cachedProviderBridgeDiagnostics.generated_at ?? new Date().toISOString()),
+                diagnostics_stale: cachedProviderBridgeDiagnostics.stale === true,
+              }),
+      };
+      const liveSetupDiagnostics = buildOfficeSetupDiagnostics({
+        kernel: cachedKernel,
+        providerBridge: cachedProviderBridgePayload,
+        desktopControl: liveDesktopControl,
+        patientZero: livePatientZero,
+      });
       return {
         ...cachedPayload,
         kernel: {
@@ -588,9 +711,11 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
           patient_zero: livePatientZero,
           privileged_access: livePrivilegedAccess,
         },
+        provider_bridge: cachedProviderBridgePayload,
         desktop_control: liveDesktopControl,
         patient_zero: livePatientZero,
         privileged_access: livePrivilegedAccess,
+        setup_diagnostics: liveSetupDiagnostics,
         cache: {
           hit: true,
           key: cached.key,

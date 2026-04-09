@@ -61,6 +61,28 @@ Intentionally out of scope:
 - Single-GPU training loop itself
 - Self-modifying training code path from the upstream repo
 
+## AutoAgent
+
+Source:
+- [AutoAgent repository](https://github.com/kevinrgu/autoagent)
+
+Upstream wins we implemented:
+
+| Upstream idea | Local status | Local implementation |
+| --- | --- | --- |
+| Propose -> run -> score -> accept/reject optimization loop | `implemented` | `playbook.run` exposes `autoresearch.optimize_loop`, and `experiment.*` persists judged runs in [src/tools/playbook.ts](../src/tools/playbook.ts) and [src/tools](../src/tools) |
+| Durable experiment ledger | `implemented` | SQLite-backed `experiment.*` and benchmark evidence replace the upstream TSV log |
+| Overnight autonomous continuation | `adapted` | `goal.autorun_daemon`, launchd keepalive, and bounded maintain loops continue work without claiming free-form recursive self-modification |
+| Human-steered optimization program | `adapted` | `autonomy.ide_ingress` plus `kernel.summary.self_improvement` expose the bounded optimization contract in kernel-native form |
+
+Tracked gaps we may still adopt:
+
+| Upstream idea | Local status | Local implementation |
+| --- | --- | --- |
+| LLM-as-judge benchmark scoring | `out of scope` | Benchmarks currently score regex/duration style metrics; richer judge-backed scoring would need a bounded addition to `benchmark.ts` rather than an implicit harness rewrite |
+| Harbor task compatibility | `out of scope` | No Harbor importer/adapter exists yet; public Harbor-style benchmark suites would need an explicit translation layer into the local benchmark schema |
+| Single editable harness file (`agent.py`) | `out of scope` | MCPlayground intentionally mutates bounded config/program surfaces instead of presenting a single self-modifying harness file |
+
 ## SuperClaude Framework
 
 Source:
@@ -208,3 +230,26 @@ Intentionally out of scope:
 
 - Overstory-specific cost console and replay UX
 - provider-specific runtime adapters beyond current `codex` and `shell` runtime modes
+
+## AutoAgent / Harbor
+
+Source:
+- [AutoAgent README](https://github.com/DAMO-NLP-SG/AutoAgent)
+- [Harbor Benchmark](https://github.com/av/harbor)
+- [MarkTechPost article](https://www.marktechpost.com/2026/04/05/meet-autoagent-the-open-source-library-that-lets-an-ai-engineer-and-optimize-its-own-agent-harness-overnight/)
+
+Upstream wins we implemented:
+
+| Upstream idea | Local status | Local implementation |
+| --- | --- | --- |
+| Reward-file based scoring (Harbor `reward.txt`) | `implemented` | `reward_file` metric mode in [src/tools/benchmark.ts](../src/tools/benchmark.ts) reads a numeric score from a file path after command execution |
+| Harbor task directory import | `implemented` | [src/tools/harbor_adapter.ts](../src/tools/harbor_adapter.ts) scans `task.toml` + `instruction.md` + `tests/` directories and emits `benchmark.suite_upsert` payloads |
+| Baseline → propose → measure → accept/reject optimization loop | `adapted` | `experiment.*` and `optimizer.*` primitives drive candidate vs baseline scoring and gated promotion |
+| Agent-program mutation and evaluation | `adapted` | `optimizer.*` mutates org-program signals; `eval.run` composes benchmark suites and router cases |
+| Overnight unattended improvement cycles | `adapted` | Local daemon uses launchd-backed persistence, bounded intervals, and tmux worker substrate |
+
+Intentionally out of scope:
+
+- LLM-as-judge scoring at benchmark runtime (eval layer is the better composition point)
+- Single-file `agent.py` harness pattern (MCPlayground uses multi-tool composition instead)
+- `program.md`-style meta-agent directive file (covered by `autonomy.ide_ingress` and agent config roster)

@@ -1,0 +1,248 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const MANIFEST_PATH = path.join(REPO_ROOT, "scripts", "platform_manifest.json");
+const DOCTOR_PATH = path.join(REPO_ROOT, "scripts", "bootstrap_doctor.mjs");
+const OPEN_BROWSER_PATH = path.join(REPO_ROOT, "scripts", "open_browser.mjs");
+const OFFICE_GUI_NODE_PATH = path.join(REPO_ROOT, "scripts", "agent_office_gui.mjs");
+
+test("platform_manifest.json is valid JSON with required structure", () => {
+  assert.ok(fs.existsSync(MANIFEST_PATH), "scripts/platform_manifest.json must exist");
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+
+  // Required top-level keys
+  assert.ok(manifest.prerequisites, "manifest must have prerequisites");
+  assert.ok(manifest.browsers, "manifest must have browsers");
+  assert.ok(manifest.platforms, "manifest must have platforms");
+  assert.ok(manifest.launchers, "manifest must have launchers");
+
+  // Prerequisites structure
+  assert.ok(Array.isArray(manifest.prerequisites.required), "prerequisites.required must be an array");
+  assert.ok(manifest.prerequisites.required.length >= 3, "must have at least 3 required prerequisites");
+  for (const req of manifest.prerequisites.required) {
+    assert.ok(req.name, "each prerequisite must have a name");
+    assert.ok(req.check, "each prerequisite must have a check command");
+    assert.ok(req.install_hint, "each prerequisite must have install hints");
+  }
+
+  // Browsers structure — must cover all target platforms
+  for (const platform of ["darwin", "linux", "win32"]) {
+    assert.ok(Array.isArray(manifest.browsers[platform]), `browsers.${platform} must be an array`);
+    assert.ok(manifest.browsers[platform].length >= 1, `browsers.${platform} must have at least 1 entry`);
+    for (const browser of manifest.browsers[platform]) {
+      assert.ok(browser.name, `each browser entry for ${platform} must have a name`);
+      assert.ok(Array.isArray(browser.open_cmd), `each browser entry for ${platform} must have open_cmd array`);
+    }
+  }
+
+  // Platforms structure
+  for (const platform of ["darwin", "linux", "win32"]) {
+    assert.ok(manifest.platforms[platform], `platforms.${platform} must exist`);
+    assert.ok(manifest.platforms[platform].service_manager, `platforms.${platform} must have service_manager`);
+    assert.ok(manifest.platforms[platform].shell, `platforms.${platform} must have shell`);
+  }
+
+  assert.ok(manifest.launchers.office_gui, "manifest must describe the office GUI launcher");
+});
+
+test("platform_manifest.json required prerequisites include node, python3, git", () => {
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+  const requiredNames = manifest.prerequisites.required.map((r) => r.name);
+  assert.ok(requiredNames.includes("node"), "node must be a required prerequisite");
+  assert.ok(requiredNames.includes("python3"), "python3 must be a required prerequisite");
+  assert.ok(requiredNames.includes("git"), "git must be a required prerequisite");
+});
+
+test("platform_manifest.json browser entries for current platform are detectable", () => {
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+  const currentPlatform = process.platform;
+  const browsers = manifest.browsers[currentPlatform];
+  if (!browsers) {
+    // Platform not in manifest — skip gracefully
+    return;
+  }
+
+  // At least one browser should be detectable on any dev machine
+  let foundAny = false;
+  for (const entry of browsers) {
+    if (entry.app_path && fs.existsSync(entry.app_path)) {
+      foundAny = true;
+      break;
+    }
+    if (entry.binary) {
+      try {
+        const whichCmd = process.platform === "win32" ? "where" : "which";
+        execFileSync(whichCmd, [entry.binary], { stdio: "ignore", timeout: 3000 });
+        foundAny = true;
+        break;
+      } catch {
+        // continue
+      }
+    }
+  }
+  assert.ok(foundAny, `at least one browser from manifest should be detectable on ${currentPlatform}`);
+});
+
+test("platform_manifest.json win32 browser entries include program files fallbacks", () => {
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+  const win32Browsers = Array.isArray(manifest.browsers.win32) ? manifest.browsers.win32 : [];
+  const entriesByName = new Map(win32Browsers.map((entry) => [entry.name, entry]));
+
+  assert.equal(
+    entriesByName.get("Microsoft Edge")?.program_files_path,
+    "Microsoft\\Edge\\Application\\msedge.exe",
+    "Microsoft Edge should include a Program Files fallback path"
+  );
+  assert.equal(
+    entriesByName.get("Google Chrome")?.program_files_path,
+    "Google\\Chrome\\Application\\chrome.exe",
+    "Google Chrome should include a Program Files fallback path"
+  );
+  assert.equal(
+    entriesByName.get("Firefox")?.program_files_path,
+    "Mozilla Firefox\\firefox.exe",
+    "Firefox should include a Program Files fallback path"
+  );
+  assert.equal(
+    entriesByName.get("Microsoft Edge")?.local_app_data_path,
+    "Microsoft\\Edge\\Application\\msedge.exe",
+    "Microsoft Edge should include a LocalAppData fallback path"
+  );
+  assert.equal(
+    entriesByName.get("Google Chrome")?.local_app_data_path,
+    "Google\\Chrome\\Application\\chrome.exe",
+    "Google Chrome should include a LocalAppData fallback path"
+  );
+  assert.equal(
+    entriesByName.get("Firefox")?.local_app_data_path,
+    "Mozilla Firefox\\firefox.exe",
+    "Firefox should include a LocalAppData fallback path"
+  );
+});
+
+test("platform_manifest.json office GUI launcher dependencies stay truthful", () => {
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+  const officeGui = manifest.launchers.office_gui;
+
+  assert.equal(officeGui.darwin.supported, true);
+  assert.equal(officeGui.linux.supported, true);
+  assert.equal(officeGui.darwin.entrypoint, "node ./scripts/agent_office_gui.mjs");
+  assert.equal(officeGui.linux.entrypoint, "node ./scripts/agent_office_gui.mjs");
+  assert.equal(officeGui.win32.entrypoint, "node ./scripts/agent_office_gui.mjs");
+  assert.equal(officeGui.win32.supported, true);
+  assert.deepEqual(officeGui.win32.required_tools, []);
+  assert.deepEqual(officeGui.win32.recommended_tools, []);
+});
+
+test("bootstrap_doctor.mjs exists and runs without crashing", { timeout: 30_000 }, () => {
+  assert.ok(fs.existsSync(DOCTOR_PATH), "scripts/bootstrap_doctor.mjs must exist");
+  // Run doctor — it may exit non-zero if recommendations are missing, but it must not crash
+  try {
+    const result = execFileSync(process.execPath, [DOCTOR_PATH], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      timeout: 25_000,
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+    assert.ok(result.includes("[doctor]"), "doctor output must include [doctor] markers");
+    assert.ok(result.includes("Platform:"), "doctor output must include Platform line");
+    assert.ok(result.includes("node"), "doctor output must check for node");
+    assert.ok(result.includes("Office GUI Launcher:"), "doctor output must include launcher readiness");
+    assert.ok(result.includes("native launcher"), "doctor output must describe the native launcher");
+  } catch (error) {
+    // Exit code 1 is acceptable (missing recommendations), but other errors are not
+    if (error.status !== 1) {
+      throw error;
+    }
+    assert.ok(
+      String(error.stdout || "").includes("[doctor]"),
+      "doctor output on partial failure must include [doctor] markers"
+    );
+    assert.ok(
+      String(error.stdout || "").includes("Office GUI Launcher:"),
+      "doctor output on partial failure must include launcher readiness"
+    );
+  }
+});
+
+test("open_browser.mjs exists and reports usage error without url argument", () => {
+  assert.ok(fs.existsSync(OPEN_BROWSER_PATH), "scripts/open_browser.mjs must exist");
+  try {
+    execFileSync(process.execPath, [OPEN_BROWSER_PATH], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    assert.fail("open_browser.mjs should exit non-zero without url argument");
+  } catch (error) {
+    assert.equal(error.status, 2, "should exit with code 2 for missing argument");
+    assert.ok(
+      String(error.stderr || "").includes("usage"),
+      "should print usage message"
+    );
+  }
+});
+
+test("agent_office_gui.mjs exists as the cross-platform office launcher entrypoint", () => {
+  assert.ok(fs.existsSync(OFFICE_GUI_NODE_PATH), "scripts/agent_office_gui.mjs must exist");
+});
+
+test("agent_office_gui.mjs status emits machine-readable status without crashing", { timeout: 20_000 }, () => {
+  const raw = execFileSync(process.execPath, [OFFICE_GUI_NODE_PATH, "status"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+  const parsed = JSON.parse(raw);
+  assert.equal(typeof parsed.ok, "boolean");
+  assert.equal(typeof parsed.mode, "string");
+  assert.equal(typeof parsed.url, "string");
+  assert.equal(parsed.platform, process.platform);
+  assert.equal(typeof parsed.launchable, "boolean");
+});
+
+test("dist/server.js exists (build completed)", () => {
+  const serverPath = path.join(REPO_ROOT, "dist", "server.js");
+  assert.ok(fs.existsSync(serverPath), "dist/server.js must exist — run npm run build");
+});
+
+test("local_host_profile detects current platform correctly", async () => {
+  // Import the built module to verify it works on this platform
+  const distPath = path.join(REPO_ROOT, "dist", "local_host_profile.js");
+  if (!fs.existsSync(distPath)) {
+    return; // skip if not built
+  }
+  const { captureLocalHostProfile } = await import(distPath);
+  const profile = captureLocalHostProfile();
+  assert.equal(profile.platform, process.platform);
+  assert.equal(profile.arch, process.arch);
+  assert.ok(profile.cpu_count > 0);
+  assert.ok(profile.memory_total_gb > 0);
+  assert.ok(["healthy", "degraded"].includes(profile.health_state));
+});
+
+test("platform_manifest.json install_hints cover all three target platforms", () => {
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+  const targetPlatforms = ["darwin", "linux", "win32"];
+  for (const prereq of manifest.prerequisites.required) {
+    for (const platform of targetPlatforms) {
+      assert.ok(
+        prereq.install_hint[platform],
+        `${prereq.name} must have install_hint for ${platform}`
+      );
+    }
+  }
+});
+
+test("package.json office GUI npm scripts use the cross-platform node launcher", () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+  assert.equal(pkg.scripts["trichat:office:gui"], "node ./scripts/agent_office_gui.mjs open");
+  assert.equal(pkg.scripts["trichat:office:web"], "node ./scripts/agent_office_gui.mjs open");
+  assert.equal(pkg.scripts["trichat:office:web:start"], "node ./scripts/agent_office_gui.mjs start");
+  assert.equal(pkg.scripts["trichat:office:web:status"], "node ./scripts/agent_office_gui.mjs status");
+});

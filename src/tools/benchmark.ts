@@ -22,8 +22,9 @@ const benchmarkCaseSchema = z.object({
   required: z.boolean().optional(),
   metric_name: z.string().min(1).optional(),
   metric_direction: z.enum(["minimize", "maximize"]).optional(),
-  metric_mode: z.enum(["duration_ms", "stdout_regex", "stderr_regex"]).optional(),
+  metric_mode: z.enum(["duration_ms", "stdout_regex", "stderr_regex", "reward_file"]).optional(),
   metric_regex: z.string().min(1).optional(),
+  reward_file_path: z.string().min(1).optional(),
   tags: z.array(z.string().min(1)).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
@@ -68,6 +69,20 @@ function readNumberFromRegex(text: string, pattern: string): number | null {
       return null;
     }
     const candidate = Number(match[1] ?? match[0]);
+    return Number.isFinite(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+function readNumberFromRewardFile(filePath: string, workspace: string): number | null {
+  try {
+    const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(workspace, filePath);
+    if (!fs.existsSync(resolved)) {
+      return null;
+    }
+    const raw = fs.readFileSync(resolved, "utf8").trim();
+    const candidate = Number(raw.split(/\s+/)[0]);
     return Number.isFinite(candidate) ? candidate : null;
   } catch {
     return null;
@@ -201,6 +216,7 @@ export async function benchmarkSuiteUpsert(storage: Storage, input: z.infer<type
           metric_direction: resolveExperimentMetricDirection(entry.metric_direction ?? input.aggregate_metric_direction),
           metric_mode: entry.metric_mode ?? "duration_ms",
           metric_regex: entry.metric_regex?.trim() || null,
+          reward_file_path: entry.reward_file_path?.trim() || null,
           tags: [...new Set((entry.tags ?? []).map((tag) => tag.trim()).filter(Boolean))],
           metadata: entry.metadata ?? {},
         })),
@@ -343,7 +359,9 @@ export async function benchmarkRun(storage: Storage, input: z.infer<typeof bench
             ? durationMs
             : entry.metric_mode === "stdout_regex"
               ? readNumberFromRegex(stdout, entry.metric_regex ?? "")
-              : readNumberFromRegex(stderr, entry.metric_regex ?? "");
+              : entry.metric_mode === "reward_file"
+                ? readNumberFromRewardFile(entry.reward_file_path ?? "reward.txt", plan.workspace)
+                : readNumberFromRegex(stderr, entry.metric_regex ?? "");
         const ok = !spawned.error && spawned.signal === null && spawned.status === 0 && metricValue !== null;
 
         storage.appendRunEvent({

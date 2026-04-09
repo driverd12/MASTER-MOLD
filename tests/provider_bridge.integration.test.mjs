@@ -117,6 +117,12 @@ test("provider.bridge reports truthful client and outbound council coverage", { 
     assert.equal(clients.get("github-copilot-cli")?.outbound_council_supported, true);
     assert.equal(clients.get("github-copilot-cli")?.outbound_bridge_ready, true);
     assert.equal(clients.get("chatgpt-developer-mode")?.install_mode, "remote-only");
+    assert.equal(status.onboarding.recommended_doctor_command, "npm run doctor");
+    assert.equal(status.onboarding.recommended_status_command, "npm run providers:status");
+    const onboardingEntries = new Map(status.onboarding.entries.map((entry) => [entry.client_id, entry]));
+    assert.equal(onboardingEntries.get("chatgpt-developer-mode")?.runtime_status, "remote_only");
+    assert.equal(onboardingEntries.get("chatgpt-developer-mode")?.next_command, "npm run providers:export");
+    assert.equal(typeof onboardingEntries.get("claude-cli")?.next_action, "string");
 
     const routerCandidates = new Map(status.router_backend_candidates.map((entry) => [entry.client_id, entry]));
     assert.ok(routerCandidates.has("codex"));
@@ -331,6 +337,11 @@ test("provider.bridge diagnose reports office agent mappings and truthful status
     assert.equal(diagnostics.get("cursor")?.office_agent_id, "cursor");
     assert.equal(diagnostics.get("gemini-cli")?.office_agent_id, "gemini");
     assert.equal(diagnostics.get("github-copilot-cli")?.office_agent_id, "github-copilot");
+    assert.equal(diagnose.onboarding.recommended_diagnose_command, "npm run providers:diagnose -- <client-id>");
+    assert.equal(typeof diagnose.onboarding.generated_at, "string");
+    const onboardingEntries = new Map(diagnose.onboarding.entries.map((entry) => [entry.client_id, entry]));
+    assert.equal(typeof onboardingEntries.get("claude-cli")?.ready, "boolean");
+    assert.equal(typeof onboardingEntries.get("codex")?.runtime_status, "string");
     for (const entry of diagnose.diagnostics) {
       assert.ok(["connected", "disconnected", "configured", "unavailable"].includes(entry.status));
     }

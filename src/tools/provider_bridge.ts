@@ -149,6 +149,52 @@ type ProviderBridgeSnapshot = {
   clients: ProviderBridgeClientStatus[];
 };
 
+type ProviderBridgeOnboardingEntry = {
+  client_id: ProviderBridgeClientId;
+  display_name: string;
+  office_agent_id: string | null;
+  install_mode: ProviderBridgeClientStatus["install_mode"];
+  config_path: string | null;
+  runtime_status:
+    | "connected"
+    | "configured"
+    | "disconnected"
+    | "unavailable"
+    | "diagnose_required"
+    | "runtime_check_stale"
+    | "export_only"
+    | "remote_only";
+  ready: boolean;
+  bridge_ready: boolean;
+  runtime_ready: boolean;
+  next_action: string;
+  next_command: string | null;
+  install_command: string | null;
+  diagnose_command: string | null;
+  export_command: string | null;
+  blockers: string[];
+};
+
+type ProviderBridgeOnboardingSummary = {
+  generated_at: string;
+  ready_count: number;
+  action_required_count: number;
+  installable_count: number;
+  needs_binary_count: number;
+  needs_install_count: number;
+  needs_runtime_verification_count: number;
+  export_only_count: number;
+  remote_only_count: number;
+  stale_runtime_checks: boolean;
+  recommended_status_command: string;
+  recommended_doctor_command: string;
+  recommended_install_command: string;
+  recommended_diagnose_command: string;
+  recommended_export_command: string;
+  recommended_ingress_command: string;
+  entries: ProviderBridgeOnboardingEntry[];
+};
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const distServerPath = path.join(repoRoot, "dist", "server.js");
 const providerStdioBridgePath = path.join(repoRoot, "scripts", "provider_stdio_bridge.mjs");
@@ -394,6 +440,166 @@ function resolveTransportConfig(
     command,
     args,
     db_path: dbPath,
+  };
+}
+
+function providerStatusCommand() {
+  return "npm run providers:status";
+}
+
+function providerDoctorCommand() {
+  return "npm run doctor";
+}
+
+function providerDiagnoseCommand(clientId: ProviderBridgeClientId) {
+  return `npm run providers:diagnose -- ${clientId}`;
+}
+
+function providerInstallCommand(clientId: ProviderBridgeClientId, serverName: string) {
+  if (clientId === "codex") {
+    return `./scripts/codex_mcp_register.sh ${serverName}`;
+  }
+  if (
+    clientId === "claude-cli" ||
+    clientId === "cursor" ||
+    clientId === "gemini-cli" ||
+    clientId === "github-copilot-cli" ||
+    clientId === "github-copilot-vscode"
+  ) {
+    return `npm run providers:install -- ${clientId}`;
+  }
+  return null;
+}
+
+function providerExportCommand() {
+  return "npm run providers:export";
+}
+
+export function buildProviderBridgeOnboardingSummary(params: {
+  clients: ProviderBridgeClientStatus[];
+  diagnostics?: ProviderBridgeDiagnostic[];
+  server_name?: string;
+  generated_at?: string;
+  diagnostics_stale?: boolean;
+}): ProviderBridgeOnboardingSummary {
+  const serverName = params.server_name?.trim() || "mcplayground";
+  const diagnosticsByClient = new Map(
+    (params.diagnostics ?? []).map((entry) => [entry.client_id, entry] as const)
+  );
+  const diagnosticsStale = params.diagnostics_stale === true;
+  const entries = params.clients.map((status) => {
+    const diagnostic = diagnosticsByClient.get(status.client_id);
+    const installCommand = providerInstallCommand(status.client_id, serverName);
+    const diagnoseCommand =
+      status.install_mode === "remote-only" || status.install_mode === "export-only"
+        ? null
+        : providerDiagnoseCommand(status.client_id);
+    const exportCommand =
+      status.install_mode === "export-only" || status.install_mode === "remote-only"
+        ? providerExportCommand()
+        : null;
+    const blockers: string[] = [];
+    let runtimeStatus: ProviderBridgeOnboardingEntry["runtime_status"];
+    let nextAction = "";
+    let nextCommand: string | null = null;
+    let ready = false;
+
+    if (status.install_mode === "remote-only") {
+      runtimeStatus = "remote_only";
+      blockers.push("remote_endpoint_required");
+      nextAction = "Export the remote manifest and expose an intentional remote MCP endpoint instead of pretending this is a local install.";
+      nextCommand = exportCommand;
+    } else if (status.install_mode === "export-only") {
+      runtimeStatus = "export_only";
+      blockers.push("editor_merge_required");
+      nextAction = "Export the editor-facing MCP snippet and merge it into the target workspace/editor config.";
+      nextCommand = exportCommand;
+    } else if (!status.binary_present) {
+      runtimeStatus = "unavailable";
+      blockers.push("client_binary_missing");
+      nextAction = "Install the client app or CLI on this host first, then write the MCP bridge config.";
+      nextCommand = installCommand;
+    } else if (!status.installed) {
+      runtimeStatus = "unavailable";
+      blockers.push("bridge_config_missing");
+      nextAction = "Write the MCP bridge config from the one supported install path, then verify it.";
+      nextCommand = installCommand;
+    } else if (diagnostic && diagnosticsStale) {
+      runtimeStatus = "runtime_check_stale";
+      blockers.push("runtime_check_stale");
+      nextAction = "Runtime bridge evidence is stale. Re-run bridge diagnostics before treating this client as live.";
+      nextCommand = diagnoseCommand;
+    } else if (diagnostic?.status === "connected") {
+      runtimeStatus = "connected";
+      ready = true;
+      nextAction = "No action needed. The bridge is configured and the client accepted a runtime check.";
+      nextCommand = null;
+    } else if (diagnostic?.status === "configured") {
+      runtimeStatus = "configured";
+      blockers.push("runtime_not_confirmed");
+      nextAction = "The bridge config exists, but runtime connectivity is not confirmed. Open or authenticate the client, then re-run diagnostics.";
+      nextCommand = diagnoseCommand;
+    } else if (diagnostic?.status === "disconnected") {
+      runtimeStatus = "disconnected";
+      blockers.push("client_auth_or_runtime_missing");
+      nextAction = diagnostic.detail || "The bridge is configured but the client is not currently authenticated or runtime-ready.";
+      nextCommand = diagnoseCommand;
+    } else if (diagnostic?.status === "unavailable") {
+      runtimeStatus = "unavailable";
+      blockers.push("runtime_unavailable");
+      nextAction = diagnostic.detail || "The client is not currently available on this host.";
+      nextCommand = installCommand ?? diagnoseCommand;
+    } else {
+      runtimeStatus = "diagnose_required";
+      blockers.push("runtime_check_missing");
+      nextAction = "The bridge looks configured, but no runtime verification has been recorded yet. Run diagnostics before treating it as live.";
+      nextCommand = diagnoseCommand;
+    }
+
+    return {
+      client_id: status.client_id,
+      display_name: status.display_name,
+      office_agent_id: status.office_agent_id,
+      install_mode: status.install_mode,
+      config_path: status.config_path,
+      runtime_status: runtimeStatus,
+      ready,
+      bridge_ready: status.outbound_bridge_ready,
+      runtime_ready: ready || (diagnostic?.status === "connected" && diagnosticsStale !== true),
+      next_action: nextAction,
+      next_command: nextCommand,
+      install_command: installCommand,
+      diagnose_command: diagnoseCommand,
+      export_command: exportCommand,
+      blockers,
+    } satisfies ProviderBridgeOnboardingEntry;
+  });
+
+  return {
+    generated_at: params.generated_at ?? new Date().toISOString(),
+    ready_count: entries.filter((entry) => entry.ready).length,
+    action_required_count: entries.filter((entry) => !entry.ready).length,
+    installable_count: entries.filter((entry) => entry.install_command !== null).length,
+    needs_binary_count: entries.filter((entry) => entry.blockers.includes("client_binary_missing")).length,
+    needs_install_count: entries.filter((entry) => entry.blockers.includes("bridge_config_missing")).length,
+    needs_runtime_verification_count: entries.filter((entry) =>
+      entry.blockers.some((blocker) =>
+        blocker === "runtime_not_confirmed" ||
+        blocker === "client_auth_or_runtime_missing" ||
+        blocker === "runtime_check_missing" ||
+        blocker === "runtime_check_stale"
+      )
+    ).length,
+    export_only_count: entries.filter((entry) => entry.install_mode === "export-only").length,
+    remote_only_count: entries.filter((entry) => entry.install_mode === "remote-only").length,
+    stale_runtime_checks: diagnosticsStale,
+    recommended_status_command: providerStatusCommand(),
+    recommended_doctor_command: providerDoctorCommand(),
+    recommended_install_command: "npm run providers:install -- <client-id>",
+    recommended_diagnose_command: "npm run providers:diagnose -- <client-id>",
+    recommended_export_command: providerExportCommand(),
+    recommended_ingress_command: "npm run autonomy:ide",
+    entries,
   };
 }
 
@@ -1964,6 +2170,10 @@ export async function providerBridge(
     const selectedRouterBackends = snapshot.router_backend_candidates.filter((entry) => clients.includes(entry.client_id));
 
     if (input.action === "status") {
+      const onboarding = buildProviderBridgeOnboardingSummary({
+        clients: selectedStatus,
+        server_name: serverName,
+      });
       return {
         ok: true,
         canonical_ingress_tool: snapshot.canonical_ingress_tool,
@@ -1975,6 +2185,7 @@ export async function providerBridge(
         router_backend_candidates: selectedRouterBackends,
         eligible_router_backends: selectedRouterBackends.filter((entry) => entry.eligible).map((entry) => entry.backend),
         clients: selectedStatus,
+        onboarding,
       };
     }
 
@@ -2003,6 +2214,14 @@ export async function providerBridge(
         bypass_cache: forceLive,
         probe_timeout_ms: input.probe_timeout_ms,
       });
+      const selectedDiagnostics = diagnostics.diagnostics.filter((entry) => clients.includes(entry.client_id));
+      const onboarding = buildProviderBridgeOnboardingSummary({
+        clients: selectedStatus,
+        diagnostics: selectedDiagnostics,
+        server_name: serverName,
+        generated_at: diagnostics.generated_at,
+        diagnostics_stale: diagnostics.stale ?? false,
+      });
       return {
         ok: true,
         canonical_ingress_tool: snapshot.canonical_ingress_tool,
@@ -2011,8 +2230,9 @@ export async function providerBridge(
         generated_at: diagnostics.generated_at,
         cached: diagnostics.cached,
         stale: diagnostics.stale ?? false,
-        diagnostics: diagnostics.diagnostics.filter((entry) => clients.includes(entry.client_id)),
+        diagnostics: selectedDiagnostics,
         clients: selectedStatus,
+        onboarding,
       };
     }
 
@@ -2041,6 +2261,10 @@ export async function providerBridge(
         bundle,
         router_backend_candidates: selectedRouterBackends,
         clients: selectedStatus,
+        onboarding: buildProviderBridgeOnboardingSummary({
+          clients: selectedStatus,
+          server_name: serverName,
+        }),
       };
     }
 
@@ -2124,6 +2348,10 @@ export async function providerBridge(
       installs,
       router_backend_candidates: selectedRouterBackends,
       clients: postInstallStatus,
+      onboarding: buildProviderBridgeOnboardingSummary({
+        clients: postInstallStatus,
+        server_name: serverName,
+      }),
     };
   };
 

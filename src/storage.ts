@@ -943,7 +943,7 @@ export type ClusterTopologyStateRecord = {
   updated_at: string;
 };
 
-export type BenchmarkMetricMode = "duration_ms" | "stdout_regex" | "stderr_regex";
+export type BenchmarkMetricMode = "duration_ms" | "stdout_regex" | "stderr_regex" | "reward_file";
 
 export type BenchmarkSuiteCaseRecord = {
   case_id: string;
@@ -955,6 +955,7 @@ export type BenchmarkSuiteCaseRecord = {
   metric_direction: ExperimentMetricDirection;
   metric_mode: BenchmarkMetricMode;
   metric_regex: string | null;
+  reward_file_path: string | null;
   tags: string[];
   metadata: Record<string, unknown>;
 };
@@ -3719,7 +3720,7 @@ export class Storage {
                 : "maximize";
             const metricModeRaw = String(caseItem.metric_mode ?? "duration_ms").trim().toLowerCase();
             const metricMode: BenchmarkMetricMode =
-              metricModeRaw === "stdout_regex" || metricModeRaw === "stderr_regex" ? metricModeRaw : "duration_ms";
+              metricModeRaw === "stdout_regex" || metricModeRaw === "stderr_regex" || metricModeRaw === "reward_file" ? metricModeRaw : "duration_ms";
             return {
               case_id: caseId,
               title: caseTitle,
@@ -3730,6 +3731,7 @@ export class Storage {
               metric_direction: caseMetricDirection,
               metric_mode: metricMode,
               metric_regex: asNullableString(caseItem.metric_regex),
+              reward_file_path: asNullableString(caseItem.reward_file_path),
               tags: dedupeNonEmpty(Array.isArray(caseItem.tags) ? caseItem.tags : []),
               metadata: parseLooseObject(caseItem.metadata),
             } satisfies BenchmarkSuiteCaseRecord;
@@ -3782,7 +3784,7 @@ export class Storage {
               return null;
             }
             const metricMode =
-              caseEntry.metric_mode === "stdout_regex" || caseEntry.metric_mode === "stderr_regex"
+              caseEntry.metric_mode === "stdout_regex" || caseEntry.metric_mode === "stderr_regex" || caseEntry.metric_mode === "reward_file"
                 ? caseEntry.metric_mode
                 : "duration_ms";
             return {
@@ -3795,6 +3797,7 @@ export class Storage {
               metric_direction: caseEntry.metric_direction === "minimize" ? "minimize" : "maximize",
               metric_mode: metricMode,
               metric_regex: asNullableString(caseEntry.metric_regex),
+              reward_file_path: asNullableString(caseEntry.reward_file_path),
               tags: dedupeNonEmpty(caseEntry.tags ?? []),
               metadata: parseLooseObject(caseEntry.metadata),
             } satisfies BenchmarkSuiteCaseRecord;
