@@ -22,3 +22,5 @@ coverage/
 __pycache__/
 .vscode/mcp.json
 .cursor/mcp.json
+server.log
+BREADCRUMBS.md

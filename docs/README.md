@@ -57,4 +57,5 @@ The repo is intentionally split this way:
 Tool-specific companion files that remain at repo root on purpose:
 
 - `AGENTS.md`
+- `CLAUDE.md`
 - `GEMINI.md`
