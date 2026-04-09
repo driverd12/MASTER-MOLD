@@ -5,6 +5,7 @@ Fastest path to run locally.
 ## 1. Prerequisites
 
 - Node.js `20.x` to `22.x`
+- `python3` `3.9+`
 - `git`
 
 ## 2. Clone
@@ -35,10 +36,12 @@ MCP_HTTP_BEARER_TOKEN=change-me
 MCP_HTTP_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
 ```
 
-Enable CFD tools (optional):
+Built-in domain packs:
 
 ```bash
-MCP_DOMAIN_PACKS=cfd
+# default: agentic
+# optional minimal mode:
+MCP_DOMAIN_PACKS=none
 ```
 
 ## 5. Verify
@@ -50,28 +53,16 @@ npm test
 
 ## 6. Start Server
 
-Core STDIO:
+STDIO:
 
 ```bash
 npm run start:stdio
 ```
 
-Core HTTP:
+HTTP:
 
 ```bash
 npm run start:http
-```
-
-CFD STDIO:
-
-```bash
-npm run start:cfd
-```
-
-CFD HTTP:
-
-```bash
-npm run start:cfd:http
 ```
 
 ## 7. Smoke Check
@@ -100,7 +91,21 @@ Status only:
 npm run trichat:office:web:status
 ```
 
-## 9. Connect IDE/Agent
+## 9. Launch Agentic Suite
+
+Cross-platform suite launcher:
+
+```bash
+npm run agentic:suite
+```
+
+Status only:
+
+```bash
+npm run agentic:suite:status
+```
+
+## 10. Connect IDE/Agent
 
 Point MCP client STDIO command to:
 
@@ -114,4 +119,4 @@ For full client examples, see [IDE + Agent Setup Guide](./IDE_AGENT_SETUP.md).
 
 - Build errors: run `npm ci` and `npm run build` again.
 - Missing tools in client: restart client process and verify it points at `dist/server.js`.
-- Missing CFD tools: confirm `MCP_DOMAIN_PACKS=cfd` is set for that client/session.
+- Missing agentic tools: confirm `MCP_DOMAIN_PACKS` is unset or includes `agentic`; `MCP_DOMAIN_PACKS=none` disables built-ins.

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { z } from "zod";
 import {
   evaluateFeatureFlag,
@@ -363,6 +365,7 @@ type SetupDiagnosticsSummary = {
   platform: {
     platform: string;
     arch: string;
+    distribution: string | null;
     browser_app: string | null;
   };
   bootstrap: {
@@ -397,6 +400,27 @@ type SetupDiagnosticsSummary = {
     browser_degraded: boolean;
     provider_bridge_degraded: boolean;
     desktop_degraded: boolean;
+  };
+  launchers: {
+    office_gui: {
+      supported: boolean;
+      ready: boolean;
+      degraded: boolean;
+      entrypoint: string | null;
+      service_mode: string | null;
+      reassurance_surface: string;
+      distribution_supported: boolean;
+    };
+    agentic_suite: {
+      supported: boolean;
+      ready: boolean;
+      degraded: boolean;
+      entrypoint: string | null;
+      service_mode: string | null;
+      reassurance_surface: string;
+      app_launch_enabled: boolean;
+      distribution_supported: boolean;
+    };
   };
   next_actions: string[];
 };
@@ -847,6 +871,98 @@ function readString(value: unknown): string | null {
 
 function readFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function detectLinuxDistributionId(): string | null {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync("/etc/os-release", "utf8");
+    const fields: Record<string, string> = {};
+    for (const line of raw.split(/\r?\n/)) {
+      const match = line.match(/^([A-Z_]+)=(.*)$/);
+      if (!match) {
+        continue;
+      }
+      fields[match[1]] = match[2].replace(/^"/, "").replace(/"$/, "");
+    }
+    const id = String(fields.ID || "").toLowerCase();
+    const like = String(fields.ID_LIKE || "").toLowerCase();
+    if (id === "ubuntu" || like.includes("ubuntu") || like.includes("debian")) {
+      return "ubuntu";
+    }
+    if (id === "rocky" || like.includes("rhel") || like.includes("fedora")) {
+      return "rocky";
+    }
+    if (id === "amzn" || id === "amazon" || like.includes("amzn") || like.includes("amazon")) {
+      return "amazon-linux";
+    }
+  } catch {}
+  return "linux-generic";
+}
+
+function loadPlatformManifestRecord(): Record<string, unknown> | null {
+  try {
+    const manifestPath = path.join(process.cwd(), "scripts", "platform_manifest.json");
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function summarizeLauncherReadiness(params: {
+  manifest: Record<string, unknown> | null;
+  launcher_key: "office_gui" | "agentic_suite";
+  core_usable: boolean;
+  browser_ready: boolean;
+}) {
+  const launchers = params.manifest && isRecord(params.manifest.launchers) ? params.manifest.launchers : null;
+  const launcherEntry =
+    launchers && isRecord(launchers[params.launcher_key])
+      ? (launchers[params.launcher_key] as Record<string, unknown>)
+      : null;
+  const platformEntry =
+    launcherEntry && isRecord(launcherEntry[process.platform])
+      ? (launcherEntry[process.platform] as Record<string, unknown>)
+      : null;
+  const supported = platformEntry?.supported === true;
+  const distribution = detectLinuxDistributionId();
+  const supportedDistributions = Array.isArray(platformEntry?.supported_distributions)
+    ? platformEntry.supported_distributions.map((entry) => String(entry))
+    : [];
+  const distributionSupported =
+    process.platform !== "linux" ||
+    supportedDistributions.length === 0 ||
+    (distribution !== null && supportedDistributions.includes(distribution));
+  const entrypoint = readString(platformEntry?.entrypoint);
+  const serviceMode = readString(platformEntry?.service_mode);
+  const apps = platformEntry?.apps;
+  const appLaunchEnabled = params.launcher_key === "agentic_suite" && isRecord(apps) && Object.keys(apps).length > 0;
+  const ready = supported && distributionSupported && params.core_usable;
+  const degraded = !ready || (params.browser_ready !== true && !appLaunchEnabled);
+  let reassuranceSurface = "status";
+  if (params.launcher_key === "office_gui") {
+    reassuranceSurface = params.browser_ready ? "browser-status" : "status";
+  } else if (appLaunchEnabled && params.browser_ready) {
+    reassuranceSurface = "apps-browser-status";
+  } else if (appLaunchEnabled) {
+    reassuranceSurface = "apps-status";
+  } else if (params.browser_ready) {
+    reassuranceSurface = "browser-status";
+  }
+  return {
+    supported,
+    ready,
+    degraded,
+    entrypoint,
+    service_mode: serviceMode,
+    reassurance_surface: reassuranceSurface,
+    app_launch_enabled: Boolean(appLaunchEnabled),
+    distribution_supported: distributionSupported,
+    distribution,
+  };
 }
 
 function buildWorkerPoolRecoveryFingerprint(sessions: AgentSessionRecord[]) {
@@ -1494,6 +1610,8 @@ function summarizeSetupDiagnostics(params: {
   desktop_control: ReturnType<typeof summarizeDesktopControlState>;
   patient_zero: ReturnType<typeof summarizePatientZeroState>;
 }): SetupDiagnosticsSummary {
+  const platformManifest = loadPlatformManifestRecord();
+  const distribution = detectLinuxDistributionId();
   const bootstrapBlockerPrefixes = [
     "worker.fabric.",
     "cluster.topology.",
@@ -1533,6 +1651,23 @@ function summarizeSetupDiagnostics(params: {
       (params.desktop_control.act_enabled && !params.desktop_control.act_ready) ||
       (params.desktop_control.listen_enabled && !params.desktop_control.listen_ready));
   const browserDegraded = params.patient_zero.enabled && params.patient_zero.browser_ready !== true;
+  const coreUsable =
+    selfStartReady &&
+    params.worker_fabric.enabled_host_count > 0 &&
+    params.model_router.enabled_backend_count > 0 &&
+    params.autonomy_maintain.stale !== true;
+  const officeGuiLauncher = summarizeLauncherReadiness({
+    manifest: platformManifest,
+    launcher_key: "office_gui",
+    core_usable: coreUsable,
+    browser_ready: params.patient_zero.browser_ready === true,
+  });
+  const agenticSuiteLauncher = summarizeLauncherReadiness({
+    manifest: platformManifest,
+    launcher_key: "agentic_suite",
+    core_usable: coreUsable,
+    browser_ready: params.patient_zero.browser_ready === true,
+  });
   const nextActions: string[] = [];
   if (providerBridgeDegraded || browserDegraded || desktopDegraded) {
     nextActions.push("Run `npm run doctor` for a single prerequisite, browser, and platform bootstrap report before debugging individual lanes.");
@@ -1553,10 +1688,14 @@ function summarizeSetupDiagnostics(params: {
   if (desktopDegraded) {
     nextActions.push("Desktop control is degraded on this host; observation or actuation should stay bounded and explicit until the lane recovers.");
   }
+  if (agenticSuiteLauncher.degraded) {
+    nextActions.push("Run `npm run agentic:suite:status` to inspect the visible-suite fallback path before a demo or operator handoff.");
+  }
   return {
     platform: {
       platform: process.platform,
       arch: process.arch,
+      distribution,
       browser_app: params.patient_zero.browser_app ?? null,
     },
     bootstrap: {
@@ -1587,14 +1726,31 @@ function summarizeSetupDiagnostics(params: {
       degraded: browserDegraded,
     },
     fallback: {
-      core_usable:
-        selfStartReady &&
-        params.worker_fabric.enabled_host_count > 0 &&
-        params.model_router.enabled_backend_count > 0 &&
-        params.autonomy_maintain.stale !== true,
+      core_usable: coreUsable,
       browser_degraded: browserDegraded,
       provider_bridge_degraded: providerBridgeDegraded,
       desktop_degraded: desktopDegraded,
+    },
+    launchers: {
+      office_gui: {
+        supported: officeGuiLauncher.supported,
+        ready: officeGuiLauncher.ready,
+        degraded: officeGuiLauncher.degraded,
+        entrypoint: officeGuiLauncher.entrypoint,
+        service_mode: officeGuiLauncher.service_mode,
+        reassurance_surface: officeGuiLauncher.reassurance_surface,
+        distribution_supported: officeGuiLauncher.distribution_supported,
+      },
+      agentic_suite: {
+        supported: agenticSuiteLauncher.supported,
+        ready: agenticSuiteLauncher.ready,
+        degraded: agenticSuiteLauncher.degraded,
+        entrypoint: agenticSuiteLauncher.entrypoint,
+        service_mode: agenticSuiteLauncher.service_mode,
+        reassurance_surface: agenticSuiteLauncher.reassurance_surface,
+        app_launch_enabled: agenticSuiteLauncher.app_launch_enabled,
+        distribution_supported: agenticSuiteLauncher.distribution_supported,
+      },
     },
     next_actions: nextActions,
   };
@@ -2535,6 +2691,9 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
         provider_bridge_degraded: setupDiagnostics.provider_bridge.degraded,
         browser_ready: setupDiagnostics.browser_lane.ready,
         core_usable: setupDiagnostics.fallback.core_usable,
+        office_gui_ready: setupDiagnostics.launchers.office_gui.ready,
+        agentic_suite_ready: setupDiagnostics.launchers.agentic_suite.ready,
+        agentic_suite_surface: setupDiagnostics.launchers.agentic_suite.reassurance_surface,
       },
       privileged_access: {
         root_execution_ready: privilegedAccess.summary.root_execution_ready,

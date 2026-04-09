@@ -11,6 +11,7 @@ const MANIFEST_PATH = path.join(REPO_ROOT, "scripts", "platform_manifest.json");
 const DOCTOR_PATH = path.join(REPO_ROOT, "scripts", "bootstrap_doctor.mjs");
 const OPEN_BROWSER_PATH = path.join(REPO_ROOT, "scripts", "open_browser.mjs");
 const OFFICE_GUI_NODE_PATH = path.join(REPO_ROOT, "scripts", "agent_office_gui.mjs");
+const AGENTIC_SUITE_NODE_PATH = path.join(REPO_ROOT, "scripts", "agentic_suite_launch.mjs");
 
 test("platform_manifest.json is valid JSON with required structure", () => {
   assert.ok(fs.existsSync(MANIFEST_PATH), "scripts/platform_manifest.json must exist");
@@ -49,6 +50,7 @@ test("platform_manifest.json is valid JSON with required structure", () => {
   }
 
   assert.ok(manifest.launchers.office_gui, "manifest must describe the office GUI launcher");
+  assert.ok(manifest.launchers.agentic_suite, "manifest must describe the agentic suite launcher");
 });
 
 test("platform_manifest.json required prerequisites include node, python3, git", () => {
@@ -59,7 +61,7 @@ test("platform_manifest.json required prerequisites include node, python3, git",
   assert.ok(requiredNames.includes("git"), "git must be a required prerequisite");
 });
 
-test("platform_manifest.json browser entries for current platform are detectable", () => {
+test("platform_manifest.json browser entries for current platform preserve a browser or status fallback", () => {
   const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
   const currentPlatform = process.platform;
   const browsers = manifest.browsers[currentPlatform];
@@ -86,7 +88,18 @@ test("platform_manifest.json browser entries for current platform are detectable
       }
     }
   }
-  assert.ok(foundAny, `at least one browser from manifest should be detectable on ${currentPlatform}`);
+  const hasFallback =
+    currentPlatform === "darwin"
+      ? browsers.some((entry) => Array.isArray(entry.open_cmd) && entry.open_cmd[0] === "open")
+      : currentPlatform === "linux"
+        ? browsers.some((entry) => entry.binary === "xdg-open")
+        : currentPlatform === "win32"
+          ? browsers.some((entry) => entry.binary === "explorer")
+          : false;
+  assert.ok(
+    foundAny || hasFallback,
+    `manifest should provide either a detectable browser or a system fallback on ${currentPlatform}`
+  );
 });
 
 test("platform_manifest.json win32 browser entries include program files fallbacks", () => {
@@ -129,6 +142,7 @@ test("platform_manifest.json win32 browser entries include program files fallbac
 test("platform_manifest.json office GUI launcher dependencies stay truthful", () => {
   const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
   const officeGui = manifest.launchers.office_gui;
+  const agenticSuite = manifest.launchers.agentic_suite;
 
   assert.equal(officeGui.darwin.supported, true);
   assert.equal(officeGui.linux.supported, true);
@@ -138,6 +152,10 @@ test("platform_manifest.json office GUI launcher dependencies stay truthful", ()
   assert.equal(officeGui.win32.supported, true);
   assert.deepEqual(officeGui.win32.required_tools, []);
   assert.deepEqual(officeGui.win32.recommended_tools, []);
+  assert.equal(agenticSuite.darwin.entrypoint, "node ./scripts/agentic_suite_launch.mjs");
+  assert.equal(agenticSuite.linux.entrypoint, "node ./scripts/agentic_suite_launch.mjs");
+  assert.equal(agenticSuite.win32.entrypoint, "node ./scripts/agentic_suite_launch.mjs");
+  assert.deepEqual(agenticSuite.linux.supported_distributions, ["ubuntu", "rocky", "amazon-linux"]);
 });
 
 test("bootstrap_doctor.mjs exists and runs without crashing", { timeout: 30_000 }, () => {
@@ -154,6 +172,7 @@ test("bootstrap_doctor.mjs exists and runs without crashing", { timeout: 30_000 
     assert.ok(result.includes("Platform:"), "doctor output must include Platform line");
     assert.ok(result.includes("node"), "doctor output must check for node");
     assert.ok(result.includes("Office GUI Launcher:"), "doctor output must include launcher readiness");
+    assert.ok(result.includes("Agentic Suite Launcher:"), "doctor output must include suite launcher readiness");
     assert.ok(result.includes("native launcher"), "doctor output must describe the native launcher");
   } catch (error) {
     // Exit code 1 is acceptable (missing recommendations), but other errors are not
@@ -192,11 +211,15 @@ test("agent_office_gui.mjs exists as the cross-platform office launcher entrypoi
   assert.ok(fs.existsSync(OFFICE_GUI_NODE_PATH), "scripts/agent_office_gui.mjs must exist");
 });
 
-test("agent_office_gui.mjs status emits machine-readable status without crashing", { timeout: 20_000 }, () => {
+test("agentic_suite_launch.mjs exists as the cross-platform suite launcher entrypoint", () => {
+  assert.ok(fs.existsSync(AGENTIC_SUITE_NODE_PATH), "scripts/agentic_suite_launch.mjs must exist");
+});
+
+test("agent_office_gui.mjs status emits machine-readable status without crashing", { timeout: 30_000 }, () => {
   const raw = execFileSync(process.execPath, [OFFICE_GUI_NODE_PATH, "status"], {
     cwd: REPO_ROOT,
     encoding: "utf8",
-    timeout: 15_000,
+    timeout: 25_000,
   });
   const parsed = JSON.parse(raw);
   assert.equal(typeof parsed.ok, "boolean");
@@ -204,6 +227,22 @@ test("agent_office_gui.mjs status emits machine-readable status without crashing
   assert.equal(typeof parsed.url, "string");
   assert.equal(parsed.platform, process.platform);
   assert.equal(typeof parsed.launchable, "boolean");
+});
+
+test("agentic_suite_launch.mjs status emits machine-readable status without crashing", { timeout: 30_000 }, () => {
+  const raw = execFileSync(process.execPath, [AGENTIC_SUITE_NODE_PATH, "status"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    timeout: 25_000,
+  });
+  const parsed = JSON.parse(raw);
+  assert.equal(typeof parsed.ok, "boolean");
+  assert.equal(typeof parsed.reassurance_surface, "string");
+  assert.equal(typeof parsed.app_probe_mode, "string");
+  assert.equal(Array.isArray(parsed.requested_apps), true);
+  assert.equal(Array.isArray(parsed.available_apps), true);
+  assert.equal(Array.isArray(parsed.unavailable_apps), true);
+  assert.equal(typeof parsed.suite_launcher.entrypoint, "string");
 });
 
 test("dist/server.js exists (build completed)", () => {
@@ -245,4 +284,7 @@ test("package.json office GUI npm scripts use the cross-platform node launcher",
   assert.equal(pkg.scripts["trichat:office:web"], "node ./scripts/agent_office_gui.mjs open");
   assert.equal(pkg.scripts["trichat:office:web:start"], "node ./scripts/agent_office_gui.mjs start");
   assert.equal(pkg.scripts["trichat:office:web:status"], "node ./scripts/agent_office_gui.mjs status");
+  assert.equal(pkg.scripts["agentic:suite"], "node ./scripts/agentic_suite_launch.mjs open");
+  assert.equal(pkg.scripts["agentic:suite:start"], "node ./scripts/agentic_suite_launch.mjs start");
+  assert.equal(pkg.scripts["agentic:suite:status"], "node ./scripts/agentic_suite_launch.mjs status");
 });

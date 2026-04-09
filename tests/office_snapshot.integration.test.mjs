@@ -107,6 +107,10 @@ test("office.snapshot returns a storage-backed GUI payload without depending on 
     assert.equal(typeof snapshot.setup_diagnostics.provider_bridge.stale, "boolean");
     assert.equal(Array.isArray(snapshot.setup_diagnostics.next_actions), true);
     assert.equal(typeof snapshot.kernel.setup_diagnostics.bootstrap.self_start_ready, "boolean");
+    assert.equal(snapshot.setup_diagnostics.launchers.office_gui.supported, true);
+    assert.equal(snapshot.setup_diagnostics.launchers.agentic_suite.supported, true);
+    assert.equal(typeof snapshot.setup_diagnostics.launchers.agentic_suite.reassurance_surface, "string");
+    assert.equal(typeof snapshot.setup_diagnostics.platform.distribution === "string" || snapshot.setup_diagnostics.platform.distribution === null, true);
     assert.equal(snapshot.autopilot.state.running, true);
     assert.equal(snapshot.autopilot.state.config.execute_enabled, true);
     for (const agentId of ["implementation-director", "research-director", "verification-director"]) {
@@ -224,6 +228,7 @@ test("office.snapshot direct reads stay storage-backed when persisted provider b
     assert.equal(snapshot.setup_diagnostics.provider_bridge.stale, true);
     assert.equal(snapshot.setup_diagnostics.fallback.provider_bridge_degraded, true);
     assert.ok(snapshot.setup_diagnostics.next_actions.some((entry) => entry.includes("npm run doctor")));
+    assert.equal(typeof snapshot.setup_diagnostics.launchers.agentic_suite.ready, "boolean");
     assert.equal(snapshot.roster.active_agent_ids.includes("gemini"), false);
   } finally {
     await client.close().catch(() => {});

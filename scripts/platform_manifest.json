@@ -39,7 +39,16 @@
   },
   "platforms": {
     "darwin": { "service_manager": "launchd", "shell": "zsh", "node_paths": ["/opt/homebrew/bin/node", "/usr/local/bin/node"] },
-    "linux": { "service_manager": "systemd", "shell": "bash", "node_paths": ["/usr/bin/node", "/usr/local/bin/node"] },
+    "linux": {
+      "service_manager": "systemd",
+      "shell": "bash",
+      "node_paths": ["/usr/bin/node", "/usr/local/bin/node"],
+      "distributions": {
+        "ubuntu": { "label": "Ubuntu", "family": "debian" },
+        "rocky": { "label": "Rocky Linux", "family": "rhel" },
+        "amazon-linux": { "label": "Amazon Linux", "family": "rhel" }
+      }
+    },
     "win32": { "service_manager": "none", "shell": "powershell", "node_paths": [] }
   },
   "launchers": {
@@ -64,6 +73,70 @@
         "service_mode": "runner",
         "required_tools": [],
         "recommended_tools": []
+      }
+    },
+    "agentic_suite": {
+      "darwin": {
+        "supported": true,
+        "entrypoint": "node ./scripts/agentic_suite_launch.mjs",
+        "service_mode": "launchd-or-runner",
+        "visible_surface": "apps-browser-status",
+        "required_tools": [],
+        "recommended_tools": [],
+        "apps": {
+          "Codex": [
+            { "app_name": "Codex", "app_path": "/Applications/Codex.app" }
+          ],
+          "Cursor": [
+            { "app_name": "Cursor", "app_path": "/Applications/Cursor.app" }
+          ],
+          "Claude": [
+            { "app_name": "Claude", "app_path": "/Applications/Claude.app" }
+          ]
+        }
+      },
+      "linux": {
+        "supported": true,
+        "entrypoint": "node ./scripts/agentic_suite_launch.mjs",
+        "service_mode": "runner",
+        "visible_surface": "apps-browser-status",
+        "supported_distributions": ["ubuntu", "rocky", "amazon-linux"],
+        "required_tools": [],
+        "recommended_tools": [],
+        "apps": {
+          "Codex": [
+            { "binary": "codex" }
+          ],
+          "Cursor": [
+            { "binary": "cursor" }
+          ],
+          "Claude": [
+            { "binary": "claude" }
+          ]
+        }
+      },
+      "win32": {
+        "supported": true,
+        "entrypoint": "node ./scripts/agentic_suite_launch.mjs",
+        "service_mode": "runner",
+        "visible_surface": "apps-browser-status",
+        "required_tools": [],
+        "recommended_tools": [],
+        "apps": {
+          "Codex": [
+            { "binary": "codex" }
+          ],
+          "Cursor": [
+            {
+              "binary": "cursor",
+              "program_files_path": "Cursor\\Cursor.exe",
+              "local_app_data_path": "Programs\\Cursor\\Cursor.exe"
+            }
+          ],
+          "Claude": [
+            { "binary": "claude" }
+          ]
+        }
       }
     }
   }

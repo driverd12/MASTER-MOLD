@@ -62,8 +62,41 @@ try {
 const platform = process.platform; // darwin | linux | win32
 const arch = process.arch; // arm64 | x64 | ...
 
+function detectLinuxDistribution() {
+  if (platform !== "linux") {
+    return null;
+  }
+  try {
+    const raw = readFileSync("/etc/os-release", "utf8");
+    const fields = {};
+    for (const line of raw.split(/\r?\n/)) {
+      const match = line.match(/^([A-Z_]+)=(.*)$/);
+      if (!match) {
+        continue;
+      }
+      fields[match[1]] = match[2].replace(/^"/, "").replace(/"$/, "");
+    }
+    const id = String(fields.ID || "").toLowerCase();
+    const like = String(fields.ID_LIKE || "").toLowerCase();
+    if (id === "ubuntu" || like.includes("ubuntu") || like.includes("debian")) {
+      return "ubuntu";
+    }
+    if (id === "rocky" || like.includes("rhel") || like.includes("fedora")) {
+      return "rocky";
+    }
+    if (id === "amzn" || id === "amazon" || like.includes("amzn") || like.includes("amazon")) {
+      return "amazon-linux";
+    }
+  } catch {}
+  return "linux-generic";
+}
+
+const linuxDistribution = detectLinuxDistribution();
+
 write("");
-write(`${c.bold}[doctor]${c.reset} Platform: ${c.cyan}${platform} ${arch}${c.reset}`);
+write(
+  `${c.bold}[doctor]${c.reset} Platform: ${c.cyan}${platform}${linuxDistribution ? `/${linuxDistribution}` : ""} ${arch}${c.reset}`
+);
 
 // ── Utility: split a command string respecting simple quoting ────────────────
 function shellSplit(cmd) {
@@ -286,6 +319,60 @@ function checkLauncherTool(name, isRequired, reason) {
   write(`  ${label} ${name} ${c.dim}(${firstLine})${c.reset}${suffix}`);
 }
 
+function reportLauncherSection(label, launcherKey, fallbackEntrypoint) {
+  write(`${c.bold}[doctor]${c.reset} ${label}:`);
+  const launcherConfig = manifest?.launchers?.[launcherKey]?.[platform] || null;
+  const entrypoint =
+    typeof launcherConfig?.entrypoint === "string" && launcherConfig.entrypoint.trim().length > 0
+      ? launcherConfig.entrypoint.trim()
+      : fallbackEntrypoint;
+  const entrypointPath = entrypoint.startsWith("node ./")
+    ? resolve(ROOT, entrypoint.slice("node ./".length))
+    : resolve(ROOT, "scripts");
+  if (!existsSync(entrypointPath)) {
+    launcherDegraded = true;
+    recommendedMissing++;
+    write(`  ${WARN} ${c.yellow}${entrypoint} missing${c.reset}`);
+    return;
+  }
+  if (!launcherConfig || launcherConfig.supported !== true) {
+    launcherDegraded = true;
+    recommendedMissing++;
+    const reason =
+      launcherConfig && typeof launcherConfig.reason === "string" && launcherConfig.reason.trim().length > 0
+        ? launcherConfig.reason.trim()
+        : "launcher support is not declared for this host";
+    write(`  ${WARN} ${c.yellow}${reason}${c.reset}`);
+    return;
+  }
+  const serviceMode =
+    typeof launcherConfig.service_mode === "string" && launcherConfig.service_mode.trim().length > 0
+      ? launcherConfig.service_mode.trim()
+      : "runner";
+  const visibleSurface =
+    typeof launcherConfig.visible_surface === "string" && launcherConfig.visible_surface.trim().length > 0
+      ? launcherConfig.visible_surface.trim()
+      : "browser-status";
+  write(`  ${PASS} native launcher ${c.dim}(${entrypoint}; mode=${serviceMode}; surface=${visibleSurface})${c.reset}`);
+  if (platform === "linux" && Array.isArray(launcherConfig.supported_distributions) && launcherConfig.supported_distributions.length > 0) {
+    if (!linuxDistribution || !launcherConfig.supported_distributions.includes(linuxDistribution)) {
+      launcherDegraded = true;
+      recommendedMissing++;
+      write(
+        `  ${WARN} ${c.yellow}current distro ${linuxDistribution ?? "unknown"} is outside the primary support set (${launcherConfig.supported_distributions.join(", ")})${c.reset}`
+      );
+    } else {
+      write(`  ${PASS} distro ${linuxDistribution} ${c.dim}(primary Linux support target)${c.reset}`);
+    }
+  }
+  for (const tool of Array.isArray(launcherConfig.required_tools) ? launcherConfig.required_tools : []) {
+    checkLauncherTool(tool, true, `${launcherKey} launcher`);
+  }
+  for (const tool of Array.isArray(launcherConfig.recommended_tools) ? launcherConfig.recommended_tools : []) {
+    checkLauncherTool(tool, false, `${launcherKey} launcher fallback`);
+  }
+}
+
 write(`${c.bold}[doctor]${c.reset} Prerequisites:`);
 
 for (const item of manifest.prerequisites.required) {
@@ -403,41 +490,8 @@ if (bearerTokenExists) {
 }
 
 // ── Launcher checks ──────────────────────────────────────────────────────────
-write(`${c.bold}[doctor]${c.reset} Office GUI Launcher:`);
-
-const officeGuiConfig = manifest?.launchers?.office_gui?.[platform] || null;
-const officeGuiEntrypoint =
-  typeof officeGuiConfig?.entrypoint === "string" && officeGuiConfig.entrypoint.trim().length > 0
-    ? officeGuiConfig.entrypoint.trim()
-    : "node ./scripts/agent_office_gui.mjs";
-const officeGuiEntrypointPath = officeGuiEntrypoint.startsWith("node ./")
-  ? resolve(ROOT, officeGuiEntrypoint.slice("node ./".length))
-  : resolve(ROOT, "scripts", "agent_office_gui.mjs");
-if (!existsSync(officeGuiEntrypointPath)) {
-  launcherDegraded = true;
-  recommendedMissing++;
-  write(`  ${WARN} ${c.yellow}${officeGuiEntrypoint} missing${c.reset}`);
-} else if (!officeGuiConfig || officeGuiConfig.supported !== true) {
-  launcherDegraded = true;
-  recommendedMissing++;
-  const reason =
-    officeGuiConfig && typeof officeGuiConfig.reason === "string" && officeGuiConfig.reason.trim().length > 0
-      ? officeGuiConfig.reason.trim()
-      : "launcher support is not declared for this host";
-  write(`  ${WARN} ${c.yellow}${reason}${c.reset}`);
-} else {
-  const serviceMode =
-    typeof officeGuiConfig.service_mode === "string" && officeGuiConfig.service_mode.trim().length > 0
-      ? officeGuiConfig.service_mode.trim()
-      : "runner";
-  write(`  ${PASS} native launcher ${c.dim}(${officeGuiEntrypoint}; mode=${serviceMode})${c.reset}`);
-  for (const tool of Array.isArray(officeGuiConfig.required_tools) ? officeGuiConfig.required_tools : []) {
-    checkLauncherTool(tool, true, "office GUI health/ready/status checks");
-  }
-  for (const tool of Array.isArray(officeGuiConfig.recommended_tools) ? officeGuiConfig.recommended_tools : []) {
-    checkLauncherTool(tool, false, "office GUI fallback startup");
-  }
-}
+reportLauncherSection("Office GUI Launcher", "office_gui", "node ./scripts/agent_office_gui.mjs");
+reportLauncherSection("Agentic Suite Launcher", "agentic_suite", "node ./scripts/agentic_suite_launch.mjs");
 
 // ── Summary ──────────────────────────────────────────────────────────────────
 write("");

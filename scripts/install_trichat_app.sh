@@ -163,7 +163,7 @@ if [[ -n "${ICON_PATH}" ]]; then
 fi
 
 if [[ "${LAUNCHER}" == "suite" ]]; then
-  LAUNCH_SCRIPT="TRICHAT_AUTONOMY_ENSURE_ON_ENTRY=\${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1} TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} ./scripts/agentic_suite_launch.sh open"
+  LAUNCH_SCRIPT="TRICHAT_AUTONOMY_ENSURE_ON_ENTRY=\${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1} TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} node ./scripts/agentic_suite_launch.mjs open"
 elif [[ "${SURFACE}" == "web" ]]; then
   LAUNCH_SCRIPT="TRICHAT_AUTONOMY_ENSURE_ON_ENTRY=\${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1} TRICHAT_OFFICE_THEME=\${TRICHAT_OFFICE_THEME:-night} node ./scripts/agent_office_gui.mjs open"
 else

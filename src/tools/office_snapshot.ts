@@ -219,11 +219,15 @@ function buildOfficeSetupDiagnostics(params: {
   const kernelSetup = asRecord(params.kernel.setup_diagnostics);
   const kernelPlatform = asRecord(kernelSetup.platform);
   const kernelFallback = asRecord(kernelSetup.fallback);
+  const kernelLaunchers = asRecord(kernelSetup.launchers);
+  const kernelOfficeGuiLauncher = asRecord(kernelLaunchers.office_gui);
+  const kernelAgenticSuiteLauncher = asRecord(kernelLaunchers.agentic_suite);
   return {
     source: "office.snapshot",
     platform: {
       platform: String(kernelPlatform.platform ?? process.platform),
       arch: String(kernelPlatform.arch ?? process.arch),
+      distribution: String(kernelPlatform.distribution ?? "").trim() || null,
       browser_app: String(kernelPlatform.browser_app ?? params.patientZero.summary.browser_app ?? "").trim() || null,
     },
     provider_bridge: {
@@ -255,6 +259,27 @@ function buildOfficeSetupDiagnostics(params: {
         typeof kernelFallback.desktop_degraded === "boolean"
           ? kernelFallback.desktop_degraded
           : params.desktopControl.summary.stale === true,
+    },
+    launchers: {
+      office_gui: {
+        supported: kernelOfficeGuiLauncher.supported === true,
+        ready: kernelOfficeGuiLauncher.ready === true,
+        degraded: kernelOfficeGuiLauncher.degraded === true,
+        entrypoint: String(kernelOfficeGuiLauncher.entrypoint ?? "").trim() || null,
+        service_mode: String(kernelOfficeGuiLauncher.service_mode ?? "").trim() || null,
+        reassurance_surface: String(kernelOfficeGuiLauncher.reassurance_surface ?? "status"),
+        distribution_supported: kernelOfficeGuiLauncher.distribution_supported !== false,
+      },
+      agentic_suite: {
+        supported: kernelAgenticSuiteLauncher.supported === true,
+        ready: kernelAgenticSuiteLauncher.ready === true,
+        degraded: kernelAgenticSuiteLauncher.degraded === true,
+        entrypoint: String(kernelAgenticSuiteLauncher.entrypoint ?? "").trim() || null,
+        service_mode: String(kernelAgenticSuiteLauncher.service_mode ?? "").trim() || null,
+        reassurance_surface: String(kernelAgenticSuiteLauncher.reassurance_surface ?? "status"),
+        app_launch_enabled: kernelAgenticSuiteLauncher.app_launch_enabled === true,
+        distribution_supported: kernelAgenticSuiteLauncher.distribution_supported !== false,
+      },
     },
     next_actions: Array.isArray(kernelSetup.next_actions)
       ? kernelSetup.next_actions.map((entry) => String(entry ?? "").trim()).filter(Boolean)
