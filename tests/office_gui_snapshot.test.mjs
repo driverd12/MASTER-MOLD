@@ -1117,3 +1117,52 @@ test("office gui snapshot downgrades fallback-only active roster presence to sle
   assert.equal(agent.evidence_source, "roster");
   assert.equal(agent.evidence_detail, "config-fallback");
 });
+
+test("roster-only inactive agent is never ready or connected", () => {
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        active_agent_ids: [],
+        agents: [
+          {
+            agent_id: "code-smith",
+            display_name: "Code Smith",
+            coordination_tier: "specialist",
+            role_lane: "implementer",
+          },
+        ],
+      },
+      workboard: {},
+      tmux: {},
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: { sessions: [] },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {},
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: { state: {}, runtime: {}, due: {} },
+      provider_bridge: { diagnostics: { generated_at: "", cached: false, diagnostics: [] } },
+    },
+    { theme: "dark" }
+  );
+
+  const agent = snapshot.agents.find((entry) => entry.agent.agent_id === "code-smith");
+  assert.ok(agent, "agent must appear in snapshot");
+  assert.notEqual(agent.state, "ready", "inactive roster-only agent must not be ready");
+  assert.notEqual(agent.state, "connected", "inactive roster-only agent must not be connected");
+});
