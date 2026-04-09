@@ -75,6 +75,12 @@ export function officeSnapshotWarmCacheKey(threadId: string) {
 }
 
 function isDefaultOfficeSnapshotRequest(input: z.infer<typeof officeSnapshotSchema>) {
+  const metadataSource =
+    input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
+      ? String((input.metadata as Record<string, unknown>).source ?? "").trim().toLowerCase()
+      : "";
+  const warmCacheEligibleMetadata =
+    input.metadata === undefined || metadataSource === "dashboard.direct" || metadataSource === "http.raw";
   return (
     (input.thread_id?.trim() || OFFICE_SNAPSHOT_DEFAULT_THREAD_ID) !== "" &&
     input.turn_limit === 12 &&
@@ -88,7 +94,7 @@ function isDefaultOfficeSnapshotRequest(input: z.infer<typeof officeSnapshotSche
     input.include_bus === true &&
     input.include_adapter === true &&
     input.include_runtime_workers === true &&
-    input.metadata === undefined
+    warmCacheEligibleMetadata
   );
 }
 
@@ -197,6 +203,22 @@ function summarizeAutonomyMaintainState(storage: Storage) {
       eval: summary.eval_due,
     },
     subsystems: summary.subsystems,
+  };
+}
+
+function buildPersistedProviderBridgeDiagnostics(autonomyMaintainState: Record<string, unknown>) {
+  const persistedProviderBridgeGeneratedAt =
+    String(autonomyMaintainState.last_provider_bridge_check_at ?? autonomyMaintainState.updated_at ?? "").trim() ||
+    new Date().toISOString();
+  const persistedProviderBridgeDiagnostics = Array.isArray(autonomyMaintainState.provider_bridge_diagnostics)
+    ? autonomyMaintainState.provider_bridge_diagnostics
+    : [];
+  const persistedProviderBridgeStale = providerBridgeDiagnosticsStale(autonomyMaintainState);
+  return {
+    generated_at: persistedProviderBridgeGeneratedAt,
+    cached: persistedProviderBridgeDiagnostics.length > 0,
+    stale: persistedProviderBridgeStale,
+    diagnostics: persistedProviderBridgeDiagnostics,
   };
 }
 
@@ -564,19 +586,7 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     summarizeAutonomyMaintainState(storage)
   );
   const autonomyMaintainState = asRecord(autonomyMaintain.state);
-  const persistedProviderBridgeGeneratedAt =
-    String(autonomyMaintainState.last_provider_bridge_check_at ?? autonomyMaintainState.updated_at ?? "").trim() ||
-    new Date().toISOString();
-  const persistedProviderBridgeDiagnostics = Array.isArray(autonomyMaintainState.provider_bridge_diagnostics)
-    ? autonomyMaintainState.provider_bridge_diagnostics
-    : [];
-  const persistedProviderBridgeStale = providerBridgeDiagnosticsStale(autonomyMaintainState);
-  const selectedProviderBridgeDiagnostics = {
-    generated_at: persistedProviderBridgeGeneratedAt,
-    cached: persistedProviderBridgeDiagnostics.length > 0,
-    stale: persistedProviderBridgeStale,
-    diagnostics: persistedProviderBridgeDiagnostics,
-  };
+  const selectedProviderBridgeDiagnostics = buildPersistedProviderBridgeDiagnostics(autonomyMaintainState);
   const providerBridge = safe<ProviderBridgePayload>(
     "provider_bridge",
     {
@@ -673,6 +683,8 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
   if (isDefaultOfficeSnapshotRequest(input)) {
     const cached = readWarmCacheEntry(officeSnapshotWarmCacheKey(threadId), warmCacheState.ttl_seconds * 1000);
     if (cached && cached.payload && typeof cached.payload === "object" && !Array.isArray(cached.payload)) {
+      const liveAutonomyMaintain = summarizeAutonomyMaintainState(storage);
+      const liveAutonomyMaintainState = asRecord(liveAutonomyMaintain.state);
       const liveDesktopControlState = storage.getDesktopControlState();
       const liveDesktopControl = {
         state: liveDesktopControlState,
@@ -693,34 +705,21 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
       const cachedKernel = asRecord(cachedPayload.kernel);
       const cachedProviderBridge = asRecord(cachedPayload.provider_bridge);
       const cachedProviderBridgeSnapshot = asRecord(cachedProviderBridge.snapshot);
-      const cachedProviderBridgeDiagnostics = asRecord(cachedProviderBridge.diagnostics);
+      const liveProviderBridgeDiagnostics = buildPersistedProviderBridgeDiagnostics(liveAutonomyMaintainState);
       const cachedProviderBridgePayload = {
         snapshot: {
           ...cachedProviderBridgeSnapshot,
           clients: Array.isArray(cachedProviderBridgeSnapshot.clients) ? cachedProviderBridgeSnapshot.clients : [],
           server_name: String(cachedProviderBridgeSnapshot.server_name ?? "mcplayground"),
         },
-        diagnostics: {
-          ...cachedProviderBridgeDiagnostics,
-          generated_at: String(cachedProviderBridgeDiagnostics.generated_at ?? new Date().toISOString()),
-          cached: cachedProviderBridgeDiagnostics.cached === true,
-          stale: cachedProviderBridgeDiagnostics.stale === true,
-          diagnostics: Array.isArray(cachedProviderBridgeDiagnostics.diagnostics)
-            ? cachedProviderBridgeDiagnostics.diagnostics
-            : [],
-        },
-        onboarding:
-          cachedProviderBridge.onboarding && typeof cachedProviderBridge.onboarding === "object"
-            ? (cachedProviderBridge.onboarding as ReturnType<typeof buildProviderBridgeOnboardingSummary>)
-            : buildProviderBridgeOnboardingSummary({
-                clients: Array.isArray(cachedProviderBridgeSnapshot.clients) ? cachedProviderBridgeSnapshot.clients : [],
-                diagnostics: Array.isArray(cachedProviderBridgeDiagnostics.diagnostics)
-                  ? cachedProviderBridgeDiagnostics.diagnostics
-                  : [],
-                server_name: String(cachedProviderBridgeSnapshot.server_name ?? "mcplayground"),
-                generated_at: String(cachedProviderBridgeDiagnostics.generated_at ?? new Date().toISOString()),
-                diagnostics_stale: cachedProviderBridgeDiagnostics.stale === true,
-              }),
+        diagnostics: liveProviderBridgeDiagnostics,
+        onboarding: buildProviderBridgeOnboardingSummary({
+          clients: Array.isArray(cachedProviderBridgeSnapshot.clients) ? cachedProviderBridgeSnapshot.clients : [],
+          diagnostics: liveProviderBridgeDiagnostics.diagnostics,
+          server_name: String(cachedProviderBridgeSnapshot.server_name ?? "mcplayground"),
+          generated_at: liveProviderBridgeDiagnostics.generated_at,
+          diagnostics_stale: liveProviderBridgeDiagnostics.stale === true,
+        }),
       };
       const liveSetupDiagnostics = buildOfficeSetupDiagnostics({
         kernel: cachedKernel,
@@ -736,6 +735,7 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
           patient_zero: livePatientZero,
           privileged_access: livePrivilegedAccess,
         },
+        autonomy_maintain: liveAutonomyMaintain,
         provider_bridge: cachedProviderBridgePayload,
         desktop_control: liveDesktopControl,
         patient_zero: livePatientZero,

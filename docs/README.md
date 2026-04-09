@@ -8,6 +8,7 @@ This is the centralized human-facing docs hub for MCPlayground Core Template.
 - [System Interconnects](./SYSTEM_INTERCONNECTS.md)
 - [IDE + Agent Setup Guide](./IDE_AGENT_SETUP.md)
 - [Transport Connection Guide](./CONNECT.md)
+  Quick setup now starts with `npm run bootstrap:env`, which enforces the pinned Node/npm/Python runtime before install/build.
 
 ## Architecture and Diagrams
 

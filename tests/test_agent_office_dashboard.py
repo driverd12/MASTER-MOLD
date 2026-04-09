@@ -231,24 +231,7 @@ class AgentOfficeDashboardTests(unittest.TestCase):
                 with mock.patch.object(MODULE.McpToolCaller, "call_tool", side_effect=RuntimeError("office snapshot down")) as call_mock:
                     with self.assertRaises(RuntimeError):
                         MODULE.fetch_snapshot(caller, "ring-leader-main", "night")
-        call_mock.assert_called_once_with(
-            "office.snapshot",
-            {
-                "thread_id": "ring-leader-main",
-                "turn_limit": 12,
-                "task_limit": 24,
-                "session_limit": 50,
-                "event_limit": 24,
-                "learning_limit": 120,
-                "runtime_worker_limit": 20,
-                "include_kernel": True,
-                "include_learning": True,
-                "include_bus": True,
-                "include_adapter": True,
-                "include_runtime_workers": True,
-                "metadata": {"source": "dashboard.direct"},
-            },
-        )
+        call_mock.assert_not_called()
 
     def test_build_config_roster_fallback_uses_repo_agent_config(self) -> None:
         workboard = {

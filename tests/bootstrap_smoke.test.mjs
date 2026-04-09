@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MANIFEST_PATH = path.join(REPO_ROOT, "scripts", "platform_manifest.json");
 const DOCTOR_PATH = path.join(REPO_ROOT, "scripts", "bootstrap_doctor.mjs");
+const BOOTSTRAP_ENV_PATH = path.join(REPO_ROOT, "scripts", "bootstrap_env.mjs");
 const OPEN_BROWSER_PATH = path.join(REPO_ROOT, "scripts", "open_browser.mjs");
 const OFFICE_GUI_NODE_PATH = path.join(REPO_ROOT, "scripts", "agent_office_gui.mjs");
 const AGENTIC_SUITE_NODE_PATH = path.join(REPO_ROOT, "scripts", "agentic_suite_launch.mjs");
@@ -188,6 +189,24 @@ test("bootstrap_doctor.mjs exists and runs without crashing", { timeout: 30_000 
       "doctor output on partial failure must include launcher readiness"
     );
   }
+});
+
+test("bootstrap env pins are present and aligned with package metadata", () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+  const nvmrc = fs.readFileSync(path.join(REPO_ROOT, ".nvmrc"), "utf8").trim();
+  const pythonVersion = fs.readFileSync(path.join(REPO_ROOT, ".python-version"), "utf8").trim();
+  const toolVersions = fs.readFileSync(path.join(REPO_ROOT, ".tool-versions"), "utf8");
+
+  assert.equal(packageJson.packageManager, "npm@10.9.4");
+  assert.equal(packageJson.engines?.npm, ">=10 <11");
+  assert.equal(nvmrc, "22");
+  assert.equal(pythonVersion, "3.12.0");
+  assert.match(toolVersions, /^nodejs 22\.22\.1/m);
+  assert.match(toolVersions, /^python 3\.12\.0/m);
+});
+
+test("bootstrap_env.mjs exists as the pinned runtime bootstrap entrypoint", () => {
+  assert.ok(fs.existsSync(BOOTSTRAP_ENV_PATH), "scripts/bootstrap_env.mjs must exist");
 });
 
 test("open_browser.mjs exists and reports usage error without url argument", () => {

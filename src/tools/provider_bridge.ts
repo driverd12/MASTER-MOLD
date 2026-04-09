@@ -303,13 +303,36 @@ function buildProviderProbeEnv(workspaceRoot: string) {
   const env: NodeJS.ProcessEnv = { ...process.env };
   const home = env.HOME?.trim() || os.homedir();
   const shell = env.SHELL?.trim() || "/bin/zsh";
-  const existingPath = env.PATH?.trim();
   const fallbackPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+  const preferredPathEntries = ["/opt/homebrew/bin", "/usr/local/bin"];
+  const existingSegments = String(env.PATH || "")
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const prioritizedSegments = existingSegments.filter(
+    (entry) => !preferredPathEntries.includes(entry)
+  );
+  for (let index = preferredPathEntries.length - 1; index >= 0; index -= 1) {
+    const preferred = preferredPathEntries[index];
+    const existingIndex = prioritizedSegments.indexOf(preferred);
+    if (existingIndex >= 0) {
+      prioritizedSegments.splice(existingIndex, 1);
+    }
+    const systemIndex = prioritizedSegments.findIndex((entry) =>
+      ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].includes(entry)
+    );
+    if (systemIndex >= 0) {
+      prioritizedSegments.splice(systemIndex, 0, preferred);
+    } else {
+      prioritizedSegments.push(preferred);
+    }
+  }
+  const normalizedPath = prioritizedSegments.length > 0 ? prioritizedSegments.join(path.delimiter) : fallbackPath;
   env.HOME = home;
   env.SHELL = shell;
   env.TERM = env.TERM?.trim() || "xterm-256color";
   env.PWD = workspaceRoot;
-  env.PATH = existingPath && existingPath.length > 0 ? existingPath : fallbackPath;
+  env.PATH = normalizedPath;
   return env;
 }
 
@@ -357,6 +380,23 @@ function isCursorRuntimeObserved(workspaceRoot: string) {
       line.includes(`Agentic Playground`) ||
       line.includes(workspaceLabel)
   );
+}
+
+function isGeminiRuntimeObserved(workspaceRoot: string) {
+  const workspaceLabel = path.basename(workspaceRoot).trim();
+  const lines = [...listProcessLines("gemini_bridge.py"), ...listProcessLines("gemini")];
+  return lines.some((line) => {
+    if (!line.includes("gemini")) {
+      return false;
+    }
+    if (line.includes("gemini_bridge.py") || line.includes("/.gemini/")) {
+      return true;
+    }
+    if (!workspaceLabel) {
+      return /\bgemini(\s|$)/i.test(line);
+    }
+    return line.includes(workspaceLabel) || line.includes("Agentic Playground");
+  });
 }
 
 function hasCopilotCliBinary() {
@@ -448,7 +488,7 @@ function providerStatusCommand() {
 }
 
 function providerDoctorCommand() {
-  return "npm run doctor";
+  return "npm run bootstrap:env:check";
 }
 
 function providerDiagnoseCommand(clientId: ProviderBridgeClientId) {
@@ -1658,11 +1698,12 @@ function runProviderDiagnostics(
       const entry = readGeminiConfigEntry(status.config_path, serverName);
       const configSummary = summarizeGeminiConfigEntry(entry);
       const oauth = readGeminiOauthState();
+      const observed = status.installed && isGeminiRuntimeObserved(workspaceRoot);
       const notes = [...status.notes];
       if (configSummary.mode === "http" && hasHttpConfiguredServer(status.config_path ?? "", serverName)) {
         notes.push("Gemini CLI is configured over HTTP here; this repo prefers stdio for Gemini because it is more reliable.");
       }
-      if (configSummary.valid && oauth.connected) {
+      if (configSummary.valid && oauth.connected && observed) {
         return {
           client_id: status.client_id,
           display_name: status.display_name,
@@ -1673,7 +1714,7 @@ function runProviderDiagnostics(
           status: "connected",
           detail: `${configSummary.detail} ${oauth.detail}`,
           notes,
-          command: "stateful config + oauth heartbeat",
+          command: "stateful config + oauth heartbeat + runtime probe",
           config_path: status.config_path,
         } satisfies ProviderBridgeDiagnostic;
       }
@@ -1685,10 +1726,12 @@ function runProviderDiagnostics(
           available: true,
           runtime_probed: true,
           connected: false,
-          status: oauth.available ? "disconnected" : "configured",
-          detail: oauth.detail,
+          status: oauth.connected ? "configured" : oauth.available ? "disconnected" : "configured",
+          detail: oauth.connected
+            ? `${configSummary.detail} ${oauth.detail} Gemini runtime is not currently observed.`
+            : oauth.detail,
           notes,
-          command: "stateful config + oauth heartbeat",
+          command: "stateful config + oauth heartbeat + runtime probe",
           config_path: status.config_path,
         } satisfies ProviderBridgeDiagnostic;
       }

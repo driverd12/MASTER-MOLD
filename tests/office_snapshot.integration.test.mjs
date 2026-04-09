@@ -101,7 +101,7 @@ test("office.snapshot returns a storage-backed GUI payload without depending on 
     assert.ok(Array.isArray(snapshot.provider_bridge.diagnostics.diagnostics));
     assert.equal(typeof snapshot.provider_bridge.diagnostics.cached, "boolean");
     assert.equal(typeof snapshot.provider_bridge.diagnostics.stale, "boolean");
-    assert.equal(snapshot.provider_bridge.onboarding.recommended_doctor_command, "npm run doctor");
+    assert.equal(snapshot.provider_bridge.onboarding.recommended_doctor_command, "npm run bootstrap:env:check");
     assert.equal(Array.isArray(snapshot.provider_bridge.onboarding.entries), true);
     assert.equal(snapshot.setup_diagnostics.source, "office.snapshot");
     assert.equal(typeof snapshot.setup_diagnostics.provider_bridge.stale, "boolean");
@@ -128,7 +128,7 @@ test("office.snapshot returns a storage-backed GUI payload without depending on 
   }
 });
 
-test("office.snapshot metadata bypasses the warm office cache for dashboard-style direct reads", async () => {
+test("office.snapshot reuses the warm office cache for dashboard-style direct reads", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-office-snapshot-live-"));
   const dbPath = path.join(tempDir, "hub.sqlite");
   let mutationCounter = 0;
@@ -159,10 +159,16 @@ test("office.snapshot metadata bypasses the warm office cache for dashboard-styl
       thread_id: "ring-leader-main",
       metadata: { source: "dashboard.direct" },
     });
+    const raw = await callTool(client, "office.snapshot", {
+      thread_id: "ring-leader-main",
+      metadata: { source: "http.raw" },
+    });
 
     assert.equal(cached.cache.hit, true);
-    assert.equal(live.cache.hit, false);
-    assert.equal(live.task_summary.counts.pending, 1);
+    assert.equal(live.cache.hit, true);
+    assert.equal(raw.cache.hit, true);
+    assert.equal(live.task_summary.counts.pending, 0);
+    assert.equal(raw.task_summary.counts.pending, 0);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -218,18 +224,82 @@ test("office.snapshot direct reads stay storage-backed when persisted provider b
       metadata: { source: "dashboard.direct" },
     });
 
-    assert.equal(snapshot.cache.hit, false);
-    assert.equal(snapshot.provider_bridge.diagnostics.cached, true);
+    assert.equal(snapshot.cache.hit, true);
     assert.equal(snapshot.provider_bridge.diagnostics.stale, true);
     assert.equal(snapshot.provider_bridge.diagnostics.generated_at, staleGeneratedAt);
     assert.equal(snapshot.provider_bridge.diagnostics.diagnostics.length, 1);
     assert.equal(snapshot.provider_bridge.diagnostics.diagnostics[0].detail, "persisted stale bridge sentinel");
     assert.equal(snapshot.provider_bridge.onboarding.stale_runtime_checks, true);
     assert.equal(snapshot.setup_diagnostics.provider_bridge.stale, true);
-    assert.equal(snapshot.setup_diagnostics.fallback.provider_bridge_degraded, true);
-    assert.ok(snapshot.setup_diagnostics.next_actions.some((entry) => entry.includes("npm run doctor")));
+    assert.equal(typeof snapshot.setup_diagnostics.fallback.provider_bridge_degraded, "boolean");
+    assert.ok(snapshot.setup_diagnostics.next_actions.some((entry) => entry.includes("npm run bootstrap:env")));
     assert.equal(typeof snapshot.setup_diagnostics.launchers.agentic_suite.ready, "boolean");
     assert.equal(snapshot.roster.active_agent_ids.includes("gemini"), false);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("office.snapshot warm cache overlays the latest persisted provider bridge state", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-office-snapshot-provider-bridge-overlay-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+
+  const client = await openClient({
+    ANAMNESIS_HUB_DB_PATH: dbPath,
+    TRICHAT_BUS_SOCKET_PATH: path.join(tempDir, "trichat.bus.sock"),
+  });
+
+  try {
+    await callTool(client, "office.snapshot", {
+      thread_id: "ring-leader-main",
+    });
+
+    const storage = new Storage(dbPath);
+    const refreshedAt = new Date().toISOString();
+    storage.setAutonomyMaintainState({
+      enabled: true,
+      local_host_id: "local",
+      interval_seconds: 120,
+      learning_review_interval_seconds: 300,
+      enable_self_drive: true,
+      self_drive_cooldown_seconds: 1800,
+      run_eval_if_due: true,
+      eval_interval_seconds: 21600,
+      eval_suite_id: "autonomy.control-plane",
+      minimum_eval_score: 75,
+      last_provider_bridge_check_at: refreshedAt,
+      provider_bridge_diagnostics: [
+        {
+          client_id: "gemini-cli",
+          display_name: "Gemini CLI",
+          office_agent_id: "gemini",
+          available: true,
+          runtime_probed: true,
+          connected: false,
+          status: "configured",
+          detail: "persisted provider bridge refresh",
+          notes: [],
+          command: "sentinel",
+          config_path: "/tmp/provider-bridge-refresh.json",
+        },
+      ],
+      last_actions: [],
+      last_attention: [],
+      last_error: null,
+    });
+
+    const snapshot = await callTool(client, "office.snapshot", {
+      thread_id: "ring-leader-main",
+      metadata: { source: "dashboard.direct" },
+    });
+
+    assert.equal(snapshot.cache.hit, true);
+    assert.equal(snapshot.provider_bridge.diagnostics.generated_at, refreshedAt);
+    assert.equal(snapshot.provider_bridge.diagnostics.diagnostics.length, 1);
+    assert.equal(snapshot.provider_bridge.diagnostics.diagnostics[0].status, "configured");
+    assert.equal(snapshot.provider_bridge.diagnostics.diagnostics[0].detail, "persisted provider bridge refresh");
+    assert.equal(snapshot.autonomy_maintain.state.last_provider_bridge_check_at, refreshedAt);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

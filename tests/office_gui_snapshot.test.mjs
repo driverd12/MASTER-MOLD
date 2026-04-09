@@ -764,6 +764,298 @@ test("office gui snapshot keeps fresh latest-turn presence even after active_tur
   assert.equal(agents.get("implementation-director")?.evidence_source, "turn");
 });
 
+test("office gui snapshot does not let latest-turn intent overstate a configured Gemini bridge", () => {
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        active_agent_ids: ["gemini"],
+        agents: [{ agent_id: "gemini", display_name: "Gemini", coordination_tier: "support", role_lane: "support" }],
+      },
+      workboard: {
+        latest_turn: {
+          turn_id: "turn-gemini",
+          updated_at: new Date().toISOString(),
+          selected_agent: "gemini",
+          selected_strategy: "Ask Gemini to summarize the current branch state",
+        },
+      },
+      tmux: {},
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: { sessions: [] },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {},
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: { state: {}, runtime: {}, due: {} },
+      provider_bridge: {
+        diagnostics: {
+          generated_at: new Date().toISOString(),
+          cached: true,
+          diagnostics: [
+            {
+              client_id: "gemini-cli",
+              display_name: "Gemini CLI",
+              status: "configured",
+              detail: "oauth present but runtime is not currently observed",
+            },
+          ],
+        },
+      },
+    },
+    { theme: "dark" }
+  );
+
+  const gemini = snapshot.agents.find((entry) => entry.agent.agent_id === "gemini");
+  assert.ok(gemini);
+  assert.equal(gemini.state, "sleeping");
+  assert.equal(gemini.evidence_source, "provider_bridge");
+  assert.match(gemini.activity, /configured/i);
+});
+
+test("office gui snapshot ignores stale tmux running evidence for Gemini when the bridge is only configured", () => {
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        active_agent_ids: ["gemini", "research-director"],
+        agents: [
+          { agent_id: "gemini", display_name: "Gemini", coordination_tier: "support", role_lane: "support" },
+          {
+            agent_id: "research-director",
+            display_name: "Research Director",
+            coordination_tier: "director",
+            role_lane: "analyst",
+          },
+        ],
+      },
+      workboard: {},
+      tmux: {
+        state: {
+          tasks: [
+            {
+              task_id: "tmux-stale-gemini",
+              status: "running",
+              created_at: new Date(Date.now() - 36 * 3600 * 1000).toISOString(),
+              started_at: new Date(Date.now() - 36 * 3600 * 1000).toISOString(),
+              metadata: {
+                selected_agent: "gemini",
+                delegate_agent_id: "research-director",
+                lead_agent_id: "gemini",
+              },
+              title: "Stale Gemini audit",
+            },
+          ],
+        },
+      },
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: { sessions: [] },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {},
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: { state: {}, runtime: {}, due: {} },
+      provider_bridge: {
+        diagnostics: {
+          generated_at: new Date().toISOString(),
+          cached: true,
+          diagnostics: [
+            {
+              client_id: "gemini-cli",
+              display_name: "Gemini CLI",
+              status: "configured",
+              detail: "oauth present but runtime is not currently observed",
+            },
+          ],
+        },
+      },
+    },
+    { theme: "dark" }
+  );
+
+  const gemini = snapshot.agents.find((entry) => entry.agent.agent_id === "gemini");
+  assert.ok(gemini);
+  assert.equal(gemini.state, "sleeping");
+  assert.equal(gemini.evidence_source, "provider_bridge");
+});
+
+test("office gui snapshot does not let fresh tmux delegate evidence overstate a configured Gemini bridge", () => {
+  const nowIso = new Date().toISOString();
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        active_agent_ids: ["gemini", "research-director"],
+        agents: [
+          { agent_id: "gemini", display_name: "Gemini", coordination_tier: "support", role_lane: "support" },
+          {
+            agent_id: "research-director",
+            display_name: "Research Director",
+            coordination_tier: "director",
+            role_lane: "analyst",
+          },
+        ],
+      },
+      workboard: {},
+      tmux: {
+        state: {
+          tasks: [
+            {
+              task_id: "tmux-fresh-gemini",
+              status: "running",
+              created_at: nowIso,
+              started_at: nowIso,
+              metadata: {
+                selected_agent: "gemini",
+                delegate_agent_id: "research-director",
+                lead_agent_id: "gemini",
+              },
+              title: "Fresh Gemini audit",
+            },
+          ],
+        },
+      },
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: { sessions: [] },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {},
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: { state: {}, runtime: {}, due: {} },
+      provider_bridge: {
+        diagnostics: {
+          generated_at: nowIso,
+          cached: true,
+          diagnostics: [
+            {
+              client_id: "gemini-cli",
+              display_name: "Gemini CLI",
+              status: "configured",
+              detail: "oauth present but runtime is not currently observed",
+            },
+          ],
+        },
+      },
+    },
+    { theme: "dark" }
+  );
+
+  const gemini = snapshot.agents.find((entry) => entry.agent.agent_id === "gemini");
+  assert.ok(gemini);
+  assert.equal(gemini.state, "sleeping");
+  assert.equal(gemini.evidence_source, "provider_bridge");
+});
+
+test("office gui snapshot does not let fresh session evidence overstate a configured Gemini bridge", () => {
+  const nowIso = new Date().toISOString();
+  const snapshot = buildOfficeGuiSnapshot(
+    {
+      roster: {
+        active_agent_ids: ["gemini"],
+        agents: [{ agent_id: "gemini", display_name: "Gemini", coordination_tier: "support", role_lane: "support" }],
+      },
+      workboard: {},
+      tmux: {},
+      task_summary: { counts: {} },
+      task_running: {},
+      task_pending: {},
+      agent_sessions: {
+        sessions: [
+          {
+            session_id: "session-gemini",
+            agent_id: "gemini",
+            status: "busy",
+            updated_at: nowIso,
+            metadata: {
+              objective: "summarizing runtime evidence",
+            },
+          },
+        ],
+      },
+      adapter: {},
+      bus_tail: {},
+      trichat_summary: {},
+      learning: {},
+      autopilot: {},
+      runtime_workers: { summary: {}, sessions: [] },
+      kernel: {
+        overview: {},
+        worker_fabric: { hosts: [] },
+        model_router: { backends: [] },
+        runtime_workers: {},
+        autonomy_maintain: {},
+        reaction_engine: {},
+        observability: {},
+        swarm: {},
+        workflow_exports: {},
+      },
+      autonomy_maintain: { state: {}, runtime: {}, due: {} },
+      provider_bridge: {
+        diagnostics: {
+          generated_at: nowIso,
+          cached: true,
+          diagnostics: [
+            {
+              client_id: "gemini-cli",
+              display_name: "Gemini CLI",
+              status: "configured",
+              detail: "oauth present but runtime is not currently observed",
+            },
+          ],
+        },
+      },
+    },
+    { theme: "dark" }
+  );
+
+  const gemini = snapshot.agents.find((entry) => entry.agent.agent_id === "gemini");
+  assert.ok(gemini);
+  assert.equal(gemini.state, "sleeping");
+  assert.equal(gemini.evidence_source, "provider_bridge");
+});
+
 test("office gui snapshot keeps healthy idle sessions visible as ready", () => {
   const snapshot = buildOfficeGuiSnapshot(
     {

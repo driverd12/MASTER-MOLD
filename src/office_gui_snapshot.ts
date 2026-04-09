@@ -277,7 +277,8 @@ function buildTaskSignals(
   catalog: Map<string, GuiAgent>,
   tmux: Record<string, unknown>,
   taskRunning: Record<string, unknown>,
-  taskPending: Record<string, unknown>
+  taskPending: Record<string, unknown>,
+  nowSeconds: number
 ) {
   const ownerSignals = new Map<string, { state: string; activity: string; detail: string }>();
   const supervisorSignals = new Map<string, { state: string; activity: string; detail: string }>();
@@ -309,6 +310,11 @@ function buildTaskSignals(
       const status = String(task.status ?? "").trim().toLowerCase();
       const normalizedStatus = status === "pending" ? "queued" : status;
       if (!["running", "queued", "dispatched"].includes(normalizedStatus)) {
+        continue;
+      }
+      const observedAt = String(task.updated_at ?? task.started_at ?? task.dispatched_at ?? task.created_at ?? "").trim();
+      const maxAgeSeconds = normalizedStatus === "running" ? 3600 : 900;
+      if (ageSeconds(observedAt, nowSeconds) > maxAgeSeconds) {
         continue;
       }
       const metadata = asDict(task.metadata);
@@ -446,7 +452,7 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
   const selectedAgentId = normalizeAgentId(latestTurn.selected_agent);
   const expectedAgents = new Set(dedupe(asList(latestTurn.expected_agents)));
   const taskIndex = buildTaskIndex(taskRunning, taskPending);
-  const { ownerSignals, supervisorSignals } = buildTaskSignals(catalog, tmux, taskRunning, taskPending);
+  const { ownerSignals, supervisorSignals } = buildTaskSignals(catalog, tmux, taskRunning, taskPending, nowSeconds);
   const sessionSignals = buildSessionSignals(catalog, agentSessions, taskIndex, nowSeconds);
   const blockedSignals = buildAdapterBlocks(adapter, nowSeconds);
   const chatSignals = buildChatSignals(busTail, nowSeconds);
@@ -469,33 +475,36 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
     const session = sessionSignals.get(agent.agent_id);
     const chat = chatSignals.get(agent.agent_id);
     const provider = providerSignals.get(agent.agent_id);
+    const providerRuntimeReady = !provider || provider.state === "ready";
+    const directPresenceAllowed = providerRuntimeReady;
+    const turnPresenceAllowed = !blocked && providerRuntimeReady;
 
-    if (owner?.state === "running") {
+    if (directPresenceAllowed && owner?.state === "running") {
       state = "working";
       activity = owner.activity;
       evidenceSource = "task";
       evidenceDetail = owner.detail;
-    } else if (supervisor?.state === "running") {
+    } else if (directPresenceAllowed && supervisor?.state === "running") {
       state = "supervising";
       activity = supervisor.activity;
       evidenceSource = "task";
       evidenceDetail = supervisor.detail;
-    } else if (session?.state === "running") {
+    } else if (directPresenceAllowed && session?.state === "running") {
       state = ["lead", "director"].includes(agent.tier) || agent.role === "orchestrator" ? "supervising" : "working";
       activity = session.activity;
       evidenceSource = "session";
       evidenceDetail = session.detail;
-    } else if (turnRecent && agent.agent_id === selectedAgentId) {
+    } else if (turnPresenceAllowed && turnRecent && agent.agent_id === selectedAgentId) {
       state = ["lead", "director"].includes(agent.tier) ? "supervising" : "working";
       activity = compactSingleLine(latestTurn.selected_strategy || latestTurn.user_prompt || "active turn", 56);
       evidenceSource = "turn";
       evidenceDetail = String(latestTurn.turn_id ?? "active-turn");
-    } else if (turnRecent && expectedAgents.has(agent.agent_id)) {
+    } else if (turnPresenceAllowed && turnRecent && expectedAgents.has(agent.agent_id)) {
       state = "idle";
       activity = "waiting on the next turn";
       evidenceSource = "turn";
       evidenceDetail = String(latestTurn.turn_id ?? "active-turn");
-    } else if (session?.state === "ready") {
+    } else if (directPresenceAllowed && session?.state === "ready") {
       state = "ready";
       activity = session.activity;
       evidenceSource = "session";
@@ -519,13 +528,13 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
       activity = provider.activity;
       evidenceSource = "provider_bridge";
       evidenceDetail = provider.detail;
-    } else if (chat) {
+    } else if (directPresenceAllowed && chat) {
       state = chat.state;
       location = chat.state === "talking" ? "cooler" : "lounge";
       activity = chat.activity;
       evidenceSource = "bus";
       evidenceDetail = chat.detail;
-    } else if (owner && ["queued", "dispatched"].includes(owner.state)) {
+    } else if (directPresenceAllowed && owner && ["queued", "dispatched"].includes(owner.state)) {
       state = "idle";
       activity = compactSingleLine(`queued: ${owner.activity}`, 56);
       evidenceSource = "task";

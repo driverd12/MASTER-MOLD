@@ -117,7 +117,7 @@ test("provider.bridge reports truthful client and outbound council coverage", { 
     assert.equal(clients.get("github-copilot-cli")?.outbound_council_supported, true);
     assert.equal(clients.get("github-copilot-cli")?.outbound_bridge_ready, true);
     assert.equal(clients.get("chatgpt-developer-mode")?.install_mode, "remote-only");
-    assert.equal(status.onboarding.recommended_doctor_command, "npm run doctor");
+  assert.equal(status.onboarding.recommended_doctor_command, "npm run bootstrap:env:check");
     assert.equal(status.onboarding.recommended_status_command, "npm run providers:status");
     const onboardingEntries = new Map(status.onboarding.entries.map((entry) => [entry.client_id, entry]));
     assert.equal(onboardingEntries.get("chatgpt-developer-mode")?.runtime_status, "remote_only");
@@ -351,7 +351,7 @@ test("provider.bridge diagnose reports office agent mappings and truthful status
   }
 });
 
-test("provider.bridge diagnose treats Gemini as connected from config plus OAuth state without recursive CLI probing", { concurrency: false }, async () => {
+test("provider.bridge diagnose keeps Gemini configured until runtime is actually observed", { concurrency: false }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-provider-bridge-gemini-diagnose-"));
   const homeDir = path.join(tempDir, "home");
   const binDir = path.join(tempDir, "bin");
@@ -363,6 +363,8 @@ test("provider.bridge diagnose treats Gemini as connected from config plus OAuth
     { mode: 0o755 }
   );
   fs.chmodSync(path.join(binDir, "gemini"), 0o755);
+  fs.writeFileSync(path.join(binDir, "pgrep"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  fs.chmodSync(path.join(binDir, "pgrep"), 0o755);
 
   const geminiDir = path.join(homeDir, ".gemini");
   fs.mkdirSync(geminiDir, { recursive: true });
@@ -419,10 +421,11 @@ test("provider.bridge diagnose treats Gemini as connected from config plus OAuth
     assert.equal(diagnose.diagnostics.length, 1);
     const gemini = diagnose.diagnostics[0];
     assert.equal(gemini.client_id, "gemini-cli");
-    assert.equal(gemini.status, "connected");
-    assert.equal(gemini.connected, true);
+    assert.equal(gemini.status, "configured");
+    assert.equal(gemini.connected, false);
     assert.match(gemini.detail, /OAuth session/i);
-    assert.match(gemini.command, /stateful config \+ oauth heartbeat/i);
+    assert.match(gemini.detail, /runtime is not currently observed/i);
+    assert.match(gemini.command, /runtime probe/i);
   } finally {
     await session.client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -261,9 +261,8 @@ def theme_label(theme: str) -> str:
 
 def snapshot_cache_dir(repo_root: Path) -> Path:
     override = os.environ.get("TRICHAT_OFFICE_SNAPSHOT_CACHE_DIR", "").strip()
-    if override:
-        return Path(override).expanduser()
-    return repo_root / "data" / "imprint" / "office_snapshot_cache"
+    base_dir = Path(override).expanduser() if override else (repo_root / "data" / "imprint" / "office_snapshot_cache")
+    return base_dir / "dashboard"
 
 
 def snapshot_cache_token(value: Any, fallback: str) -> str:
@@ -2915,6 +2914,7 @@ def pick_resume_thread(caller: McpToolCaller) -> str:
 
 
 def fetch_snapshot(caller: McpToolCaller, thread_id: str, theme: str = "night") -> DashboardSnapshot:
+    can_use_direct_tool_fanout = allow_direct_tool_fanout_fallback(caller.transport)
     if caller.can_use_http_snapshot():
         try:
             payload = caller.fetch_http_snapshot(thread_id, theme)
@@ -2945,53 +2945,54 @@ def fetch_snapshot(caller: McpToolCaller, thread_id: str, theme: str = "night") 
             pass
 
     office_snapshot_error: Optional[str] = None
-    try:
-        payload = as_dict(
-            caller.call_tool(
-                "office.snapshot",
-                {
-                    "thread_id": thread_id,
-                    "turn_limit": 12,
-                    "task_limit": 24,
-                    "session_limit": 50,
-                    "event_limit": 24,
-                    "learning_limit": 120,
-                    "runtime_worker_limit": 20,
-                    "include_kernel": True,
-                    "include_learning": True,
-                    "include_bus": True,
-                    "include_adapter": True,
-                    "include_runtime_workers": True,
-                    "metadata": {"source": "dashboard.direct"},
-                },
+    if can_use_direct_tool_fanout:
+        try:
+            payload = as_dict(
+                caller.call_tool(
+                    "office.snapshot",
+                    {
+                        "thread_id": thread_id,
+                        "turn_limit": 12,
+                        "task_limit": 24,
+                        "session_limit": 50,
+                        "event_limit": 24,
+                        "learning_limit": 120,
+                        "runtime_worker_limit": 20,
+                        "include_kernel": True,
+                        "include_learning": True,
+                        "include_bus": True,
+                        "include_adapter": True,
+                        "include_runtime_workers": True,
+                        "metadata": {"source": "dashboard.direct"},
+                    },
+                )
             )
-        )
-        if payload:
-            return DashboardSnapshot(
-                thread_id=str(payload.get("thread_id") or thread_id).strip() or thread_id,
-                fetched_at=time.time(),
-                roster=as_dict(payload.get("roster")),
-                workboard=as_dict(payload.get("workboard")),
-                tmux=as_dict(payload.get("tmux")),
-                task_summary=as_dict(payload.get("task_summary")),
-                adapter=as_dict(payload.get("adapter")),
-                bus_tail=as_dict(payload.get("bus_tail")),
-                trichat_summary=as_dict(payload.get("trichat_summary")),
-                kernel=as_dict(payload.get("kernel")),
-                learning=as_dict(payload.get("learning")),
-                autopilot=as_dict(payload.get("autopilot")),
-                autonomy_maintain=as_dict(payload.get("autonomy_maintain")),
-                runtime_workers=as_dict(payload.get("runtime_workers")),
-                operator_brief=as_dict(payload.get("operator_brief")),
-                errors=[compact_single_line(str(item), 160) for item in as_list(payload.get("errors"))],
-                agent_sessions=as_dict(payload.get("agent_sessions")),
-                task_running=as_dict(payload.get("task_running")),
-                task_pending=as_dict(payload.get("task_pending")),
-            )
-    except Exception as error:  # noqa: BLE001
-        office_snapshot_error = compact_single_line(f"office_snapshot: {error}", 160)
+            if payload:
+                return DashboardSnapshot(
+                    thread_id=str(payload.get("thread_id") or thread_id).strip() or thread_id,
+                    fetched_at=time.time(),
+                    roster=as_dict(payload.get("roster")),
+                    workboard=as_dict(payload.get("workboard")),
+                    tmux=as_dict(payload.get("tmux")),
+                    task_summary=as_dict(payload.get("task_summary")),
+                    adapter=as_dict(payload.get("adapter")),
+                    bus_tail=as_dict(payload.get("bus_tail")),
+                    trichat_summary=as_dict(payload.get("trichat_summary")),
+                    kernel=as_dict(payload.get("kernel")),
+                    learning=as_dict(payload.get("learning")),
+                    autopilot=as_dict(payload.get("autopilot")),
+                    autonomy_maintain=as_dict(payload.get("autonomy_maintain")),
+                    runtime_workers=as_dict(payload.get("runtime_workers")),
+                    operator_brief=as_dict(payload.get("operator_brief")),
+                    errors=[compact_single_line(str(item), 160) for item in as_list(payload.get("errors"))],
+                    agent_sessions=as_dict(payload.get("agent_sessions")),
+                    task_running=as_dict(payload.get("task_running")),
+                    task_pending=as_dict(payload.get("task_pending")),
+                )
+        except Exception as error:  # noqa: BLE001
+            office_snapshot_error = compact_single_line(f"office_snapshot: {error}", 160)
 
-    if not allow_direct_tool_fanout_fallback(caller.transport):
+    if not can_use_direct_tool_fanout:
         raise RuntimeError(office_snapshot_error or "office_snapshot unavailable")
 
     requests = {

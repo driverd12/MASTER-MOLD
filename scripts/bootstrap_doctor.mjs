@@ -92,10 +92,21 @@ function detectLinuxDistribution() {
 }
 
 const linuxDistribution = detectLinuxDistribution();
+const pinnedNodeVersion = readFileSync(resolve(ROOT, ".nvmrc"), "utf8").trim();
+const pinnedPythonVersion = existsSync(resolve(ROOT, ".python-version"))
+  ? readFileSync(resolve(ROOT, ".python-version"), "utf8").trim()
+  : "";
+const packageJson = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8"));
+const pinnedNpmVersion = String(packageJson.packageManager || "").startsWith("npm@")
+  ? String(packageJson.packageManager).slice("npm@".length)
+  : "";
 
 write("");
 write(
   `${c.bold}[doctor]${c.reset} Platform: ${c.cyan}${platform}${linuxDistribution ? `/${linuxDistribution}` : ""} ${arch}${c.reset}`
+);
+write(
+  `${c.bold}[doctor]${c.reset} Runtime pins: node ${pinnedNodeVersion}.x${pinnedNpmVersion ? ` | npm ${pinnedNpmVersion}` : ""}${pinnedPythonVersion ? ` | python ${pinnedPythonVersion}.x` : ""}`
 );
 
 // ── Utility: split a command string respecting simple quoting ────────────────
@@ -136,6 +147,16 @@ function run(cmd) {
   } catch {
     return null;
   }
+}
+
+function runFirst(commands) {
+  for (const command of commands) {
+    const output = run(command);
+    if (output !== null) {
+      return output;
+    }
+  }
+  return null;
 }
 
 // ── Utility: check if output matches a version_pattern gate ──────────────────
@@ -202,17 +223,25 @@ let recommendedMissing = 0;
 let launcherDegraded = false;
 
 function checkPrereq(item, isRequired) {
-  const output = run(item.check);
+  let output = run(item.check);
   const version = extractVersion(output);
   const hint =
     item.install_hint && item.install_hint[platform]
       ? item.install_hint[platform]
       : null;
 
+  if (output === null && item.name === "python3" && platform !== "win32") {
+    output = runFirst(["/opt/homebrew/bin/python3 --version", "/usr/local/bin/python3 --version"]);
+  }
+
   if (output === null) {
     // Not found
     if (isRequired) {
       requiredFails++;
+      if (item.name === "git" && platform === "darwin" && existsSync("/usr/bin/git")) {
+        write(`  ${FAIL} ${item.name} ${c.red}(installed but blocked \u2014 accept the Xcode license to use git)${c.reset}`);
+        return;
+      }
       const hintStr = hint ? ` \u2014 ${hint}` : "";
       write(`  ${FAIL} ${item.name} ${c.red}(not installed${hintStr})${c.reset}`);
     } else {
@@ -223,8 +252,10 @@ function checkPrereq(item, isRequired) {
     return;
   }
 
+  const resolvedVersion = extractVersion(output);
+
   // Found — build display string
-  const versionStr = version || "";
+  const versionStr = resolvedVersion || "";
   const minStr = item.min_version
     ? ` ${c.dim}(required \u2265${item.min_version})${c.reset}`
     : "";
@@ -249,7 +280,7 @@ function checkPrereq(item, isRequired) {
     return;
   }
 
-  if (item.min_version && version && !semverGte(version, item.min_version)) {
+  if (item.min_version && resolvedVersion && !semverGte(resolvedVersion, item.min_version)) {
     // Version too low
     if (isRequired) {
       requiredFails++;

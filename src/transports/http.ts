@@ -70,6 +70,13 @@ let lastReadySnapshotCache: ReadySnapshotCacheEntry | null = null;
 let readySnapshotInflight: Promise<{ payload: ReadySnapshotPayload; source: "live" | "cache-fallback" | "cache-stale" | "error" | "default" }> | null =
   null;
 
+function resetOfficeSnapshotRuntimeState() {
+  officeSnapshotInflight.clear();
+  officeNodeSnapshotInflight.clear();
+  officeRawSnapshotInflight.clear();
+  officeRawSnapshotCache.clear();
+}
+
 function readySnapshotTimeoutMs() {
   const override = Number(process.env.MCP_HTTP_READY_TIMEOUT_MS || "");
   if (Number.isFinite(override) && override >= 50) {
@@ -211,7 +218,8 @@ async function withTimeout<T>(value: Promise<T> | T, timeoutMs: number, label: s
 
 function officeSnapshotCacheDir() {
   const override = String(process.env.TRICHAT_OFFICE_SNAPSHOT_CACHE_DIR || "").trim();
-  return override ? path.resolve(override) : path.join(repoRoot, "data", "imprint", "office_snapshot_cache");
+  const baseDir = override ? path.resolve(override) : path.join(repoRoot, "data", "imprint", "office_snapshot_cache");
+  return path.join(baseDir, "web");
 }
 
 function officeSnapshotCacheToken(value: string, fallback: string) {
@@ -396,10 +404,7 @@ function writeOfficeSnapshotCache(payload: unknown) {
 function invalidateOfficeSnapshotCaches() {
   lastReadySnapshotCache = null;
   readySnapshotInflight = null;
-  officeSnapshotInflight.clear();
-  officeNodeSnapshotInflight.clear();
-  officeRawSnapshotInflight.clear();
-  officeRawSnapshotCache.clear();
+  resetOfficeSnapshotRuntimeState();
   const cacheDir = officeSnapshotCacheDir();
   try {
     if (!fs.existsSync(cacheDir) || !fs.statSync(cacheDir).isDirectory()) {
@@ -416,6 +421,57 @@ function invalidateOfficeSnapshotCaches() {
   }
 }
 
+function sendCachedOfficeSnapshot(
+  res: http.ServerResponse,
+  source: string,
+  snapshot: { body: string; ageSeconds: number; stale: boolean },
+  refreshState?: "pending"
+) {
+  res.statusCode = 200;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.setHeader("x-office-snapshot-source", source);
+  res.setHeader("x-office-snapshot-age-seconds", snapshot.ageSeconds.toFixed(3));
+  res.setHeader("x-office-snapshot-stale", snapshot.stale ? "true" : "false");
+  if (refreshState) {
+    res.setHeader("x-office-refresh-state", refreshState);
+  }
+  res.end(snapshot.body);
+}
+
+function startOfficeNodeSnapshotRefresh(
+  inflightKey: string,
+  options: HttpOptions,
+  input: { threadId: string; theme: string; forceLive: boolean }
+) {
+  let pendingDirectSnapshot = officeNodeSnapshotInflight.get(inflightKey);
+  if (!pendingDirectSnapshot) {
+    pendingDirectSnapshot = withTimeout(
+      Promise.resolve(
+        options.officeSnapshot!({
+          threadId: input.threadId,
+          theme: input.theme,
+          forceLive: input.forceLive,
+        })
+      ),
+      officeSnapshotNodeTimeoutMs(),
+      "office snapshot"
+    )
+      .then((directPayload) => {
+        const body = JSON.stringify(directPayload);
+        const parsed = parseOfficeSnapshotPayload(body);
+        if (parsed && (!Array.isArray(parsed.errors) || parsed.errors.length === 0)) {
+          writeOfficeSnapshotCache(parsed);
+        }
+        return { body, parsed };
+      })
+      .finally(() => {
+        officeNodeSnapshotInflight.delete(inflightKey);
+      });
+    officeNodeSnapshotInflight.set(inflightKey, pendingDirectSnapshot);
+  }
+  return pendingDirectSnapshot;
+}
+
 export async function startHttpTransport(createServer: () => Server, options: HttpOptions) {
   if (options.host !== "127.0.0.1" && options.host !== "localhost") {
     throw new Error("HTTP transport must bind to 127.0.0.1 or localhost");
@@ -426,6 +482,7 @@ export async function startHttpTransport(createServer: () => Server, options: Ht
 
   lastReadySnapshotCache = null;
   readySnapshotInflight = null;
+  resetOfficeSnapshotRuntimeState();
 
   const sessions = new Map<string, SessionBinding>();
 
@@ -964,57 +1021,41 @@ async function maybeHandleOfficeRequest(
       }
     }
     if (!forceLive) {
-      const cachedSnapshot =
-        readOfficeSnapshotCache(theme, requestedThreadId || null) ??
-        readOfficeSnapshotCache(theme, requestedThreadId || null, { allowStale: true });
+      const cachedSnapshot = readOfficeSnapshotCache(theme, requestedThreadId || null);
       if (cachedSnapshot) {
-        res.statusCode = 200;
-        res.setHeader("content-type", "application/json; charset=utf-8");
-        res.setHeader("x-office-snapshot-source", cachedSnapshot.stale ? "cache-stale" : "cache");
-        res.setHeader("x-office-snapshot-age-seconds", cachedSnapshot.ageSeconds.toFixed(3));
-        res.setHeader("x-office-snapshot-stale", cachedSnapshot.stale ? "true" : "false");
-        res.end(cachedSnapshot.body);
+        sendCachedOfficeSnapshot(res, "cache", cachedSnapshot);
         return true;
       }
     }
     if (options.officeSnapshot) {
-      const freshCachedSnapshot = readOfficeSnapshotCache(theme, requestedThreadId || null);
+      const cachedSnapshot = readOfficeSnapshotCache(theme, requestedThreadId || null, { allowStale: true });
+      const freshCachedSnapshot = cachedSnapshot && !cachedSnapshot.stale ? cachedSnapshot : null;
       if (forceLive && !explicitForceLive && freshCachedSnapshot && freshCachedSnapshot.ageSeconds <= officeSnapshotLiveThrottleSeconds()) {
-        res.statusCode = 200;
-        res.setHeader("content-type", "application/json; charset=utf-8");
-        res.setHeader("x-office-snapshot-source", "cache-throttled-live");
-        res.setHeader("x-office-snapshot-age-seconds", freshCachedSnapshot.ageSeconds.toFixed(3));
-        res.setHeader("x-office-snapshot-stale", "false");
-        res.end(freshCachedSnapshot.body);
+        sendCachedOfficeSnapshot(res, "cache-throttled-live", freshCachedSnapshot);
+        return true;
+      }
+      if (cachedSnapshot && (cachedSnapshot.stale || explicitForceLive)) {
+        startOfficeNodeSnapshotRefresh(inflightKey, options, {
+          threadId: effectiveThreadId,
+          theme,
+          forceLive,
+        }).catch(() => {
+          // Keep serving the last truthful cached snapshot; background refresh failures surface on the next direct attempt.
+        });
+        sendCachedOfficeSnapshot(
+          res,
+          explicitForceLive ? "cache-refreshing-live" : "cache-refreshing-stale",
+          cachedSnapshot,
+          "pending"
+        );
         return true;
       }
       try {
-        let pendingDirectSnapshot = officeNodeSnapshotInflight.get(inflightKey);
-        if (!pendingDirectSnapshot) {
-          pendingDirectSnapshot = withTimeout(
-            Promise.resolve(
-              options.officeSnapshot({
-                threadId: effectiveThreadId,
-                theme,
-                forceLive,
-              })
-            ),
-            officeSnapshotNodeTimeoutMs(),
-            "office snapshot"
-          )
-            .then((directPayload) => {
-              const body = JSON.stringify(directPayload);
-              const parsed = parseOfficeSnapshotPayload(body);
-              if (!Array.isArray(parsed?.errors) || parsed.errors.length === 0) {
-                writeOfficeSnapshotCache(directPayload);
-              }
-              return { body, parsed };
-            })
-            .finally(() => {
-              officeNodeSnapshotInflight.delete(inflightKey);
-            });
-          officeNodeSnapshotInflight.set(inflightKey, pendingDirectSnapshot);
-        }
+        const pendingDirectSnapshot = startOfficeNodeSnapshotRefresh(inflightKey, options, {
+          threadId: effectiveThreadId,
+          theme,
+          forceLive,
+        });
         const { body: directBody, parsed: directParsed } = await pendingDirectSnapshot;
         const directAgents = Array.isArray(directParsed?.agents) ? directParsed.agents.length : 0;
         const directErrors = Array.isArray(directParsed?.errors) ? directParsed.errors.length : 0;
@@ -1023,12 +1064,7 @@ async function maybeHandleOfficeRequest(
           const cachedPayload = cachedSnapshot ? parseOfficeSnapshotPayload(cachedSnapshot.body) : null;
           const cachedAgents = Array.isArray(cachedPayload?.agents) ? cachedPayload.agents.length : 0;
           if (cachedSnapshot && cachedAgents > directAgents) {
-            res.statusCode = 200;
-            res.setHeader("content-type", "application/json; charset=utf-8");
-            res.setHeader("x-office-snapshot-source", "cache-fallback");
-            res.setHeader("x-office-snapshot-age-seconds", cachedSnapshot.ageSeconds.toFixed(3));
-            res.setHeader("x-office-snapshot-stale", cachedSnapshot.stale ? "true" : "false");
-            res.end(cachedSnapshot.body);
+            sendCachedOfficeSnapshot(res, "cache-fallback", cachedSnapshot);
             return true;
           }
         }
@@ -1040,12 +1076,7 @@ async function maybeHandleOfficeRequest(
       } catch (error) {
         const cachedSnapshot = readOfficeSnapshotCache(theme, requestedThreadId || null, { allowStale: true });
         if (cachedSnapshot) {
-          res.statusCode = 200;
-          res.setHeader("content-type", "application/json; charset=utf-8");
-          res.setHeader("x-office-snapshot-source", "cache-fallback");
-          res.setHeader("x-office-snapshot-age-seconds", cachedSnapshot.ageSeconds.toFixed(3));
-          res.setHeader("x-office-snapshot-stale", cachedSnapshot.stale ? "true" : "false");
-          res.end(cachedSnapshot.body);
+          sendCachedOfficeSnapshot(res, "cache-fallback", cachedSnapshot);
           return true;
         }
         sendJson(res, 500, {

@@ -3,6 +3,7 @@
     activeTab: "office",
     bootstrap: null,
     snapshot: null,
+    snapshotFingerprint: "",
     selectedAgentId: "",
     refreshHandle: null,
     snapshotRequest: false,
@@ -133,6 +134,22 @@
 
   function getSnapshotAgents() {
     return state.snapshot && Array.isArray(state.snapshot.agents) ? state.snapshot.agents : [];
+  }
+
+  function snapshotFingerprint(payload) {
+    return JSON.stringify(payload, function (key, value) {
+      if (key === "fetched_at" || key === "fetched_at_iso") return undefined;
+      if (key === "cache" && value && typeof value === "object") {
+        var copy = {};
+        Object.keys(value).forEach(function (entryKey) {
+          if (entryKey !== "written_at") {
+            copy[entryKey] = value[entryKey];
+          }
+        });
+        return copy;
+      }
+      return value;
+    });
   }
 
   function findAgent(agentId) {
@@ -576,11 +593,7 @@
   function renderAll() {
     var patientZeroEnabled = !!(state.snapshot && state.snapshot.summary && state.snapshot.summary.patient_zero && state.snapshot.summary.patient_zero.enabled);
     setPatientZeroTone(patientZeroEnabled ? "enabled" : "disabled");
-    if (els.subtitle) {
-      els.subtitle.textContent = state.snapshot
-        ? "Thread " + state.snapshot.thread_id + " · data age " + relativeTime(state.snapshot.fetched_at_iso)
-        : "Connecting to live MCP operator surface";
-    }
+    renderSubtitle();
     renderStatusStrip();
     renderOfficeView();
     renderBriefingView();
@@ -591,7 +604,15 @@
     setTab(state.activeTab);
   }
 
-  function getJson(url, options) {
+  function renderSubtitle() {
+    if (els.subtitle) {
+      els.subtitle.textContent = state.snapshot
+        ? "Thread " + state.snapshot.thread_id + " · data age " + relativeTime(state.snapshot.fetched_at_iso)
+        : "Connecting to live MCP operator surface";
+    }
+  }
+
+  function getJsonWithResponse(url, options) {
     var requestOptions = options || {};
     return fetch(url, requestOptions).then(function (response) {
       return response.text().then(function (text) {
@@ -610,8 +631,21 @@
         if (!response.ok) {
           throw new Error(payload.detail || payload.error || (response.status + " " + response.statusText));
         }
-        return payload;
+        return {
+          payload: payload,
+          meta: {
+            snapshotSource: response.headers.get("x-office-snapshot-source") || "",
+            snapshotStale: response.headers.get("x-office-snapshot-stale") || "",
+            refreshState: response.headers.get("x-office-refresh-state") || "",
+          },
+        };
       });
+    });
+  }
+
+  function getJson(url, options) {
+    return getJsonWithResponse(url, options).then(function (result) {
+      return result.payload;
     });
   }
 
@@ -642,9 +676,14 @@
     if (threadId) {
       params.set("thread_id", threadId);
     }
-    state.snapshotRequest = getJson("/office/api/snapshot?" + params.toString())
-      .then(function (payload) {
+    state.snapshotRequest = getJsonWithResponse("/office/api/snapshot?" + params.toString())
+      .then(function (result) {
+        var payload = result.payload;
+        var meta = result.meta || {};
+        var nextFingerprint = snapshotFingerprint(payload);
+        var shouldRenderAll = nextFingerprint !== state.snapshotFingerprint;
         state.snapshot = payload;
+        state.snapshotFingerprint = nextFingerprint;
         var patientZeroNote =
           payload &&
           payload.summary &&
@@ -659,8 +698,20 @@
         if (!state.selectedAgentId && payload.agents && payload.agents.length && payload.agents[0].agent) {
           state.selectedAgentId = payload.agents[0].agent.agent_id || "";
         }
-        setResultText(forceLive ? "Live refresh complete." : "Ready.");
-        renderAll();
+        if (meta.refreshState === "pending") {
+          setResultText(forceLive ? "Live refresh started." : "Snapshot refresh started.");
+        } else if (meta.snapshotSource === "cache-refreshing-stale") {
+          setResultText("Showing cached office data while a fresh snapshot loads.");
+        } else if (forceLive) {
+          setResultText("Live refresh complete.");
+        } else {
+          setResultText("Ready.");
+        }
+        if (shouldRenderAll) {
+          renderAll();
+        } else {
+          renderSubtitle();
+        }
         return payload;
       }, function (error) {
         state.snapshotRequest = false;
@@ -684,9 +735,7 @@
     var refreshSeconds = state.bootstrap && state.bootstrap.refresh_interval_seconds ? Number(state.bootstrap.refresh_interval_seconds) : 2;
     var intervalMs = Math.max(2000, refreshSeconds * 1000);
     state.refreshHandle = setInterval(function () {
-      var patientZeroEnabled = !!(state.snapshot && state.snapshot.summary && state.snapshot.summary.patient_zero && state.snapshot.summary.patient_zero.enabled);
-      var preferLive = patientZeroEnabled || state.activeTab === "patient-zero";
-      fetchSnapshot({ forceLive: preferLive }).catch(function (error) {
+      fetchSnapshot().catch(function (error) {
         setResultText("Snapshot refresh degraded: " + String(error));
         if (!state.snapshot) {
           renderLoadingShell("Snapshot retrying after a partial failure.");

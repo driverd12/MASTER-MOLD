@@ -1670,7 +1670,9 @@ function summarizeSetupDiagnostics(params: {
   });
   const nextActions: string[] = [];
   if (providerBridgeDegraded || browserDegraded || desktopDegraded) {
-    nextActions.push("Run `npm run doctor` for a single prerequisite, browser, and platform bootstrap report before debugging individual lanes.");
+    nextActions.push(
+      "Run `npm run bootstrap:env` to verify the pinned runtime, prepare the local environment, and emit the platform bootstrap report before debugging individual lanes."
+    );
   }
   if (!selfStartReady) {
     nextActions.push("Run `npm run autonomy:ensure` to seed or repair the core control plane before relying on local autonomy.");

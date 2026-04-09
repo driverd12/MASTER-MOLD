@@ -15,14 +15,37 @@ git clone https://github.com/driverd12/MCPlayground---Core-Template.git
 cd MCPlayground---Core-Template
 ```
 
-## 3. Install and Build
+## 3. Pin the Runtime
+
+Repo-managed version pins:
+
+- `.nvmrc`: Node `22.x`
+- `package.json#packageManager`: npm `10.9.4`
+- `.python-version`: Python baseline `3.12.0` with newer compatible `3.x` releases allowed by bootstrap checks
+- `.tool-versions`: `asdf` / `mise` compatibility for Node and Python
+
+## 4. Bootstrap the Environment
 
 ```bash
-npm ci
-npm run build
+npm run bootstrap:env
 ```
 
-## 4. Configure Environment
+This will:
+
+- verify the pinned Node, npm, and Python versions before continuing
+- create `.env` from `.env.example` when needed
+- create the office snapshot cache directories ahead of time
+- run `npm ci` if dependencies are missing
+- run `npm run build` if `dist/server.js` is missing
+- finish with `npm run doctor`
+
+Check only:
+
+```bash
+npm run bootstrap:env:check
+```
+
+## 5. Configure Environment
 
 ```bash
 cp .env.example .env
@@ -44,14 +67,14 @@ Built-in domain packs:
 MCP_DOMAIN_PACKS=none
 ```
 
-## 5. Verify
+## 6. Verify
 
 ```bash
 npm run doctor
 npm test
 ```
 
-## 6. Start Server
+## 7. Start Server
 
 STDIO:
 
@@ -65,7 +88,7 @@ HTTP:
 npm run start:http
 ```
 
-## 7. Smoke Check
+## 8. Smoke Check
 
 ```bash
 npm run mvp:smoke
@@ -77,7 +100,7 @@ Against an already-running HTTP server:
 MCP_SMOKE_TRANSPORT=http MCP_HTTP_BEARER_TOKEN=change-me ./scripts/mvp_smoke.sh
 ```
 
-## 8. Launch Agent Office
+## 9. Launch Agent Office
 
 Cross-platform office launcher:
 
@@ -91,7 +114,7 @@ Status only:
 npm run trichat:office:web:status
 ```
 
-## 9. Launch Agentic Suite
+## 10. Launch Agentic Suite
 
 Cross-platform suite launcher:
 
@@ -105,7 +128,7 @@ Status only:
 npm run agentic:suite:status
 ```
 
-## 10. Connect IDE/Agent
+## 11. Connect IDE/Agent
 
 Point MCP client STDIO command to:
 
@@ -120,3 +143,4 @@ For full client examples, see [IDE + Agent Setup Guide](./IDE_AGENT_SETUP.md).
 - Build errors: run `npm ci` and `npm run build` again.
 - Missing tools in client: restart client process and verify it points at `dist/server.js`.
 - Missing agentic tools: confirm `MCP_DOMAIN_PACKS` is unset or includes `agentic`; `MCP_DOMAIN_PACKS=none` disables built-ins.
+- Version mismatch on bootstrap: switch Node with `nvm use`, `asdf`, or `mise`; switch Python with `pyenv`, `asdf`, or your platform package manager, then rerun `npm run bootstrap:env`.
