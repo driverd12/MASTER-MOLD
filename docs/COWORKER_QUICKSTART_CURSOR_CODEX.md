@@ -10,13 +10,21 @@ This guide is a practical onboarding checklist for engineers using Cursor and Co
 - Cursor
 - Codex CLI/app
 
-## 2) Clone and Build
+## 2) Clone and Bootstrap
 
 ```bash
 git clone https://github.com/driverd12/MCPlayground---Core-Template.git
 cd MCPlayground---Core-Template
-npm ci
-npm run build
+npm run bootstrap:env
+```
+
+If you already cloned the repo:
+
+```bash
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+npm run bootstrap:env
 ```
 
 ## 3) Resolve Local Paths
@@ -27,7 +35,7 @@ Example placeholders:
 
 - `CORE_SERVER_JS=/absolute/path/to/MCPlayground---Core-Template/dist/server.js`
 - `CORE_DB=/absolute/path/to/MCPlayground---Core-Template/data/hub.sqlite`
-- `NODE_BIN=$(which node)`
+- `NODE_BIN` should be the absolute path to Node when your MCP client needs one. On macOS/Linux use `which node`; on Windows use `where node`, or use `node` when the client inherits your PATH reliably.
 
 ## 4) Cursor Setup
 
@@ -92,7 +100,7 @@ npm run trichat:dogfood -- --cycles 1 --execute false
 
 GUI app cannot find `node`
 
-- Use an absolute Node path for MCP `command` (`which node`).
+- Use an absolute Node path for MCP `command`: `which node` on macOS/Linux, `where node` on Windows.
 
 SQLite lock/busy errors
 

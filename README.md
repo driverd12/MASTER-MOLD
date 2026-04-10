@@ -373,7 +373,7 @@ Shell entrypoint:
 ```bash
 npm run brief:current
 # compact JSON for scripts / dashboards
-./scripts/operator_brief.sh --json --compact
+npm run brief:current -- --json --compact
 ```
 
 Raw MCP example:
