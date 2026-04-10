@@ -168,6 +168,7 @@ For full client examples, see [IDE + Agent Setup Guide](./IDE_AGENT_SETUP.md).
 - Use PowerShell, Windows Terminal, Git Bash, or Cursor's integrated terminal. The recommended commands are the same: `npm run bootstrap:env`, `npm run build`, `npm run start:http`, and `npm run trichat:office:web`.
 - `npm run start:http` is the Windows-safe way to start the shared HTTP runtime. Older docs or shell snippets that start with `MCP_HTTP=1` are bash/zsh syntax, not Windows npm syntax.
 - If Python is installed as the Windows launcher (`py -3`) instead of `python3`, the repo-owned Node wrappers resolve that automatically for npm-driven Python tests and dashboard commands.
+- Shell-backed maintenance commands such as `npm run providers:status` and `npm run autonomy:status` go through `scripts/run_sh.mjs`, which finds Git-for-Windows Bash or prints an explicit remediation instead of leaking `cmd.exe` syntax failures.
 - Native tmux shell workflows are still Unix-oriented. On Windows, the browser office surface is the primary reassurance UI; use WSL only if you specifically need tmux lanes.
 
 ## Troubleshooting
