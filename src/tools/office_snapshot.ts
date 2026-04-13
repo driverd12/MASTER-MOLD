@@ -16,6 +16,7 @@ import { getAutonomyMaintainRuntimeStatus } from "./autonomy_maintain.js";
 import { kernelSummary, summarizeAutonomyMaintain } from "./kernel.js";
 import { operatorBrief } from "./operator_brief.js";
 import {
+  applyProviderBridgeDiagnosticsToSnapshot,
   buildProviderBridgeOnboardingSummary,
   resolveProviderBridgeDiagnostics,
   resolveProviderBridgeSnapshot,
@@ -108,6 +109,10 @@ function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function asList(value: unknown) {
+  return Array.isArray(value) ? value : [];
+}
+
 function dedupeAgentIds(values: unknown[]) {
   const ordered: string[] = [];
   const seen = new Set<string>();
@@ -120,6 +125,72 @@ function dedupeAgentIds(values: unknown[]) {
     ordered.push(agentId);
   }
   return ordered;
+}
+
+function dedupeText(values: unknown[]) {
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    ordered.push(text);
+  }
+  return ordered;
+}
+
+function countProviderBridgeDiagnostics(
+  diagnostics: ProviderBridgePayload["diagnostics"]["diagnostics"],
+  status: "connected" | "configured" | "disconnected" | "unavailable"
+) {
+  return diagnostics.filter((entry) => entry.status === status).length;
+}
+
+function isProviderBridgeDegraded(diagnostics: ProviderBridgePayload["diagnostics"]) {
+  const connectedCount = countProviderBridgeDiagnostics(diagnostics.diagnostics, "connected");
+  const configuredCount = countProviderBridgeDiagnostics(diagnostics.diagnostics, "configured");
+  const disconnectedCount = countProviderBridgeDiagnostics(diagnostics.diagnostics, "disconnected");
+  return (
+    diagnostics.stale === true ||
+    disconnectedCount > 0 ||
+    (diagnostics.diagnostics.length > 0 && connectedCount === 0 && configuredCount === 0)
+  );
+}
+
+function resolveProviderReadyAgentIds(diagnostics: ProviderBridgePayload["diagnostics"]) {
+  if (diagnostics.stale === true) {
+    return [];
+  }
+  return dedupeAgentIds(
+    diagnostics.diagnostics
+      .filter((entry) => entry.status === "connected")
+      .map((entry) => String(entry.office_agent_id || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+function collectProviderBridgeAgentIds(
+  snapshot: ProviderBridgePayload["snapshot"],
+  diagnostics: ProviderBridgePayload["diagnostics"]
+) {
+  return dedupeAgentIds([
+    ...snapshot.clients.map((entry) => entry.office_agent_id),
+    ...diagnostics.diagnostics.map((entry) => entry.office_agent_id),
+  ]);
+}
+
+function reconcileRosterProviderBridgeReadiness(
+  roster: Record<string, unknown>,
+  providerBridge: ProviderBridgePayload
+) {
+  const providerAgentIds = new Set(collectProviderBridgeAgentIds(providerBridge.snapshot, providerBridge.diagnostics));
+  const activeAgentIds = dedupeAgentIds(asList(roster.active_agent_ids)).filter((agentId) => !providerAgentIds.has(agentId));
+  return {
+    ...roster,
+    active_agent_ids: dedupeAgentIds([...activeAgentIds, ...resolveProviderReadyAgentIds(providerBridge.diagnostics)]),
+  };
 }
 
 function ageSeconds(value: string | null | undefined) {
@@ -244,6 +315,44 @@ function buildOfficeSetupDiagnostics(params: {
   const kernelLaunchers = asRecord(kernelSetup.launchers);
   const kernelOfficeGuiLauncher = asRecord(kernelLaunchers.office_gui);
   const kernelAgenticSuiteLauncher = asRecord(kernelLaunchers.agentic_suite);
+  const providerBridgeDegraded = isProviderBridgeDegraded(params.providerBridge.diagnostics);
+  const browserDegraded = params.patientZero.summary.enabled && params.patientZero.summary.browser_ready !== true;
+  const desktopDegraded =
+    params.desktopControl.summary.enabled &&
+    (params.desktopControl.summary.stale ||
+      (params.desktopControl.summary.observe_enabled && !params.desktopControl.summary.observe_ready) ||
+      (params.desktopControl.summary.act_enabled && !params.desktopControl.summary.act_ready) ||
+      (params.desktopControl.summary.listen_enabled && !params.desktopControl.summary.listen_ready));
+  const nextActions = dedupeText([
+    ...(Array.isArray(kernelSetup.next_actions)
+      ? kernelSetup.next_actions.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+      : []),
+    ...(providerBridgeDegraded || browserDegraded || desktopDegraded
+      ? [
+          "Run `npm run bootstrap:env` to verify the pinned runtime, prepare the local environment, and emit the platform bootstrap report before debugging individual lanes.",
+        ]
+      : []),
+    ...(providerBridgeDegraded
+      ? [
+          "Run `npm run providers:status` and then `npm run providers:diagnose -- <client-id>` for any disconnected or unavailable bridge clients.",
+        ]
+      : []),
+    ...(browserDegraded
+      ? [
+          "Browser work will degrade visibly until the desktop/browser lane is available on this host; keep browser-required tasks operator-visible.",
+        ]
+      : []),
+    ...(desktopDegraded
+      ? [
+          "Desktop control is degraded on this host; observation or actuation should stay bounded and explicit until the lane recovers.",
+        ]
+      : []),
+    ...(kernelAgenticSuiteLauncher.degraded === true
+      ? [
+          "Run `npm run agentic:suite:status` to inspect the visible-suite fallback path before a demo or operator handoff.",
+        ]
+      : []),
+  ]);
   return {
     source: "office.snapshot",
     platform: {
@@ -270,17 +379,11 @@ function buildOfficeSetupDiagnostics(params: {
           ? kernelFallback.core_usable
           : params.providerBridge.diagnostics.stale !== true,
       browser_degraded:
-        typeof kernelFallback.browser_degraded === "boolean"
-          ? kernelFallback.browser_degraded
-          : params.patientZero.summary.browser_ready !== true,
+        kernelFallback.browser_degraded === true || browserDegraded,
       provider_bridge_degraded:
-        typeof kernelFallback.provider_bridge_degraded === "boolean"
-          ? kernelFallback.provider_bridge_degraded
-          : params.providerBridge.diagnostics.stale === true,
+        kernelFallback.provider_bridge_degraded === true || providerBridgeDegraded,
       desktop_degraded:
-        typeof kernelFallback.desktop_degraded === "boolean"
-          ? kernelFallback.desktop_degraded
-          : params.desktopControl.summary.stale === true,
+        kernelFallback.desktop_degraded === true || desktopDegraded,
     },
     launchers: {
       office_gui: {
@@ -303,9 +406,7 @@ function buildOfficeSetupDiagnostics(params: {
         distribution_supported: kernelAgenticSuiteLauncher.distribution_supported !== false,
       },
     },
-    next_actions: Array.isArray(kernelSetup.next_actions)
-      ? kernelSetup.next_actions.map((entry) => String(entry ?? "").trim()).filter(Boolean)
-      : [],
+    next_actions: nextActions,
   };
 }
 
@@ -590,11 +691,17 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
   const providerBridge = safe<ProviderBridgePayload>(
     "provider_bridge",
     {
-      snapshot: resolveProviderBridgeSnapshot({ workspace_root: process.cwd() }),
+      snapshot: applyProviderBridgeDiagnosticsToSnapshot(
+        resolveProviderBridgeSnapshot({ workspace_root: process.cwd() }),
+        selectedProviderBridgeDiagnostics
+      ),
       diagnostics: selectedProviderBridgeDiagnostics,
     },
     () => ({
-      snapshot: resolveProviderBridgeSnapshot({ workspace_root: process.cwd() }),
+      snapshot: applyProviderBridgeDiagnosticsToSnapshot(
+        resolveProviderBridgeSnapshot({ workspace_root: process.cwd() }),
+        selectedProviderBridgeDiagnostics
+      ),
       diagnostics: selectedProviderBridgeDiagnostics,
     })
   );
@@ -614,7 +721,7 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     selectedProviderBridgeDiagnostics.stale === true
       ? []
       : providerBridge.diagnostics.diagnostics
-          .filter((entry) => entry.status === "connected" || entry.status === "configured")
+          .filter((entry) => entry.status === "connected")
           .map((entry) => String(entry.office_agent_id || "").trim().toLowerCase())
           .filter(Boolean);
   if (providerReadyAgentIds.length) {
@@ -706,21 +813,26 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
       const cachedProviderBridge = asRecord(cachedPayload.provider_bridge);
       const cachedProviderBridgeSnapshot = asRecord(cachedProviderBridge.snapshot);
       const liveProviderBridgeDiagnostics = buildPersistedProviderBridgeDiagnostics(liveAutonomyMaintainState);
-      const cachedProviderBridgePayload = {
-        snapshot: {
+      const liveProviderBridgeSnapshot = applyProviderBridgeDiagnosticsToSnapshot(
+        {
           ...cachedProviderBridgeSnapshot,
           clients: Array.isArray(cachedProviderBridgeSnapshot.clients) ? cachedProviderBridgeSnapshot.clients : [],
           server_name: String(cachedProviderBridgeSnapshot.server_name ?? "mcplayground"),
-        },
+        } as ProviderBridgePayload["snapshot"],
+        liveProviderBridgeDiagnostics
+      );
+      const cachedProviderBridgePayload = {
+        snapshot: liveProviderBridgeSnapshot,
         diagnostics: liveProviderBridgeDiagnostics,
         onboarding: buildProviderBridgeOnboardingSummary({
-          clients: Array.isArray(cachedProviderBridgeSnapshot.clients) ? cachedProviderBridgeSnapshot.clients : [],
+          clients: liveProviderBridgeSnapshot.clients,
           diagnostics: liveProviderBridgeDiagnostics.diagnostics,
-          server_name: String(cachedProviderBridgeSnapshot.server_name ?? "mcplayground"),
+          server_name: String(liveProviderBridgeSnapshot.server_name ?? "mcplayground"),
           generated_at: liveProviderBridgeDiagnostics.generated_at,
           diagnostics_stale: liveProviderBridgeDiagnostics.stale === true,
         }),
       };
+      const liveRoster = reconcileRosterProviderBridgeReadiness(asRecord(cachedPayload.roster), cachedProviderBridgePayload);
       const liveSetupDiagnostics = buildOfficeSetupDiagnostics({
         kernel: cachedKernel,
         providerBridge: cachedProviderBridgePayload,
@@ -729,6 +841,7 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
       });
       return {
         ...cachedPayload,
+        roster: liveRoster,
         kernel: {
           ...cachedKernel,
           desktop_control: liveDesktopControl,

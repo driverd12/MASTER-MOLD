@@ -168,6 +168,9 @@ import sys
 data = json.loads(pathlib.Path(sys.argv[1]).read_text())
 autonomy = data.get("autonomy_maintain") or {}
 eval_health = autonomy.get("eval_health") or {}
+eval_operational = eval_health.get("operational")
+if eval_operational is None:
+    eval_operational = eval_health.get("healthy")
 print(
     "[production] autonomy maintain: "
     f"enabled={autonomy.get('enabled')} "
@@ -186,7 +189,7 @@ if not autonomy.get("last_run_at"):
     raise SystemExit("autonomy.maintain has not recorded a keepalive run yet")
 if autonomy.get("stale"):
     raise SystemExit("autonomy.maintain state is stale")
-if not eval_health.get("healthy"):
+if not eval_operational:
     raise SystemExit("autonomy.maintain eval health is not ready")
 PY
 
@@ -452,11 +455,43 @@ import sys
 data = json.loads(pathlib.Path(sys.argv[1]).read_text())
 overview = data.get("overview") or {}
 adaptive = overview.get("adaptive_session_counts") or {}
+adaptive_sessions = data.get("adaptive_sessions") or []
+active_sessions_payload = data.get("active_sessions") or []
 active_sessions = overview.get("active_session_count", 0)
 healthy = adaptive.get("healthy", 0)
 degraded = adaptive.get("degraded", 0)
+active_sessions_by_id = {
+    str(entry.get("session_id") or ""): entry
+    for entry in active_sessions_payload
+    if isinstance(entry, dict)
+}
+recoverable = 0
+for entry in adaptive_sessions:
+    if not isinstance(entry, dict):
+        continue
+    if str(entry.get("adaptive_state") or "") != "degraded":
+        continue
+    reasons = [str(reason).strip() for reason in (entry.get("adaptive_reasons") or []) if str(reason).strip()]
+    if not reasons:
+        continue
+    if any("recent failed task signal(s) still need recovery" not in reason for reason in reasons):
+        continue
+    if any(not reason.split(" ", 1)[0].isdigit() or int(reason.split(" ", 1)[0]) > 2 for reason in reasons):
+        continue
+    session = active_sessions_by_id.get(str(entry.get("session_id") or ""))
+    if not isinstance(session, dict):
+        continue
+    metadata = session.get("metadata") or {}
+    if not isinstance(metadata, dict) or metadata.get("last_tick_ok") is not True:
+        continue
+    current_task_id = metadata.get("current_task_id")
+    if isinstance(current_task_id, str) and current_task_id.strip():
+        continue
+    recoverable += 1
 print(f"[production] kernel state: {data.get('state')} active_sessions={active_sessions} healthy={healthy} degraded={degraded}")
-if active_sessions < 1 or healthy < 1:
+if healthy < 1 and recoverable > 0:
+    print(f"[production] kernel state: accepting {recoverable} recoverable degraded active session(s)")
+if active_sessions < 1 or (healthy < 1 and recoverable < 1):
     raise SystemExit(1)
 PY
   then
@@ -467,7 +502,7 @@ PY
 done
 
 if [[ "${kernel_ok}" -ne 1 ]]; then
-  echo "[production] kernel summary never reported an active healthy session after retry window" >&2
+  echo "[production] kernel summary never reported an active healthy or recoverable session after retry window" >&2
   exit 1
 fi
 

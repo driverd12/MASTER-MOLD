@@ -3301,8 +3301,12 @@ function buildHttpHealthSnapshot() {
   if (autonomyState?.last_error) {
     attention.push("autonomy_maintain.error");
   }
-  if (!evalHealth.healthy) {
+  if (!evalHealth.operational) {
     attention.push("autonomy_eval.unhealthy");
+  } else if (evalHealth.due_by_dependency_drift) {
+    attention.push("autonomy_eval.definition_changed");
+  } else if (evalHealth.due_by_age) {
+    attention.push("autonomy_eval.overdue");
   }
   if (reactionState?.enabled !== true || reactionRuntime.running !== true) {
     attention.push("reaction_engine.not_running");
@@ -3323,7 +3327,7 @@ function buildHttpHealthSnapshot() {
     autonomyRuntime.running === true &&
     !autonomyStale &&
     !autonomyState?.last_error &&
-    evalHealth.healthy &&
+    evalHealth.operational &&
     reactionState?.enabled === true &&
     reactionRuntime.running === true &&
     !reactionStale &&
@@ -3352,6 +3356,12 @@ function buildHttpHealthSnapshot() {
         suite_id: evalHealth.suite_id,
         minimum_eval_score: minimumEvalScore,
         last_eval_score: evalHealth.last_eval_score,
+        due: evalHealth.due,
+        due_by_age: evalHealth.due_by_age,
+        due_by_dependency_drift: evalHealth.due_by_dependency_drift,
+        below_threshold: evalHealth.below_threshold,
+        never_run: evalHealth.never_run,
+        operational: evalHealth.operational,
         healthy: evalHealth.healthy,
       },
     },

@@ -755,6 +755,31 @@ function updateAdaptiveWorkerProfileOnReport(
   };
 }
 
+function syncAdaptiveWorkerProfileFromSessionHeartbeat(
+  session: AgentSessionRecord | null,
+  metadata: Record<string, unknown>
+) {
+  if (!session || !Object.prototype.hasOwnProperty.call(metadata, "current_task_id")) {
+    return metadata;
+  }
+  if (readString(metadata.current_task_id)) {
+    return metadata;
+  }
+  const profile = getAdaptiveWorkerProfile(session);
+  if (profile.current_task.task_id === null) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    current_task_id: null,
+    current_task_profile: null,
+    [ADAPTIVE_WORKER_PROFILE_KEY]: {
+      ...profile,
+      current_task: emptyAdaptiveCurrentTaskState(),
+    },
+  };
+}
+
 export function summarizeAdaptiveWorkerProfile(
   profile: AdaptiveWorkerProfile,
   complexity: TaskExecutionProfile["complexity"]
@@ -1872,8 +1897,13 @@ export async function heartbeatAgentSession(storage: Storage, input: z.infer<typ
     tool_name: "agent.session_heartbeat",
     mutation: input.mutation,
     payload: input,
-    execute: () =>
-      storage.heartbeatAgentSession({
+    execute: () => {
+      const session = storage.getAgentSessionById(input.session_id);
+      const metadata = syncAdaptiveWorkerProfileFromSessionHeartbeat(
+        session,
+        mergeDeclaredPermissionProfile(input.metadata ?? {}, input.permission_profile)
+      );
+      return storage.heartbeatAgentSession({
         session_id: input.session_id,
         lease_seconds: input.lease_seconds,
         status: input.status,
@@ -1886,8 +1916,9 @@ export async function heartbeatAgentSession(storage: Storage, input: z.infer<typ
               }
             : {}),
         },
-        metadata: mergeDeclaredPermissionProfile(input.metadata ?? {}, input.permission_profile),
-      }),
+        metadata,
+      });
+    },
   });
 }
 

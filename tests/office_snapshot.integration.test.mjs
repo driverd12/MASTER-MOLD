@@ -300,6 +300,109 @@ test("office.snapshot warm cache overlays the latest persisted provider bridge s
     assert.equal(snapshot.provider_bridge.diagnostics.diagnostics[0].status, "configured");
     assert.equal(snapshot.provider_bridge.diagnostics.diagnostics[0].detail, "persisted provider bridge refresh");
     assert.equal(snapshot.autonomy_maintain.state.last_provider_bridge_check_at, refreshedAt);
+    assert.equal(snapshot.roster.active_agent_ids.includes("gemini"), false);
+    const geminiBridge = snapshot.provider_bridge.snapshot.outbound_council_agents.find((entry) => entry.client_id === "gemini-cli");
+    assert.equal(geminiBridge?.runtime_ready, false);
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("office.snapshot direct reads demote warmed provider agents when bridge diagnostics go stale", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-office-snapshot-provider-bridge-cached-stale-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const client = await openClient({
+    ANAMNESIS_HUB_DB_PATH: dbPath,
+    TRICHAT_BUS_SOCKET_PATH: path.join(tempDir, "trichat.bus.sock"),
+  });
+
+  try {
+    const storage = new Storage(dbPath);
+    storage.setAutonomyMaintainState({
+      enabled: true,
+      local_host_id: "local",
+      interval_seconds: 120,
+      learning_review_interval_seconds: 300,
+      enable_self_drive: true,
+      self_drive_cooldown_seconds: 1800,
+      run_eval_if_due: true,
+      eval_interval_seconds: 21600,
+      eval_suite_id: "autonomy.control-plane",
+      minimum_eval_score: 75,
+      last_provider_bridge_check_at: new Date().toISOString(),
+      provider_bridge_diagnostics: [
+        {
+          client_id: "gemini-cli",
+          display_name: "Gemini CLI",
+          office_agent_id: "gemini",
+          available: true,
+          runtime_probed: true,
+          connected: true,
+          status: "connected",
+          detail: "fresh connected bridge for warm cache",
+          notes: [],
+          command: "sentinel",
+          config_path: "/tmp/provider-bridge-warm-cache.json",
+        },
+      ],
+      last_actions: [],
+      last_attention: [],
+      last_error: null,
+    });
+
+    await callTool(client, "warm.cache", {
+      action: "run_once",
+      thread_id: "ring-leader-main",
+      mutation: nextMutation("office-snapshot-provider-bridge-cached-stale", "warm.cache.run_once", () => mutationCounter++),
+    });
+
+    const staleGeneratedAt = new Date(Date.now() - 400_000).toISOString();
+    storage.setAutonomyMaintainState({
+      enabled: true,
+      local_host_id: "local",
+      interval_seconds: 120,
+      learning_review_interval_seconds: 300,
+      enable_self_drive: true,
+      self_drive_cooldown_seconds: 1800,
+      run_eval_if_due: true,
+      eval_interval_seconds: 21600,
+      eval_suite_id: "autonomy.control-plane",
+      minimum_eval_score: 75,
+      last_provider_bridge_check_at: staleGeneratedAt,
+      provider_bridge_diagnostics: [
+        {
+          client_id: "gemini-cli",
+          display_name: "Gemini CLI",
+          office_agent_id: "gemini",
+          available: true,
+          runtime_probed: true,
+          connected: true,
+          status: "connected",
+          detail: "persisted stale connected bridge",
+          notes: [],
+          command: "sentinel",
+          config_path: "/tmp/provider-bridge-cached-stale.json",
+        },
+      ],
+      last_actions: [],
+      last_attention: [],
+      last_error: null,
+    });
+
+    const snapshot = await callTool(client, "office.snapshot", {
+      thread_id: "ring-leader-main",
+      metadata: { source: "dashboard.direct" },
+    });
+
+    assert.equal(snapshot.cache.hit, true);
+    assert.equal(snapshot.provider_bridge.diagnostics.stale, true);
+    assert.equal(snapshot.roster.active_agent_ids.includes("gemini"), false);
+    const geminiBridge = snapshot.provider_bridge.snapshot.outbound_council_agents.find((entry) => entry.client_id === "gemini-cli");
+    assert.equal(geminiBridge?.runtime_ready, false);
+    assert.ok(snapshot.setup_diagnostics.next_actions.some((entry) => entry.includes("npm run bootstrap:env")));
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });

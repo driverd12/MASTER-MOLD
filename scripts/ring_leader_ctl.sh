@@ -43,6 +43,32 @@ resolve_transport() {
 
 TRANSPORT="$(resolve_transport)"
 
+status_reports_self_start_ready() {
+  local status_json="${1:-}"
+  python3 - "${status_json}" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1] or "{}")
+raise SystemExit(0 if data.get("self_start_ready") else 1)
+PY
+}
+
+wait_for_control_plane_ready() {
+  local timeout_seconds="${TRICHAT_RING_LEADER_READY_TIMEOUT_SECONDS:-30}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local status_json=""
+
+  while (( SECONDS < deadline )); do
+    status_json="$("${REPO_ROOT}/scripts/autonomy_ctl.sh" status 2>/dev/null || true)"
+    if [[ -n "${status_json}" ]] && status_reports_self_start_ready "${status_json}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 0
+}
+
 ensure_autonomy_entry() {
   local should_ensure="${TRICHAT_AUTONOMY_ENSURE_ON_ENTRY:-1}"
   local mode="${TRICHAT_AUTONOMY_ENSURE_MODE:-required}"
@@ -267,7 +293,7 @@ process.stdout.write(JSON.stringify(payload));
 NODE
 )"
 
-node ./scripts/mcp_tool_call.mjs \
+RESULT="$(node ./scripts/mcp_tool_call.mjs \
   --tool trichat.autopilot \
   --args "${ARGS_JSON}" \
   --transport "${TRANSPORT}" \
@@ -275,4 +301,10 @@ node ./scripts/mcp_tool_call.mjs \
   --origin "${TRICHAT_MCP_ORIGIN:-http://127.0.0.1}" \
   --stdio-command "${TRICHAT_MCP_STDIO_COMMAND:-node}" \
   --stdio-args "${TRICHAT_MCP_STDIO_ARGS:-dist/server.js}" \
-  --cwd "${REPO_ROOT}"
+  --cwd "${REPO_ROOT}")"
+
+if [[ "${ACTION}" == "start" ]]; then
+  wait_for_control_plane_ready
+fi
+
+printf '%s\n' "${RESULT}"

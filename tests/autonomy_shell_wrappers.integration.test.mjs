@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
+import { Storage } from "../dist/storage.js";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = process.cwd();
@@ -83,7 +84,7 @@ test("autonomy shell wrapper ensure converges the control plane through the real
 
     const status = await runShellJson(["./scripts/autonomy_ctl.sh", "status"], baseEnv);
     assert.equal(status.self_start_ready, true);
-    assert.deepEqual(status.repairs_needed, []);
+    assert.equal((status.repairs_needed ?? []).every((entry) => String(entry).endsWith(".default_drift")), true);
     assert.equal(status.maintain?.runtime?.running, true);
     assert.equal(status.maintain?.runtime?.last_error ?? null, null);
   } finally {
@@ -163,7 +164,7 @@ test("ring leader start proactively uses autonomy bootstrap on a cold control pl
 
     const status = await runShellJson(["./scripts/autonomy_ctl.sh", "status"], baseEnv);
     assert.equal(status.self_start_ready, true);
-    assert.deepEqual(status.repairs_needed, []);
+    assert.equal((status.repairs_needed ?? []).every((entry) => String(entry).endsWith(".default_drift")), true);
     assert.equal(status.ring_leader.running, true);
     assert.equal(status.worker_fabric.host_present, true);
     assert.equal(status.model_router.backend_present, true);
@@ -277,6 +278,90 @@ test("agents_switch status returns bounded JSON over the live HTTP control plane
   }
 });
 
+test("autonomy status preserves degraded /ready payloads instead of falling back to a slow stdio path", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-status-degraded-ready-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const busPath = path.join(tempDir, "trichat.bus.sock");
+  const bearerToken = "test-autonomy-status-degraded-ready-token";
+  const ollama = await startFakeOllamaServer({
+    models: [{ name: "llama3.2:3b" }],
+  });
+  const httpPort = await reservePort();
+  const child = spawn("node", ["dist/server.js", "--http", "--http-port", String(httpPort)], {
+    cwd: REPO_ROOT,
+    env: inheritedEnv({
+      MCP_HTTP: "1",
+      MCP_HTTP_PORT: String(httpPort),
+      MCP_HTTP_HOST: "127.0.0.1",
+      MCP_HTTP_BEARER_TOKEN: bearerToken,
+      ANAMNESIS_HUB_DB_PATH: dbPath,
+      TRICHAT_BUS_SOCKET_PATH: busPath,
+      TRICHAT_OLLAMA_URL: ollama.url,
+      TRICHAT_RING_LEADER_AUTOSTART: "1",
+      TRICHAT_RING_LEADER_BRIDGE_DRY_RUN: "1",
+      TRICHAT_RING_LEADER_EXECUTE_ENABLED: "0",
+      TRICHAT_RING_LEADER_INTERVAL_SECONDS: "600",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "1",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "1",
+      AGENTS_STATUS_TIMEOUT_SECONDS: "4",
+    }),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    await waitForAutonomyStatus({
+      url: `http://127.0.0.1:${httpPort}/`,
+      origin: "http://127.0.0.1",
+      bearerToken,
+    });
+    const storage = new Storage(dbPath);
+    storage.setAutonomyMaintainState({
+      enabled: true,
+      interval_seconds: 120,
+      learning_review_interval_seconds: 300,
+      enable_self_drive: true,
+      self_drive_cooldown_seconds: 1800,
+      run_eval_if_due: true,
+      eval_interval_seconds: 21600,
+      eval_suite_id: "autonomy.control-plane",
+      minimum_eval_score: 75,
+      last_run_at: new Date().toISOString(),
+      last_eval_run_at: new Date().toISOString(),
+      last_eval_run_id: "autonomy-status-degraded-ready",
+      last_eval_score: 10,
+      last_eval_dependency_fingerprint: "below-threshold",
+      last_actions: ["eval.completed"],
+      last_attention: [],
+      last_error: null,
+    });
+
+    const readyResponse = await fetchHttpResponse(`http://127.0.0.1:${httpPort}/ready`, {
+      Authorization: `Bearer ${bearerToken}`,
+      Origin: "http://127.0.0.1",
+    });
+    assert.equal(readyResponse.statusCode, 503);
+
+    const status = await runShellJson(["./scripts/autonomy_ctl.sh", "status"], inheritedEnv({
+      ANAMNESIS_HUB_DB_PATH: dbPath,
+      TRICHAT_BUS_SOCKET_PATH: busPath,
+      TRICHAT_OLLAMA_URL: ollama.url,
+      TRICHAT_MCP_URL: `http://127.0.0.1:${httpPort}/`,
+      TRICHAT_MCP_ORIGIN: "http://127.0.0.1",
+      MCP_HTTP_BEARER_TOKEN: bearerToken,
+      AUTONOMY_STATUS_TIMEOUT_MS: "20000",
+      AUTONOMY_STATUS_HTTP_TIMEOUT_MS: "20000",
+    }));
+    assert.equal(status.self_start_ready, true);
+    assert.equal(status.maintain?.source, "ready");
+    assert.equal(status.maintain?.eval_health?.below_threshold, true);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", () => resolve()));
+    await ollama.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("launchd installer generates node runner ProgramArguments for launch agents", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-launchd-install-"));
   const fakeHome = path.join(tempDir, "home");
@@ -338,6 +423,10 @@ printf '{"ok":true,"ready":true}\\n'
     path.join(launchDir, "com.mcplayground.imprint.autosnapshot.plist"),
     "utf8"
   );
+  const mcpPlist = fs.readFileSync(
+    path.join(launchDir, "com.mcplayground.mcp.server.plist"),
+    "utf8"
+  );
 
   assert.match(keepalivePlist, /<string>.*node.*<\/string>/);
   assert.match(
@@ -347,6 +436,8 @@ printf '{"ok":true,"ready":true}\\n'
     )
   );
   assert.doesNotMatch(keepalivePlist, /autonomy_keepalive\.sh/);
+  assert.match(keepalivePlist, /<key>AUTONOMY_KEEPALIVE_HTTP_READY_TIMEOUT_MS<\/key>\s*<string>60000<\/string>/);
+  assert.match(keepalivePlist, /<key>AUTONOMY_KEEPALIVE_TOOL_TIMEOUT_MS<\/key>\s*<string>180000<\/string>/);
 
   assert.match(autosnapshotPlist, /<string>.*node.*<\/string>/);
   assert.match(
@@ -356,6 +447,9 @@ printf '{"ok":true,"ready":true}\\n'
     )
   );
   assert.doesNotMatch(autosnapshotPlist, /imprint_auto_snapshot_ctl\.sh/);
+  assert.match(mcpPlist, /<key>MCP_AUTONOMY_BOOTSTRAP_ON_START<\/key>\s*<string>1<\/string>/);
+  assert.match(mcpPlist, /<key>MCP_AUTONOMY_MAINTAIN_ON_START<\/key>\s*<string>1<\/string>/);
+  assert.match(mcpPlist, /<key>MCP_AUTONOMY_MAINTAIN_RUN_IMMEDIATELY_ON_START<\/key>\s*<string>0<\/string>/);
 
   const launchLog = fs.readFileSync(launchctlLog, "utf8");
   const mcpKickstartIndex = launchLog.indexOf(`launchctl kickstart -k gui/${process.getuid()}/com.mcplayground.mcp.server`);
@@ -560,6 +654,22 @@ async function runShellJson(command, env) {
     maxBuffer: 8 * 1024 * 1024,
   });
   return JSON.parse(result.stdout);
+}
+
+function fetchHttpResponse(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    http.get(url, { headers }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => {
+        resolve({
+          statusCode: response.statusCode ?? 500,
+          headers: response.headers,
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
+      });
+    }).on("error", reject);
+  });
 }
 
 async function rejectsExecFile(file, args, env) {

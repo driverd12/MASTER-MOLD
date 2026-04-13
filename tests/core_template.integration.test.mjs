@@ -3381,6 +3381,106 @@ test("adaptive session health treats a mature autonomous session as recovered af
   }
 });
 
+test("agent.session_heartbeat clears stale adaptive current task markers when a healthy tick reports no current task", async () => {
+  const testId = `${Date.now()}-adaptive-stale-current-task-clear`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-adaptive-stale-current-task-clear-test-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(dbPath, {});
+  try {
+    await callTool(client, "agent.session_open", {
+      mutation: nextMutation(testId, "agent.session_open", () => mutationCounter++),
+      session_id: "adaptive-stale-current-task-clear-session",
+      agent_id: "ring-leader",
+      client_kind: "trichat-autopilot",
+      display_name: "Adaptive stale current task clear session",
+      workspace_root: REPO_ROOT,
+      transport_kind: "daemon",
+      status: "active",
+      capabilities: {
+        capability_tier: "high",
+        planning: true,
+      },
+    });
+
+    const reportTask = async (label, outcome) => {
+      const createdTask = await callTool(client, "task.create", {
+        mutation: nextMutation(testId, `task.create.${label}`, () => mutationCounter++),
+        objective: `Adaptive stale current task ${label}`,
+        project_dir: REPO_ROOT,
+        priority: 4,
+        tags: ["adaptive-routing", "stale-current-task-clear"],
+      });
+      await callTool(client, "agent.claim_next", {
+        mutation: nextMutation(testId, `agent.claim_next.${label}`, () => mutationCounter++),
+        session_id: "adaptive-stale-current-task-clear-session",
+        task_id: createdTask.task.task_id,
+      });
+      await callTool(client, "agent.report_result", {
+        mutation: nextMutation(testId, `agent.report_result.${label}`, () => mutationCounter++),
+        session_id: "adaptive-stale-current-task-clear-session",
+        task_id: createdTask.task.task_id,
+        outcome,
+        error: outcome === "failed" ? "bounded failure" : undefined,
+        summary: `${label} ${outcome}`,
+        result: {
+          outcome,
+        },
+      });
+    };
+
+    for (let index = 0; index < 8; index += 1) {
+      await reportTask(`warmup-${index + 1}`, "completed");
+    }
+    await reportTask("failure-one", "failed");
+    await reportTask("recovery-one", "completed");
+    await reportTask("failure-two", "failed");
+
+    const orphanedTask = await callTool(client, "task.create", {
+      mutation: nextMutation(testId, "task.create.orphaned", () => mutationCounter++),
+      objective: "Claim a task and then clear the stale adaptive marker through session heartbeat",
+      project_dir: REPO_ROOT,
+      priority: 4,
+      tags: ["adaptive-routing", "stale-current-task-clear", "orphaned"],
+    });
+    await callTool(client, "agent.claim_next", {
+      mutation: nextMutation(testId, "agent.claim_next.orphaned", () => mutationCounter++),
+      session_id: "adaptive-stale-current-task-clear-session",
+      task_id: orphanedTask.task.task_id,
+    });
+
+    await callTool(client, "agent.session_heartbeat", {
+      mutation: nextMutation(testId, "agent.session_heartbeat.clear", () => mutationCounter++),
+      session_id: "adaptive-stale-current-task-clear-session",
+      status: "active",
+      metadata: {
+        current_task_id: null,
+        last_tick_ok: true,
+        last_tick_at: new Date(Date.now() + 15_000).toISOString(),
+      },
+    });
+
+    const kernelSummary = await callTool(client, "kernel.summary", {
+      session_limit: 10,
+      goal_limit: 5,
+      event_limit: 20,
+      task_running_limit: 10,
+    });
+    const recoveredSessionSummary = kernelSummary.adaptive_sessions.find(
+      (session) => session.session_id === "adaptive-stale-current-task-clear-session"
+    );
+    assert.ok(recoveredSessionSummary);
+    assert.equal(recoveredSessionSummary.adaptive_state, "healthy");
+    assert.ok(
+      recoveredSessionSummary.adaptive_reasons.some((entry) => /operationally recovered/i.test(entry))
+    );
+  } finally {
+    await client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("plan.dispatch injects adaptive assignment guidance into worker tasks", async () => {
   const testId = `${Date.now()}-dispatch-adaptive-assignment`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-core-template-dispatch-adaptive-assignment-test-"));

@@ -195,6 +195,13 @@ type ProviderBridgeOnboardingSummary = {
   entries: ProviderBridgeOnboardingEntry[];
 };
 
+type CachedProviderBridgeDiagnostics = {
+  generated_at: string;
+  cached: boolean;
+  stale: boolean;
+  diagnostics: ProviderBridgeDiagnostic[];
+};
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const distServerPath = path.join(repoRoot, "dist", "server.js");
 const providerStdioBridgePath = path.join(repoRoot, "scripts", "provider_stdio_bridge.mjs");
@@ -247,6 +254,152 @@ function providerBridgeDiagnosticsCacheTtlMs() {
     return Math.max(5_000, Math.round(override * 1000));
   }
   return 60_000;
+}
+
+function providerBridgeDiagnosticsCacheKey(input: {
+  workspace_root?: string;
+  transport?: "auto" | "http" | "stdio";
+  http_url?: string;
+  http_origin?: string;
+  stdio_command?: string;
+  stdio_args?: string[];
+  db_path?: string;
+  server_name?: string;
+  probe_timeout_ms?: number;
+}) {
+  const workspaceRoot = input.workspace_root?.trim() || repoRoot;
+  const transport = resolveTransportConfig({
+    transport: input.transport ?? "auto",
+    http_url: input.http_url,
+    http_origin: input.http_origin,
+    stdio_command: input.stdio_command,
+    stdio_args: input.stdio_args,
+    db_path: input.db_path,
+    workspace_root: workspaceRoot,
+  });
+  const serverName = input.server_name?.trim() || "mcplayground";
+  return {
+    workspaceRoot,
+    transport,
+    serverName,
+    cacheKey: JSON.stringify({
+      workspaceRoot,
+      serverName,
+      transport: transport.mode,
+      command: transport.command,
+      args: transport.args,
+      url: transport.url,
+      probeTimeoutMs: input.probe_timeout_ms ?? 5000,
+    }),
+  };
+}
+
+export function resolveProviderBridgeDiagnosticsCached(
+  input: {
+    workspace_root?: string;
+    transport?: "auto" | "http" | "stdio";
+    http_url?: string;
+    http_origin?: string;
+    stdio_command?: string;
+    stdio_args?: string[];
+    db_path?: string;
+    server_name?: string;
+    probe_timeout_ms?: number;
+  } = {}
+): CachedProviderBridgeDiagnostics {
+  const { cacheKey } = providerBridgeDiagnosticsCacheKey(input);
+  const cached = providerBridgeDiagnosticCache.get(cacheKey);
+  const ttlMs = providerBridgeDiagnosticsCacheTtlMs();
+  if (!cached) {
+    return {
+      generated_at: new Date().toISOString(),
+      cached: false,
+      stale: false,
+      diagnostics: [],
+    };
+  }
+  return {
+    generated_at: new Date(cached.captured_at).toISOString(),
+    cached: true,
+    stale: Date.now() - cached.captured_at > ttlMs,
+    diagnostics: cached.diagnostics,
+  };
+}
+
+function resolveDiagnosticsRuntimeReady(
+  candidate: { client_id: ProviderBridgeClientId },
+  diagnosticsByClient: Map<ProviderBridgeClientId, ProviderBridgeDiagnostic>,
+  diagnosticsStale: boolean
+) {
+  if (diagnosticsStale) {
+    return false;
+  }
+  const diagnostic = diagnosticsByClient.get(candidate.client_id);
+  return diagnostic?.status === "connected";
+}
+
+function resolveDiagnosticsRuntimeReason(
+  candidate: ProviderBridgeRouterBackendCandidate,
+  diagnosticsByClient: Map<ProviderBridgeClientId, ProviderBridgeDiagnostic>,
+  diagnosticsStale: boolean
+) {
+  if (!candidate.eligible) {
+    return candidate.reason;
+  }
+  if (diagnosticsStale) {
+    return "runtime verification is stale";
+  }
+  const diagnostic = diagnosticsByClient.get(candidate.client_id);
+  if (!diagnostic) {
+    return "runtime verification missing";
+  }
+  if (diagnostic.status === "connected") {
+    return null;
+  }
+  if (diagnostic.status === "configured") {
+    return diagnostic.detail || "runtime connectivity is not confirmed";
+  }
+  if (diagnostic.status === "disconnected" || diagnostic.status === "unavailable") {
+    return diagnostic.detail || "client runtime is unavailable";
+  }
+  return "runtime verification missing";
+}
+
+export function applyProviderBridgeDiagnosticsToSnapshot(
+  snapshot: ProviderBridgeSnapshot,
+  diagnosticsState: CachedProviderBridgeDiagnostics
+): ProviderBridgeSnapshot {
+  const diagnosticsByClient = new Map(
+    diagnosticsState.diagnostics.map((entry) => [entry.client_id, entry] as const)
+  );
+  const outboundCouncilAgents = snapshot.outbound_council_agents.map((entry) => ({
+    ...entry,
+    runtime_ready: resolveDiagnosticsRuntimeReady(entry, diagnosticsByClient, diagnosticsState.stale === true),
+  }));
+  const routerBackendCandidates = snapshot.router_backend_candidates.map((entry) => {
+    const runtimeReady = resolveDiagnosticsRuntimeReady(entry, diagnosticsByClient, diagnosticsState.stale === true);
+    const reason = resolveDiagnosticsRuntimeReason(entry, diagnosticsByClient, diagnosticsState.stale === true);
+    return {
+      ...entry,
+      eligible: entry.eligible && runtimeReady,
+      reason,
+      backend: {
+        ...entry.backend,
+        metadata: {
+          ...entry.backend.metadata,
+          runtime_ready: entry.eligible && runtimeReady,
+          runtime_ready_source: diagnosticsState.cached ? "provider_bridge_diagnostics_cache" : "provider_bridge_diagnostics_missing",
+          runtime_ready_stale: diagnosticsState.stale === true,
+        },
+      },
+    };
+  });
+  return {
+    ...snapshot,
+    outbound_council_agents: outboundCouncilAgents,
+    router_backend_candidates: routerBackendCandidates,
+    eligible_router_backends: routerBackendCandidates.filter((entry) => entry.eligible).map((entry) => entry.backend),
+  };
 }
 
 function timestampForPath() {
@@ -1931,26 +2084,7 @@ export function resolveProviderBridgeDiagnostics(
     probe_timeout_ms?: number;
   } = {}
 ) {
-  const workspaceRoot = input.workspace_root?.trim() || repoRoot;
-  const transport = resolveTransportConfig({
-    transport: input.transport ?? "auto",
-    http_url: input.http_url,
-    http_origin: input.http_origin,
-    stdio_command: input.stdio_command,
-    stdio_args: input.stdio_args,
-    db_path: input.db_path,
-    workspace_root: workspaceRoot,
-  });
-  const serverName = input.server_name?.trim() || "mcplayground";
-  const cacheKey = JSON.stringify({
-    workspaceRoot,
-    serverName,
-    transport: transport.mode,
-    command: transport.command,
-    args: transport.args,
-    url: transport.url,
-    probeTimeoutMs: input.probe_timeout_ms ?? 5000,
-  });
+  const { workspaceRoot, transport, serverName, cacheKey } = providerBridgeDiagnosticsCacheKey(input);
   const cached = providerBridgeDiagnosticCache.get(cacheKey);
   const ttlMs = providerBridgeDiagnosticsCacheTtlMs();
   if (!input.bypass_cache && cached && Date.now() - cached.captured_at <= ttlMs) {
@@ -2253,18 +2387,35 @@ export async function providerBridge(
     const selectedRouterBackends = snapshot.router_backend_candidates.filter((entry) => clients.includes(entry.client_id));
 
     if (input.action === "status") {
+      const diagnostics = resolveProviderBridgeDiagnosticsCached({
+        workspace_root: input.workspace_root,
+        transport: input.transport,
+        http_url: input.http_url,
+        http_origin: input.http_origin,
+        stdio_command: input.stdio_command,
+        stdio_args: input.stdio_args,
+        db_path: input.db_path,
+        server_name: input.server_name,
+        probe_timeout_ms: input.probe_timeout_ms,
+      });
+      const truthySnapshot = applyProviderBridgeDiagnosticsToSnapshot(snapshot, diagnostics);
+      const selectedDiagnostics = diagnostics.diagnostics.filter((entry) => clients.includes(entry.client_id));
+      const selectedRouterBackends = truthySnapshot.router_backend_candidates.filter((entry) => clients.includes(entry.client_id));
       const onboarding = buildProviderBridgeOnboardingSummary({
         clients: selectedStatus,
+        diagnostics: selectedDiagnostics,
         server_name: serverName,
+        generated_at: diagnostics.generated_at,
+        diagnostics_stale: diagnostics.stale ?? false,
       });
       return {
         ok: true,
-        canonical_ingress_tool: snapshot.canonical_ingress_tool,
-        local_first_ide_agent_ids: snapshot.local_first_ide_agent_ids,
-        workspace_root: snapshot.workspace_root,
-        server_name: snapshot.server_name,
-        transport: snapshot.transport,
-        outbound_council_agents: snapshot.outbound_council_agents,
+        canonical_ingress_tool: truthySnapshot.canonical_ingress_tool,
+        local_first_ide_agent_ids: truthySnapshot.local_first_ide_agent_ids,
+        workspace_root: truthySnapshot.workspace_root,
+        server_name: truthySnapshot.server_name,
+        transport: truthySnapshot.transport,
+        outbound_council_agents: truthySnapshot.outbound_council_agents.filter((entry) => clients.includes(entry.client_id)),
         router_backend_candidates: selectedRouterBackends,
         eligible_router_backends: selectedRouterBackends.filter((entry) => entry.eligible).map((entry) => entry.backend),
         clients: selectedStatus,

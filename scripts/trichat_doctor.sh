@@ -112,11 +112,14 @@ import sys
 data = json.loads(sys.argv[1])
 runtime = data.get("runtime") or {}
 eval_health = data.get("eval_health") or {}
+eval_operational = eval_health.get("operational")
+if eval_operational is None:
+    eval_operational = eval_health.get("healthy")
 if not runtime.get("running"):
     raise SystemExit("autonomy maintain runtime is not running")
 if runtime.get("last_error"):
     raise SystemExit(f"autonomy maintain runtime last_error: {runtime.get('last_error')}")
-if not eval_health.get("healthy"):
+if not eval_operational:
     raise SystemExit(
         "autonomy maintain eval health is not healthy: "
         + json.dumps(

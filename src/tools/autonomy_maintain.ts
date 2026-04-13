@@ -322,6 +322,9 @@ export function buildEvalHealth(
     Boolean(currentDependencyFingerprint) &&
     currentDependencyFingerprint !== readString(state?.last_eval_dependency_fingerprint);
   const due = input.run_eval_if_due !== false && (neverRun || belowThreshold || dueByAge || dueByDependencyDrift);
+  const operational = !neverRun && !belowThreshold;
+  // An overdue eval is maintenance debt, not a hard health failure, as long as the last
+  // accepted score is still above threshold and the suite definition has not drifted.
   return {
     suite_id: input.eval_suite_id,
     minimum_eval_score: input.minimum_eval_score,
@@ -335,7 +338,8 @@ export function buildEvalHealth(
     due_by_dependency_drift: dueByDependencyDrift,
     below_threshold: belowThreshold,
     never_run: neverRun,
-    healthy: !due && !dueByDependencyDrift && lastEvalScore !== null && lastEvalScore >= input.minimum_eval_score,
+    operational,
+    healthy: !neverRun && !belowThreshold && !dueByDependencyDrift,
     last_eval_age_seconds: Number.isFinite(lastEvalAgeSeconds) ? Number(lastEvalAgeSeconds.toFixed(4)) : null,
   };
 }

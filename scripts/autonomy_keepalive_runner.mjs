@@ -15,6 +15,9 @@ loadRunnerEnv(repoRoot);
 
 const transport = resolveTransport(repoRoot);
 process.env.TRICHAT_RING_LEADER_TRANSPORT = transport;
+process.env.MCP_TOOL_CALL_TIMEOUT_MS ||= String(
+  parseIntValue(process.env.AUTONOMY_KEEPALIVE_TOOL_TIMEOUT_MS, transport === "http" ? 180000 : 240000, 1000, 300000)
+);
 
 const now = Date.now();
 const args = {
@@ -44,6 +47,16 @@ const args = {
   source_client: "autonomy.keepalive.launchd",
 };
 
+function isRetryableTransportError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /timed out|ECONNREFUSED|ECONNRESET|socket hang up|fetch failed|UND_ERR|EPIPE/i.test(message);
+}
+
+function isMutationInProgressError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /mutation key is already in progress/i.test(message);
+}
+
 async function main() {
   if (transport === "http") {
     const ready = await waitForHttpReady(repoRoot, {
@@ -63,11 +76,53 @@ async function main() {
     }
   }
 
-  const result = callTool(repoRoot, {
-    tool: "autonomy.maintain",
-    args,
-    transport,
-  });
+  let result;
+  try {
+    result = callTool(repoRoot, {
+      tool: "autonomy.maintain",
+      args,
+      transport,
+    });
+  } catch (error) {
+    if (isMutationInProgressError(error)) {
+      result = {
+        ok: true,
+        skipped: true,
+        reason: "mutation_in_progress",
+        source_client: "autonomy.keepalive.launchd",
+        transport,
+      };
+    } else if (transport !== "http" || !isRetryableTransportError(error)) {
+      throw error;
+    } else {
+      try {
+        result = callTool(repoRoot, {
+          tool: "autonomy.maintain",
+          args,
+          transport: "stdio",
+        });
+        if (result && typeof result === "object" && !Array.isArray(result)) {
+          result = {
+            ...result,
+            transport: "stdio",
+            transport_fallback_from: "http",
+          };
+        }
+      } catch (fallbackError) {
+        if (!isMutationInProgressError(fallbackError)) {
+          throw fallbackError;
+        }
+        result = {
+          ok: true,
+          skipped: true,
+          reason: "mutation_in_progress",
+          source_client: "autonomy.keepalive.launchd",
+          transport: "stdio",
+          transport_fallback_from: "http",
+        };
+      }
+    }
+  }
 
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

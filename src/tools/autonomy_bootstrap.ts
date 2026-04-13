@@ -119,6 +119,10 @@ function intFromEnv(name: string, fallback: number) {
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 }
 
+function isBlockingBootstrapRepair(repair: string) {
+  return !repair.endsWith(".default_drift");
+}
+
 function optionalIntFromEnv(name: string) {
   const raw = Number.parseInt(String(process.env[name] ?? "").trim(), 10);
   return Number.isFinite(raw) && raw > 0 ? raw : null;
@@ -930,7 +934,7 @@ async function inspectBootstrapState(
       })),
     },
     repairs_needed: repairsNeeded,
-    self_start_ready: repairsNeeded.length === 0,
+    self_start_ready: repairsNeeded.some(isBlockingBootstrapRepair) !== true,
   };
 }
 
@@ -1059,7 +1063,7 @@ function inspectBootstrapStateFast(
       backends: [],
     },
     repairs_needed: repairsNeeded,
-    self_start_ready: repairsNeeded.length === 0,
+    self_start_ready: repairsNeeded.some(isBlockingBootstrapRepair) !== true,
     fast: true,
   };
 }

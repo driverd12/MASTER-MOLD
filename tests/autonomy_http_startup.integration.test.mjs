@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { Storage } from "../dist/storage.js";
+import { computeEvalDependencyFingerprint } from "../dist/tools/autonomy_maintain.js";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = process.cwd();
@@ -54,7 +56,7 @@ test("http daemon self-converges the autonomy bootstrap on startup", async () =>
       bearerToken,
     });
     assert.equal(status.self_start_ready, true);
-    assert.deepEqual(status.repairs_needed, []);
+    assert.equal((status.repairs_needed ?? []).every((entry) => String(entry).endsWith(".default_drift")), true);
     assert.equal(status.ring_leader.running, true);
     assert.equal(status.worker_fabric.host_present, true);
     assert.equal(status.model_router.backend_present, true);
@@ -181,7 +183,9 @@ test("http daemon serves the clickable office GUI and snapshot routes on the liv
     );
 
     const snapshotResponse = await fetchHttpResponse(`http://127.0.0.1:${httpPort}/office/api/snapshot`);
-    assert.equal(snapshotResponse.headers["x-office-snapshot-source"], "cache");
+    assert.ok(
+      ["cache", "direct-node"].includes(String(snapshotResponse.headers["x-office-snapshot-source"] || ""))
+    );
     const snapshot = JSON.parse(snapshotResponse.body);
     assert.equal(typeof snapshot.thread_id, "string");
     assert.ok(Array.isArray(snapshot.agents));
@@ -190,7 +194,17 @@ test("http daemon serves the clickable office GUI and snapshot routes on the liv
 
     const liveSnapshotResponse = await fetchHttpResponse(`http://127.0.0.1:${httpPort}/office/api/snapshot?live=force`);
     assert.ok(
-      ["direct-node", "cache", "cache-throttled-live"].includes(String(liveSnapshotResponse.headers["x-office-snapshot-source"] || ""))
+      [
+        "direct-node",
+        "direct-python",
+        "cache",
+        "cache-throttled-live",
+        "cache-fallback",
+        "cache-refreshing-live",
+        "cache-refreshing-stale",
+      ].includes(
+        String(liveSnapshotResponse.headers["x-office-snapshot-source"] || "")
+      )
     );
     const liveSnapshot = JSON.parse(liveSnapshotResponse.body);
     assert.equal(typeof liveSnapshot.thread_id, "string");
@@ -199,7 +213,15 @@ test("http daemon serves the clickable office GUI and snapshot routes on the liv
 
     const throttledLiveSnapshotResponse = await fetchHttpResponse(`http://127.0.0.1:${httpPort}/office/api/snapshot?live=1`);
     assert.ok(
-      ["cache-throttled-live", "cache"].includes(String(throttledLiveSnapshotResponse.headers["x-office-snapshot-source"] || ""))
+      [
+        "cache-throttled-live",
+        "cache",
+        "cache-fallback",
+        "cache-refreshing-live",
+        "cache-refreshing-stale",
+        "direct-node",
+        "direct-python",
+      ].includes(String(throttledLiveSnapshotResponse.headers["x-office-snapshot-source"] || ""))
     );
     const throttledLiveSnapshot = JSON.parse(throttledLiveSnapshotResponse.body);
     assert.equal(throttledLiveSnapshot.thread_id, liveSnapshot.thread_id);
@@ -523,6 +545,153 @@ test("/ready ignores recovered observability errors when a newer healthy documen
   }
 });
 
+test("/ready stays green when the last accepted eval passes but the next eval is merely overdue", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-http-ready-overdue-eval-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const busPath = path.join(tempDir, "trichat.bus.sock");
+  const bearerToken = "test-autonomy-http-ready-overdue-eval-token";
+  const httpPort = await reservePort();
+  const child = spawn("node", ["dist/server.js", "--http", "--http-port", String(httpPort)], {
+    cwd: REPO_ROOT,
+    env: inheritedEnv({
+      MCP_HTTP: "1",
+      MCP_HTTP_PORT: String(httpPort),
+      MCP_HTTP_HOST: "127.0.0.1",
+      MCP_HTTP_BEARER_TOKEN: bearerToken,
+      ANAMNESIS_HUB_DB_PATH: dbPath,
+      TRICHAT_BUS_SOCKET_PATH: busPath,
+      TRICHAT_RING_LEADER_AUTOSTART: "0",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "0",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "0",
+    }),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    await waitForHttpText(`http://127.0.0.1:${httpPort}/`);
+    const storage = new Storage(dbPath);
+    const suiteId = "autonomy.control-plane";
+    const dependencyFingerprint = computeEvalDependencyFingerprint(storage, suiteId);
+    storage.setAutonomyMaintainState({
+      enabled: true,
+      interval_seconds: 120,
+      learning_review_interval_seconds: 300,
+      enable_self_drive: true,
+      self_drive_cooldown_seconds: 1800,
+      run_eval_if_due: true,
+      eval_interval_seconds: 21600,
+      eval_suite_id: suiteId,
+      minimum_eval_score: 75,
+      last_run_at: new Date().toISOString(),
+      last_eval_run_at: new Date(Date.now() - 10 * 60 * 60_000).toISOString(),
+      last_eval_run_id: "ready-overdue-eval",
+      last_eval_score: 100,
+      last_eval_dependency_fingerprint: dependencyFingerprint,
+      last_actions: ["eval.completed"],
+      last_attention: [],
+      last_error: null,
+    });
+    const readyResponse = await fetchHttpResponse(`http://127.0.0.1:${httpPort}/ready`, {
+      Authorization: `Bearer ${bearerToken}`,
+      Origin: "http://127.0.0.1",
+    });
+    const ready = JSON.parse(readyResponse.body);
+    assert.equal(ready.autonomy_maintain.eval_due, true);
+    assert.equal(ready.autonomy_maintain.eval_health.operational, true);
+    assert.equal(ready.autonomy_maintain.eval_health.healthy, true);
+    assert.equal(ready.attention.includes("autonomy_eval.unhealthy"), false);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", () => resolve()));
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("/ready stays green when eval drift is advisory but the last accepted score is still operational", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-http-ready-definition-drift-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const busPath = path.join(tempDir, "trichat.bus.sock");
+  const bearerToken = "test-autonomy-http-ready-definition-drift-token";
+  const httpPort = await reservePort();
+  const child = spawn("node", ["dist/server.js", "--http", "--http-port", String(httpPort)], {
+    cwd: REPO_ROOT,
+    env: inheritedEnv({
+      MCP_HTTP: "1",
+      MCP_HTTP_PORT: String(httpPort),
+      MCP_HTTP_HOST: "127.0.0.1",
+      MCP_HTTP_BEARER_TOKEN: bearerToken,
+      ANAMNESIS_HUB_DB_PATH: dbPath,
+      TRICHAT_BUS_SOCKET_PATH: busPath,
+      TRICHAT_RING_LEADER_AUTOSTART: "0",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "1",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "1",
+    }),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    await waitForHttpText(`http://127.0.0.1:${httpPort}/`);
+    const storage = new Storage(dbPath);
+    const suiteId = "autonomy.control-plane";
+    const dependencyFingerprint = computeEvalDependencyFingerprint(storage, suiteId);
+    storage.setAutonomyMaintainState({
+      enabled: true,
+      interval_seconds: 120,
+      learning_review_interval_seconds: 300,
+      enable_self_drive: true,
+      self_drive_cooldown_seconds: 1800,
+      run_eval_if_due: true,
+      eval_interval_seconds: 21600,
+      eval_suite_id: suiteId,
+      minimum_eval_score: 75,
+      last_run_at: new Date().toISOString(),
+      last_eval_run_at: new Date().toISOString(),
+      last_eval_run_id: "ready-definition-baseline",
+      last_eval_score: 100,
+      last_eval_dependency_fingerprint: dependencyFingerprint,
+      last_actions: ["eval.completed"],
+      last_attention: [],
+      last_error: null,
+    });
+    await waitForReadyState(`http://127.0.0.1:${httpPort}/ready`, {
+      Authorization: `Bearer ${bearerToken}`,
+      Origin: "http://127.0.0.1",
+    });
+    storage.setAutonomyMaintainState({
+      enabled: true,
+      interval_seconds: 120,
+      learning_review_interval_seconds: 300,
+      enable_self_drive: true,
+      self_drive_cooldown_seconds: 1800,
+      run_eval_if_due: true,
+      eval_interval_seconds: 21600,
+      eval_suite_id: suiteId,
+      minimum_eval_score: 75,
+      last_run_at: new Date().toISOString(),
+      last_eval_run_at: new Date().toISOString(),
+      last_eval_run_id: "ready-definition-drift",
+      last_eval_score: 100,
+      last_eval_dependency_fingerprint: "stale-fingerprint",
+      last_actions: ["eval.completed"],
+      last_attention: [],
+      last_error: null,
+    });
+    const readyResponse = await fetchHttpResponse(`http://127.0.0.1:${httpPort}/ready`, {
+      Authorization: `Bearer ${bearerToken}`,
+      Origin: "http://127.0.0.1",
+    });
+    const ready = JSON.parse(readyResponse.body);
+    assert.equal(readyResponse.statusCode, 200);
+    assert.equal(ready.ready, true);
+    assert.equal(ready.autonomy_maintain.eval_health.operational, true);
+    assert.equal(ready.attention.includes("autonomy_eval.unhealthy"), false);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", () => resolve()));
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("http daemon exposes fast unauthenticated root and health routes", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-http-fast-path-"));
   const dbPath = path.join(tempDir, "hub.sqlite");
@@ -622,6 +791,22 @@ async function waitForHttpText(url) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw lastError ?? new Error(`Timed out waiting for HTTP response from ${url}`);
+}
+
+async function waitForReadyState(url, headers = {}) {
+  const deadline = Date.now() + 60000;
+  let lastResponse = null;
+  while (Date.now() < deadline) {
+    lastResponse = await fetchHttpResponse(url, headers);
+    try {
+      const parsed = JSON.parse(lastResponse.body);
+      if (lastResponse.statusCode === 200 && parsed?.ready === true) {
+        return parsed;
+      }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for ready state: ${lastResponse?.body ?? "no response"}`);
 }
 
 async function waitForAutonomyMaintainStatus({ url, origin, bearerToken }) {

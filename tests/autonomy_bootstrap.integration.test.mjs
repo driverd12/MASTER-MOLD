@@ -925,9 +925,74 @@ test("autonomy.maintain status reports eval debt when the eval suite fingerprint
     });
     assert.equal(status.eval_health.due, true);
     assert.equal(status.eval_health.due_by_dependency_drift, true);
+    assert.equal(status.eval_health.operational, true);
     assert.equal(status.eval_health.healthy, false);
   } finally {
     await session.client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("autonomy.bootstrap keeps self-start readiness green when suite drift is advisory", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-bootstrap-advisory-drift-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const ollama = await startFakeOllamaServer({
+    models: [{ name: "llama3.2:3b" }],
+  });
+  let mutationCounter = 0;
+
+  const session = await openClient({
+    ANAMNESIS_HUB_DB_PATH: dbPath,
+    TRICHAT_BUS_SOCKET_PATH: path.join(tempDir, "trichat.bus.sock"),
+    TRICHAT_OLLAMA_URL: ollama.url,
+    TRICHAT_RING_LEADER_AUTOSTART: "1",
+    TRICHAT_RING_LEADER_BRIDGE_DRY_RUN: "1",
+    TRICHAT_RING_LEADER_EXECUTE_ENABLED: "0",
+    TRICHAT_RING_LEADER_INTERVAL_SECONDS: "600",
+  });
+
+  try {
+    const ensured = await callTool(session.client, "autonomy.bootstrap", {
+      action: "ensure",
+      mutation: nextMutation("autonomy-bootstrap-advisory-drift", "ensure", () => mutationCounter++),
+      probe_ollama_url: ollama.url,
+      autostart_ring_leader: true,
+      run_immediately: false,
+    });
+    assert.equal(ensured.ok, true);
+
+    const storage = new Storage(dbPath);
+    const router = storage.getModelRouterState();
+    assert.ok(router);
+    storage.setModelRouterState({
+      enabled: true,
+      strategy: router?.strategy ?? "balanced",
+      default_backend_id: "mlx-qwen-advisory-drift",
+      backends: [
+        ...(router?.backends ?? []),
+        {
+          backend_id: "mlx-qwen-advisory-drift",
+          enabled: true,
+          provider: "mlx",
+          model_id: "mlx-community/Qwen2.5-Coder-3B-Instruct-4bit",
+          locality: "local",
+          tags: ["local", "mlx", "primary"],
+          heartbeat_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const status = await callTool(session.client, "autonomy.bootstrap", {
+      action: "status",
+      probe_ollama_url: ollama.url,
+      autostart_ring_leader: true,
+    });
+    assert.equal(status.eval_suites.default_suite_drift, true);
+    assert.equal(status.repairs_needed.includes("eval.suite.default_drift"), true);
+    assert.equal(status.self_start_ready, true);
+  } finally {
+    await session.client.close().catch(() => {});
+    await ollama.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

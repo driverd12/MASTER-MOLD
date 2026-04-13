@@ -381,6 +381,39 @@ test("benchmark.run can clean isolated workspaces when suite metadata requests i
   }
 });
 
+test("benchmark cleanup tolerates transient ENOTEMPTY workspace races", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-benchmark-cleanup-race-"));
+  const workspace = path.join(tempDir, ".mcp-isolation", "cleanup-race");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "marker.txt"), "cleanup me\n", "utf8");
+
+  const benchmark = await import(path.join(REPO_ROOT, "dist", "tools", "benchmark.js"));
+  const originalRmSync = fs.rmSync;
+  let rmSyncCalls = 0;
+  fs.rmSync = ((targetPath, options) => {
+    rmSyncCalls += 1;
+    if (rmSyncCalls === 1) {
+      const error = new Error("directory not empty");
+      Object.assign(error, { code: "ENOTEMPTY" });
+      throw error;
+    }
+    return originalRmSync(targetPath, options);
+  });
+
+  try {
+    const cleanup = await benchmark.cleanupIsolatedWorkspaceBestEffort(workspace, {
+      attempts: 3,
+      retry_delay_ms: 1,
+    });
+    assert.equal(cleanup.ok, true);
+    assert.equal(fs.existsSync(workspace), false);
+    assert.equal(rmSyncCalls >= 2, true);
+  } finally {
+    fs.rmSync = originalRmSync;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("benchmark.run isolated MCP smoke commands can self-heal missing dist outputs", async () => {
   const testId = `${Date.now()}-benchmark-mcp-stdio`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-benchmark-mcp-stdio-"));

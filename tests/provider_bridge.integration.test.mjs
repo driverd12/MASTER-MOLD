@@ -438,6 +438,97 @@ test("provider.bridge diagnose keeps Gemini configured until runtime is actually
   }
 });
 
+test("provider.bridge status reuses cached diagnostics so operator readiness stays conservative", { concurrency: false }, async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-provider-bridge-gemini-status-cache-"));
+  const homeDir = path.join(tempDir, "home");
+  const binDir = path.join(tempDir, "bin");
+  fs.mkdirSync(homeDir, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(binDir, "gemini"),
+    "#!/bin/sh\nexit 0\n",
+    { mode: 0o755 }
+  );
+  fs.chmodSync(path.join(binDir, "gemini"), 0o755);
+  fs.writeFileSync(path.join(binDir, "pgrep"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  fs.chmodSync(path.join(binDir, "pgrep"), 0o755);
+
+  const geminiDir = path.join(homeDir, ".gemini");
+  fs.mkdirSync(geminiDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(geminiDir, "settings.json"),
+    JSON.stringify(
+      {
+        mcpServers: {
+          mcplayground: {
+            type: "stdio",
+            command: "node",
+            args: ["/tmp/provider_stdio_bridge.mjs"],
+            cwd: tempDir,
+            timeout: 600000,
+            trust: true,
+          },
+        },
+      },
+      null,
+      2
+    )
+  );
+  fs.writeFileSync(
+    path.join(geminiDir, "oauth_creds.json"),
+    JSON.stringify(
+      {
+        access_token: "token",
+        refresh_token: "refresh",
+        expiry_date: Date.now() - 1000,
+        token_type: "Bearer",
+      },
+      null,
+      2
+    )
+  );
+
+  const session = await openClient({
+    ANAMNESIS_HUB_DB_PATH: path.join(tempDir, "hub.sqlite"),
+    HOME: homeDir,
+    PATH: `${binDir}:${process.env.PATH || ""}`,
+    MCP_HTTP_BEARER_TOKEN: "provider-bridge-status-cache-token",
+    TRICHAT_MCP_URL: "http://127.0.0.1:8787/",
+    TRICHAT_MCP_ORIGIN: "http://127.0.0.1",
+  });
+
+  try {
+    const diagnose = await callTool(session.client, "provider.bridge", {
+      action: "diagnose",
+      clients: ["gemini-cli"],
+      probe_timeout_ms: 1000,
+      workspace_root: tempDir,
+    });
+    assert.equal(diagnose.diagnostics[0]?.status, "configured");
+
+    const status = await callTool(session.client, "provider.bridge", {
+      action: "status",
+      clients: ["gemini-cli"],
+      probe_timeout_ms: 1000,
+      workspace_root: tempDir,
+    });
+
+    const outbound = status.outbound_council_agents.find((entry) => entry.client_id === "gemini-cli");
+    const router = status.router_backend_candidates.find((entry) => entry.client_id === "gemini-cli");
+    const onboarding = status.onboarding.entries.find((entry) => entry.client_id === "gemini-cli");
+
+    assert.equal(outbound?.runtime_ready, false);
+    assert.equal(router?.eligible, false);
+    assert.match(String(router?.reason || ""), /runtime/i);
+    assert.equal(onboarding?.runtime_status, "configured");
+    assert.equal(onboarding?.ready, false);
+    assert.equal(onboarding?.runtime_ready, false);
+  } finally {
+    await session.client.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("provider.bridge diagnose treats Copilot as disconnected from recent auth logs without waiting on prompt probe", { concurrency: false }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-provider-bridge-copilot-diagnose-"));
   const homeDir = path.join(tempDir, "home");

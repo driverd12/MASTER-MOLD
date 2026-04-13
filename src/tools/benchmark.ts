@@ -89,6 +89,55 @@ function readNumberFromRewardFile(filePath: string, workspace: string): number |
   }
 }
 
+const RETRYABLE_WORKSPACE_CLEANUP_CODES = new Set(["ENOTEMPTY", "EBUSY", "EPERM"]);
+
+export async function cleanupIsolatedWorkspaceBestEffort(
+  workspace: string,
+  input: {
+    attempts?: number;
+    retry_delay_ms?: number;
+  } = {}
+) {
+  const attempts = Math.max(1, Math.trunc(input.attempts ?? 5));
+  const retryDelayMs = Math.max(10, Math.trunc(input.retry_delay_ms ?? 100));
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      fs.rmSync(workspace, {
+        recursive: true,
+        force: true,
+        maxRetries: 2,
+        retryDelay: 25,
+      });
+      return {
+        ok: true,
+        attempts: attempt + 1,
+        error: null,
+      };
+    } catch (error) {
+      if (!fs.existsSync(workspace)) {
+        return {
+          ok: true,
+          attempts: attempt + 1,
+          error: null,
+        };
+      }
+      const code = error && typeof error === "object" ? String((error as NodeJS.ErrnoException).code ?? "") : "";
+      if (!RETRYABLE_WORKSPACE_CLEANUP_CODES.has(code) || attempt + 1 >= attempts) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        break;
+      }
+      lastError = error instanceof Error ? error : new Error(String(error));
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
+    }
+  }
+  return {
+    ok: false,
+    attempts,
+    error: lastError?.message ?? `failed to remove isolated workspace ${workspace}`,
+  };
+}
+
 function loadBenchmarkSuites(storage: Storage) {
   return storage.getBenchmarkSuitesState() ?? {
     enabled: true,
@@ -409,7 +458,12 @@ export async function benchmarkRun(storage: Storage, input: z.infer<typeof bench
           plan.workspace !== plan.base_workspace &&
           plan.workspace.includes(`${path.sep}.mcp-isolation${path.sep}`)
         ) {
-          fs.rmSync(plan.workspace, { recursive: true, force: true });
+          const cleanup = await cleanupIsolatedWorkspaceBestEffort(plan.workspace);
+          if (!cleanup.ok) {
+            console.warn(
+              `[benchmark.cleanup] deferred removing ${plan.workspace}: ${cleanup.error ?? "unknown error"}`
+            );
+          }
         }
       }
 

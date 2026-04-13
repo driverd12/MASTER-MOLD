@@ -80,20 +80,20 @@ chmod 600 "${TOKEN_FILE}" >/dev/null 2>&1 || true
 
 mkdir -p "${LAUNCH_DIR}" "${LOG_DIR}" "$(dirname "${BUS_SOCKET_PATH}")"
 
-wait_for_mcp_ready() {
-  local url="http://${MCP_HOST}:${MCP_PORT}/ready"
+wait_for_mcp_http() {
+  local url="http://${MCP_HOST}:${MCP_PORT}/health"
   local deadline=$((SECONDS + 30))
-  local ready_json=""
+  local health_json=""
 
   while (( SECONDS < deadline )); do
-    ready_json="$(curl -fsS --connect-timeout 1 --max-time 2 \
+    health_json="$(curl -fsS --connect-timeout 1 --max-time 2 \
       -H "Authorization: Bearer ${HTTP_BEARER_TOKEN}" \
       -H "Origin: http://127.0.0.1" \
       "${url}" 2>/dev/null || true)"
-    if [[ -n "${ready_json}" ]] && READY_JSON="${ready_json}" "${PYTHON_BIN}" - <<'PY'
+    if [[ -n "${health_json}" ]] && HEALTH_JSON="${health_json}" "${PYTHON_BIN}" - <<'PY'
 import json, os, sys
-payload = json.loads(os.environ["READY_JSON"])
-sys.exit(0 if payload.get("ok") and payload.get("ready") else 1)
+payload = json.loads(os.environ["HEALTH_JSON"])
+sys.exit(0 if payload.get("ok") or payload.get("status") == "ok" else 1)
 PY
     then
       return 0
@@ -101,7 +101,7 @@ PY
     sleep 1
   done
 
-  echo "error: MCP HTTP daemon did not become ready after launchd restart" >&2
+  echo "error: MCP HTTP daemon did not become healthy after launchd restart" >&2
   if [[ -f "${LOG_DIR}/mcp-http.err.log" ]]; then
     echo "--- mcp-http.err.log (tail) ---" >&2
     tail -n 50 "${LOG_DIR}/mcp-http.err.log" >&2 || true
@@ -175,8 +175,10 @@ cat >"${MCP_PLIST}" <<PLIST
       <key>TRICHAT_BUS_SOCKET_PATH</key>
       <string>${BUS_SOCKET_PATH}</string>
       <key>MCP_AUTONOMY_BOOTSTRAP_ON_START</key>
-      <string>0</string>
+      <string>1</string>
       <key>MCP_AUTONOMY_MAINTAIN_ON_START</key>
+      <string>1</string>
+      <key>MCP_AUTONOMY_MAINTAIN_RUN_IMMEDIATELY_ON_START</key>
       <string>0</string>
       <key>PATH</key>
       <string>${PATH}</string>
@@ -320,6 +322,10 @@ cat >"${KEEPALIVE_PLIST}" <<PLIST
       <string>${HTTP_BEARER_TOKEN}</string>
       <key>AUTONOMY_BOOTSTRAP_TRANSPORT</key>
       <string>http</string>
+      <key>AUTONOMY_KEEPALIVE_HTTP_READY_TIMEOUT_MS</key>
+      <string>60000</string>
+      <key>AUTONOMY_KEEPALIVE_TOOL_TIMEOUT_MS</key>
+      <string>180000</string>
       <key>TRICHAT_MCP_URL</key>
       <string>http://127.0.0.1:${MCP_HTTP_PORT:-8787}/</string>
       <key>TRICHAT_MCP_ORIGIN</key>
@@ -417,7 +423,7 @@ fi
 launchctl bootstrap "${DOMAIN}" "${MCP_PLIST}"
 launchctl enable "${DOMAIN}/${MCP_LABEL}" >/dev/null 2>&1 || true
 launchctl kickstart -k "${DOMAIN}/${MCP_LABEL}" >/dev/null 2>&1 || true
-wait_for_mcp_ready
+wait_for_mcp_http
 
 launchctl bootstrap "${DOMAIN}" "${AUTO_PLIST}"
 launchctl bootstrap "${DOMAIN}" "${WORKER_PLIST}"

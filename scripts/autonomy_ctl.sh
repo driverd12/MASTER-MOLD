@@ -56,17 +56,24 @@ fetch_ready_json() {
   if [[ -z "${MCP_HTTP_BEARER_TOKEN:-}" ]]; then
     return 0
   fi
-  curl -fsS \
-    -H "Authorization: Bearer ${MCP_HTTP_BEARER_TOKEN}" \
-    -H "Origin: ${HTTP_ORIGIN}" \
-    "${HTTP_URL%/}/ready" 2>/dev/null || true
+  local response body
+  response="$(
+    curl -sS \
+      -m "${AUTONOMY_STATUS_READY_TIMEOUT_SECONDS:-10}" \
+      -H "Authorization: Bearer ${MCP_HTTP_BEARER_TOKEN}" \
+      -H "Origin: ${HTTP_ORIGIN}" \
+      -w $'\n%{http_code}' \
+      "${HTTP_URL%/}/ready" 2>/dev/null || true
+  )"
+  body="${response%$'\n'*}"
+  printf '%s' "${body}"
 }
 
 bootstrap_status_stdio() {
   MCP_AUTONOMY_BOOTSTRAP_ON_START=0 \
     MCP_AUTONOMY_MAINTAIN_ON_START=0 \
     TRICHAT_BUS_AUTOSTART=0 \
-    MCP_TOOL_CALL_TIMEOUT_MS="${AUTONOMY_STATUS_TIMEOUT_MS:-8000}" \
+    MCP_TOOL_CALL_TIMEOUT_MS="${AUTONOMY_STATUS_TIMEOUT_MS:-20000}" \
     node ./scripts/mcp_tool_call.mjs \
       --tool autonomy.bootstrap \
       --args '{"action":"status","fast":true}' \
@@ -77,7 +84,7 @@ bootstrap_status_stdio() {
 }
 
 bootstrap_status_http() {
-  MCP_TOOL_CALL_TIMEOUT_MS="${AUTONOMY_STATUS_HTTP_TIMEOUT_MS:-15000}" \
+  MCP_TOOL_CALL_TIMEOUT_MS="${AUTONOMY_STATUS_HTTP_TIMEOUT_MS:-20000}" \
     MCP_HTTP_BEARER_TOKEN="${MCP_HTTP_BEARER_TOKEN}" \
     node ./scripts/mcp_tool_call.mjs \
       --tool autonomy.bootstrap \
@@ -86,6 +93,36 @@ bootstrap_status_http() {
       --url "${HTTP_URL}" \
       --origin "${HTTP_ORIGIN}" \
       --cwd "${REPO_ROOT}"
+}
+
+status_reports_self_start_ready() {
+  local status_json="${1:-}"
+  python3 - "${status_json}" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1] or "{}")
+raise SystemExit(0 if data.get("self_start_ready") else 1)
+PY
+}
+
+wait_for_bootstrap_self_start_ready() {
+  local timeout_seconds="${AUTONOMY_ENSURE_READY_TIMEOUT_SECONDS:-30}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local status_json=""
+
+  while (( SECONDS < deadline )); do
+    if [[ -n "$(fetch_ready_json)" ]]; then
+      status_json="$(bootstrap_status_http 2>/dev/null || true)"
+    else
+      status_json="$(bootstrap_status_stdio 2>/dev/null || true)"
+    fi
+    if [[ -n "${status_json}" ]] && status_reports_self_start_ready "${status_json}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 0
 }
 
 parse_csv_arg() {
@@ -116,7 +153,7 @@ call_tool_json() {
   local timeout_ms="${MCP_TOOL_CALL_TIMEOUT_MS:-180000}"
   local max_attempts="${MCP_TOOL_CALL_HTTP_MAX_ATTEMPTS:-10}"
   if [[ "${ACTION}" == "status" ]]; then
-    timeout_ms="${AUTONOMY_STATUS_TIMEOUT_MS:-8000}"
+    timeout_ms="${AUTONOMY_STATUS_TIMEOUT_MS:-20000}"
     max_attempts="${AUTONOMY_STATUS_HTTP_MAX_ATTEMPTS:-1}"
   fi
   MCP_TOOL_CALL_TIMEOUT_MS="${timeout_ms}" MCP_TOOL_CALL_HTTP_MAX_ATTEMPTS="${max_attempts}" node ./scripts/mcp_tool_call.mjs \
@@ -259,6 +296,7 @@ NODE
     bootstrap_result="$(call_tool_json_retry_on_timeout autonomy.bootstrap "${args_json}" "${AUTONOMY_ENSURE_MAX_ATTEMPTS:-3}")"
   fi
   start_maintain_entry 1
+  wait_for_bootstrap_self_start_ready
   if [[ "${quiet}" != "1" ]]; then
     printf '%s\n' "${bootstrap_result}"
   fi
@@ -364,7 +402,7 @@ print(json.dumps(payload))
 PY
 )"
   else
-    MAINTAIN_STATUS="$(MCP_TOOL_CALL_TIMEOUT_MS="${AUTONOMY_STATUS_TIMEOUT_MS:-8000}" node ./scripts/mcp_tool_call.mjs --tool autonomy.maintain --args '{"action":"status"}' --transport stdio --stdio-command "${STDIO_COMMAND}" --stdio-args "${STDIO_ARGS}" --cwd "${REPO_ROOT}")"
+    MAINTAIN_STATUS="$(MCP_TOOL_CALL_TIMEOUT_MS="${AUTONOMY_STATUS_TIMEOUT_MS:-20000}" node ./scripts/mcp_tool_call.mjs --tool autonomy.maintain --args '{"action":"status"}' --transport stdio --stdio-command "${STDIO_COMMAND}" --stdio-args "${STDIO_ARGS}" --cwd "${REPO_ROOT}")"
   fi
   python3 - "${BOOTSTRAP_STATUS}" "${MAINTAIN_STATUS}" <<'PY'
 import json

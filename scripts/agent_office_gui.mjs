@@ -254,7 +254,8 @@ async function detectMode({ health, listener, ready }) {
 }
 
 async function printStatus() {
-  const [health, listener, ready] = await Promise.all([healthOk(), listenerOk(), readyOk()]);
+  const [rawHealth, listener, ready] = await Promise.all([healthOk(), listenerOk(), readyOk()]);
+  const health = rawHealth || ready;
   const mode = await detectMode({ health, listener, ready });
   const launchable = String(process.env.MCP_HTTP_BEARER_TOKEN || "").trim() ? ready : health;
   process.stdout.write(

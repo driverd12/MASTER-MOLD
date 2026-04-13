@@ -196,14 +196,14 @@ clear_repo_http_runtime() {
   fi
 }
 
-wait_for_mcp_ready() {
+wait_for_mcp_http() {
   [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]] || return 1
   local deadline=$((SECONDS + 45))
   while (( SECONDS < deadline )); do
     if curl -fsS --connect-timeout 1 --max-time 4 \
       -H "Authorization: Bearer ${MCP_HTTP_BEARER_TOKEN}" \
       -H "Origin: ${HTTP_ORIGIN}" \
-      "${HTTP_URL%/}/ready" >/dev/null 2>&1; then
+      "${HTTP_URL%/}/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -231,7 +231,7 @@ case "${ACTION}" in
       clear_repo_http_runtime
       bootstrap_if_exists "${MCP_PLIST}"
       launchctl kickstart -k "${DOMAIN}/${MCP_LABEL}" >/dev/null 2>&1 || true
-      wait_for_mcp_ready
+      wait_for_mcp_http
       bootstrap_if_exists "${AUTO_PLIST}"
       bootstrap_if_exists "${WORKER_PLIST}"
       bootstrap_if_exists "${KEEPALIVE_PLIST}"
