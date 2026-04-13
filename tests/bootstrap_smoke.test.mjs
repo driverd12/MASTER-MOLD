@@ -213,6 +213,13 @@ test("bootstrap_doctor.mjs recognizes Windows Python launcher fallback", () => {
   assert.match(doctorSource, /python --version/, "doctor should check python when python3 is absent");
 });
 
+test("bootstrap_doctor.mjs includes Apple Silicon Ollama MLX readiness guidance", () => {
+  const doctorSource = fs.readFileSync(DOCTOR_PATH, "utf8");
+  assert.match(doctorSource, /Apple Silicon MLX/, "doctor should expose an Apple Silicon MLX advisory section");
+  assert.match(doctorSource, /qwen3\.5:35b-a3b-coding-nvfp4/, "doctor should mention the Ollama MLX preview coding model");
+  assert.match(doctorSource, /0\.19\+/, "doctor should mention the Ollama 0.19 runtime floor for the MLX preview");
+});
+
 test("bootstrap env pins are present and aligned with package metadata", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
   const nvmrc = fs.readFileSync(path.join(REPO_ROOT, ".nvmrc"), "utf8").trim();

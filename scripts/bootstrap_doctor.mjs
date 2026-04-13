@@ -6,6 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import os from "node:os";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -241,6 +242,7 @@ function semverGte(actual, required) {
 let requiredFails = 0;
 let recommendedMissing = 0;
 let launcherDegraded = false;
+const toolCheckResults = new Map();
 
 function checkPrereq(item, isRequired) {
   let output = run(item.check);
@@ -257,6 +259,12 @@ function checkPrereq(item, isRequired) {
   if (output === null && item.name === "python3" && platform !== "win32") {
     output = runFirst(["/opt/homebrew/bin/python3 --version", "/usr/local/bin/python3 --version"]);
   }
+
+  toolCheckResults.set(item.name, {
+    output,
+    version: extractVersion(output),
+    required: isRequired,
+  });
 
   if (output === null) {
     // Not found
@@ -326,6 +334,41 @@ function checkPrereq(item, isRequired) {
   } else {
     write(`  ${PASS} ${item.name} ${versionStr} ${c.dim}(recommended)${c.reset}`);
   }
+}
+
+function reportAppleSiliconMlxAdvisory() {
+  if (platform !== "darwin" || arch !== "arm64") {
+    return;
+  }
+  const ollamaResult = toolCheckResults.get("ollama");
+  if (!ollamaResult?.output) {
+    return;
+  }
+
+  write(`${c.bold}[doctor]${c.reset} Apple Silicon MLX:`);
+  const ollamaVersion = ollamaResult.version;
+  const totalMemoryGb = Number((os.totalmem() / 1024 / 1024 / 1024).toFixed(1));
+  const requiredMemoryGb = 32;
+  const recommendedModel = "qwen3.5:35b-a3b-coding-nvfp4";
+
+  if (!ollamaVersion || !semverGte(ollamaVersion, "0.19.0")) {
+    write(
+      `  ${WARN} Ollama ${c.yellow}${ollamaVersion || "unknown"}${c.reset} ${c.yellow}(MLX preview from the March 30, 2026 Ollama post requires 0.19+ on Apple Silicon)${c.reset}`
+    );
+  } else {
+    write(`  ${PASS} Ollama ${ollamaVersion} ${c.dim}(meets MLX preview runtime floor)${c.reset}`);
+  }
+
+  if (totalMemoryGb < requiredMemoryGb) {
+    write(
+      `  ${WARN} unified memory ${c.yellow}${totalMemoryGb} GB${c.reset} ${c.yellow}(the Ollama MLX preview post recommends more than 32 GB for ${recommendedModel})${c.reset}`
+    );
+  } else {
+    write(`  ${PASS} unified memory ${totalMemoryGb} GB ${c.dim}(satisfies the >32 GB MLX preview guidance)${c.reset}`);
+  }
+
+  write(`  ${PASS} recommended model ${c.dim}(${recommendedModel})${c.reset}`);
+  write(`  ${c.dim}Upgrade path: install Ollama 0.19+, then run \`ollama pull ${recommendedModel}\` and point the local Ollama backend at that model.${c.reset}`);
 }
 
 function findManifestTool(name) {
@@ -474,6 +517,8 @@ for (const item of manifest.prerequisites.required) {
 for (const item of manifest.prerequisites.recommended) {
   checkPrereq(item, false);
 }
+
+reportAppleSiliconMlxAdvisory();
 
 // ── Browser detection ────────────────────────────────────────────────────────
 write(`${c.bold}[doctor]${c.reset} Browser:`);
