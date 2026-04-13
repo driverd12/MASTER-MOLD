@@ -31,7 +31,11 @@ import {
   type WorkerFabricStateRecord,
   Storage,
 } from "../storage.js";
-import { resolveSessionPermissionProfileId, resolveTaskPermissionProfileId } from "../control_plane_runtime.js";
+import {
+  resolveEffectiveDefaultPermissionProfileId,
+  resolveSessionPermissionProfileId,
+  resolveTaskPermissionProfileId,
+} from "../control_plane_runtime.js";
 import { summarizeWarmCacheRuntime } from "../warm_cache_runtime.js";
 import { getAdaptiveWorkerProfile, summarizeAdaptiveSessionHealth, summarizeAdaptiveWorkerProfile } from "./agent_session.js";
 import { buildAgentLearningOverview } from "./agent_learning.js";
@@ -2152,6 +2156,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     .map((task) => storage.getTaskById(task.task_id))
     .filter((task): task is TaskRecord => task !== null);
   const budgetLedgerSummary = storage.summarizeBudgetLedger({ recent_limit: 12 });
+  const effectiveDefaultPermissionProfile = resolveEffectiveDefaultPermissionProfileId(storage, permissionProfilesState);
   const permissionProfilesSummary = summarizePermissionProfiles({
     state: permissionProfilesState,
     session_profile_ids: activeSessions.map((session) => resolveSessionPermissionProfileId(storage, session)),
@@ -2716,6 +2721,7 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
       tool_catalog: toolCatalogSummary,
       permission_profiles: {
         default_profile: permissionProfilesSummary.default_profile,
+        effective_default_profile: effectiveDefaultPermissionProfile,
         session_counts: permissionProfilesSummary.session_counts,
         task_counts: permissionProfilesSummary.task_counts,
       },
@@ -2774,7 +2780,10 @@ export function kernelSummary(storage: Storage, input: z.infer<typeof kernelSumm
     },
     privileged_access: privilegedAccess,
     tool_catalog: toolCatalogSummary,
-    permission_profiles: permissionProfilesSummary,
+    permission_profiles: {
+      ...permissionProfilesSummary,
+      effective_default_profile: effectiveDefaultPermissionProfile,
+    },
     budget_ledger: budgetLedgerSummary,
     warm_cache: {
       state: warmCacheState,

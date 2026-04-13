@@ -79,6 +79,59 @@ test("autonomy.command turns a cold control plane into a durable autonomous goal
   }
 });
 
+test("autonomy.command inherits Patient Zero full-control defaults when mode is omitted", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-command-patient-zero-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+  const ollama = await startFakeOllamaServer({
+    models: [{ name: "llama3.2:3b" }],
+  });
+
+  const session = await openClient({
+    ANAMNESIS_HUB_DB_PATH: dbPath,
+    TRICHAT_BUS_SOCKET_PATH: path.join(tempDir, "trichat.bus.sock"),
+    TRICHAT_OLLAMA_URL: ollama.url,
+    MCP_PRIVILEGED_EXEC_DRY_RUN: "1",
+    MCP_PRIVILEGED_EXEC_TEST_ACCOUNT_EXISTS: "1",
+    MCP_PRIVILEGED_EXEC_TEST_SECRET: "integration-secret",
+    TRICHAT_RING_LEADER_AUTOSTART: "1",
+    TRICHAT_RING_LEADER_BRIDGE_DRY_RUN: "1",
+    TRICHAT_RING_LEADER_EXECUTE_ENABLED: "0",
+    TRICHAT_RING_LEADER_INTERVAL_SECONDS: "600",
+  });
+
+  try {
+    await callTool(session.client, "patient.zero", {
+      action: "enable",
+      mutation: nextMutation("autonomy-command-patient-zero", "patient.zero.enable", () => mutationCounter++),
+      source_client: "integration-test",
+      source_agent: "operator",
+    });
+
+    const intake = await callTool(session.client, "autonomy.command", {
+      mutation: nextMutation("autonomy-command-patient-zero", "autonomy.command", () => mutationCounter++),
+      objective: "Take over this Mac locally and complete the operator's requested build-and-verify loop.",
+      title: "Patient Zero elevated autonomy intake",
+      trichat_bridge_dry_run: true,
+      dispatch_limit: 12,
+      max_passes: 3,
+    });
+
+    assert.equal(intake.ok, true);
+    assert.equal(intake.patient_zero_full_control_defaults_applied, true);
+    assert.equal(intake.effective_autonomy_mode, "execute_destructive_with_approval");
+    assert.equal(intake.effective_permission_profile, "high_risk");
+    assert.equal(intake.goal.autonomy_mode, "execute_destructive_with_approval");
+    assert.equal(intake.goal.metadata.patient_zero_control_eligible, true);
+    assert.equal(intake.goal.metadata.patient_zero_effective_autonomy_mode, "execute_destructive_with_approval");
+    assert.equal(intake.goal.metadata.patient_zero_effective_permission_profile, "high_risk");
+  } finally {
+    await session.client.close().catch(() => {});
+    await ollama.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("autonomy.command auto-spawns matched SMEs and folds their bounded workstreams into the plan", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-command-specialist-"));
   const dbPath = path.join(tempDir, "hub.sqlite");

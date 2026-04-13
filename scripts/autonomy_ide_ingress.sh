@@ -14,6 +14,7 @@ Options:
   --thread-title <text>  TriChat thread title to mirror into.
   --risk <tier>          low | medium | high | critical.
   --mode <mode>          observe | recommend | stage | execute_bounded | execute_destructive_with_approval.
+                         Omit to use the control-plane default (Patient Zero elevates this automatically).
   --tag <text>           Add a goal tag. Repeatable.
   --accept <text>        Add an acceptance criterion. Repeatable.
   --constraint <text>    Add a constraint. Repeatable.
@@ -33,7 +34,7 @@ SESSION_ID=""
 THREAD_ID="${TRICHAT_AUTONOMY_INGRESS_THREAD_ID:-}"
 THREAD_TITLE="${TRICHAT_AUTONOMY_INGRESS_THREAD_TITLE:-}"
 RISK_TIER="${TRICHAT_AUTONOMY_COMMAND_RISK_TIER:-medium}"
-AUTONOMY_MODE="${TRICHAT_AUTONOMY_COMMAND_MODE:-execute_bounded}"
+AUTONOMY_MODE="${TRICHAT_AUTONOMY_COMMAND_MODE:-}"
 DRY_RUN=0
 START_DAEMON=1
 ENSURE_BOOTSTRAP=1

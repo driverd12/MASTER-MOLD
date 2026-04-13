@@ -433,6 +433,219 @@ test("patient.zero arms and disarms explicit elevated local control with an oper
   }
 });
 
+test("patient.zero elevates the effective default permission profile for undeclared sessions while armed", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-control-plane-patient-zero-defaults-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(tempDir, dbPath, {
+    MCP_PRIVILEGED_EXEC_DRY_RUN: "1",
+    MCP_PRIVILEGED_EXEC_TEST_ACCOUNT_EXISTS: "1",
+    MCP_PRIVILEGED_EXEC_TEST_SECRET: "integration-secret",
+  });
+  try {
+    const before = await callTool(client, "permission.profile", {});
+    assert.equal(before.summary.default_profile, "bounded_execute");
+    assert.equal(before.summary.effective_default_profile, "bounded_execute");
+
+    const task = await callTool(client, "task.create", {
+      mutation: nextMutation("patient-zero-defaults", "task.create", () => mutationCounter++),
+      objective: "Execute a high-risk local control slice",
+      permission_profile: "high_risk",
+      priority: 95,
+      tags: ["patient-zero", "high-risk"],
+    });
+
+    const boundedSession = await callTool(client, "agent.session_open", {
+      mutation: nextMutation("patient-zero-defaults", "agent.session_open.before", () => mutationCounter++),
+      agent_id: "codex",
+      client_kind: "integration-test",
+      display_name: "codex inherited default before Patient Zero",
+      status: "idle",
+    });
+
+    const worklistBefore = await callTool(client, "agent.worklist", {
+      session_id: boundedSession.session.session_id,
+      include_ineligible: true,
+      limit: 10,
+    });
+    assert.equal(worklistBefore.eligible_count, 0);
+    assert.ok(
+      worklistBefore.ineligible_tasks.some(
+        (entry) =>
+          entry.task_id === task.task.task_id &&
+          entry.session_permission_profile_id === "bounded_execute" &&
+          entry.task_permission_profile_id === "high_risk"
+      )
+    );
+
+    await callTool(client, "patient.zero", {
+      action: "enable",
+      mutation: nextMutation("patient-zero-defaults", "patient.zero.enable", () => mutationCounter++),
+      source_client: "integration-test",
+      source_agent: "operator",
+    });
+
+    const elevated = await callTool(client, "permission.profile", {});
+    assert.equal(elevated.summary.default_profile, "bounded_execute");
+    assert.equal(elevated.summary.effective_default_profile, "high_risk");
+
+    const resolved = await callTool(client, "permission.profile", {
+      action: "resolve",
+      session_id: boundedSession.session.session_id,
+    });
+    assert.equal(resolved.resolved_profile_id, "high_risk");
+    assert.equal(resolved.chain.default_profile, "high_risk");
+    assert.equal(resolved.chain.persisted_default_profile, "bounded_execute");
+
+    const elevatedSession = await callTool(client, "agent.session_open", {
+      mutation: nextMutation("patient-zero-defaults", "agent.session_open.after", () => mutationCounter++),
+      agent_id: "cursor",
+      client_kind: "integration-test",
+      display_name: "cursor inherited default after Patient Zero",
+      status: "idle",
+    });
+
+    const worklistAfter = await callTool(client, "agent.worklist", {
+      session_id: elevatedSession.session.session_id,
+      include_ineligible: true,
+      limit: 10,
+    });
+    assert.equal(worklistAfter.eligible_count, 1);
+    assert.equal(worklistAfter.tasks[0].task_id, task.task.task_id);
+
+    await callTool(client, "patient.zero", {
+      action: "disable",
+      mutation: nextMutation("patient-zero-defaults", "patient.zero.disable", () => mutationCounter++),
+      source_client: "integration-test",
+      source_agent: "operator",
+    });
+
+    const disabled = await callTool(client, "permission.profile", {});
+    assert.equal(disabled.summary.effective_default_profile, "bounded_execute");
+  } finally {
+    await closeClient(client);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("patient.zero full-control eligible goals dispatch aggressively only while armed", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-control-plane-patient-zero-dispatch-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  let mutationCounter = 0;
+
+  const { client } = await openClient(tempDir, dbPath, {
+    MCP_PRIVILEGED_EXEC_DRY_RUN: "1",
+    MCP_PRIVILEGED_EXEC_TEST_ACCOUNT_EXISTS: "1",
+    MCP_PRIVILEGED_EXEC_TEST_SECRET: "integration-secret",
+  });
+  try {
+    await callTool(client, "patient.zero", {
+      action: "enable",
+      mutation: nextMutation("patient-zero-dispatch", "patient.zero.enable", () => mutationCounter++),
+      source_client: "integration-test",
+      source_agent: "operator",
+    });
+
+    const elevatedGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation("patient-zero-dispatch", "goal.create.enabled", () => mutationCounter++),
+      title: "Patient Zero elevated dispatch",
+      objective: "Dispatch a mutation worker without a policy gate while Patient Zero is armed",
+      status: "active",
+      autonomy_mode: "execute_destructive_with_approval",
+      acceptance_criteria: ["The mutation worker dispatches without a policy gate while Patient Zero remains armed."],
+      metadata: {
+        patient_zero_control_eligible: true,
+      },
+    });
+
+    const elevatedPlan = await callTool(client, "plan.create", {
+      mutation: nextMutation("patient-zero-dispatch", "plan.create.enabled", () => mutationCounter++),
+      goal_id: elevatedGoal.goal.goal_id,
+      title: "Patient Zero aggressive plan",
+      summary: "Dispatch directly while Patient Zero remains armed",
+      selected: true,
+      steps: [
+        {
+          step_id: "pz-worker",
+          seq: 1,
+          title: "Run the elevated mutation worker",
+          step_kind: "mutation",
+          executor_kind: "worker",
+          input: {
+            objective: "Patient Zero aggressive worker execution",
+            project_dir: ".",
+            priority: 5,
+            tags: ["patient-zero", "aggressive"],
+          },
+        },
+      ],
+    });
+
+    const elevatedDispatch = await callTool(client, "plan.dispatch", {
+      mutation: nextMutation("patient-zero-dispatch", "plan.dispatch.enabled", () => mutationCounter++),
+      plan_id: elevatedPlan.plan.plan_id,
+    });
+    assert.equal(elevatedDispatch.blocked_count, 0);
+    assert.equal(elevatedDispatch.dispatched_count, 1);
+    assert.equal(elevatedDispatch.results[0].action, "task_created");
+
+    await callTool(client, "patient.zero", {
+      action: "disable",
+      mutation: nextMutation("patient-zero-dispatch", "patient.zero.disable", () => mutationCounter++),
+      source_client: "integration-test",
+      source_agent: "operator",
+    });
+
+    const boundedGoal = await callTool(client, "goal.create", {
+      mutation: nextMutation("patient-zero-dispatch", "goal.create.disabled", () => mutationCounter++),
+      title: "Patient Zero disabled dispatch",
+      objective: "Require the policy gate once Patient Zero is disarmed",
+      status: "active",
+      autonomy_mode: "execute_destructive_with_approval",
+      acceptance_criteria: ["The mutation worker requires approval once Patient Zero is disarmed."],
+      metadata: {
+        patient_zero_control_eligible: true,
+      },
+    });
+
+    const boundedPlan = await callTool(client, "plan.create", {
+      mutation: nextMutation("patient-zero-dispatch", "plan.create.disabled", () => mutationCounter++),
+      goal_id: boundedGoal.goal.goal_id,
+      title: "Patient Zero strict fallback plan",
+      summary: "Require approval once Patient Zero is no longer armed",
+      selected: true,
+      steps: [
+        {
+          step_id: "pz-worker-blocked",
+          seq: 1,
+          title: "Block the mutation worker after disarm",
+          step_kind: "mutation",
+          executor_kind: "worker",
+          input: {
+            objective: "Patient Zero strict worker execution",
+            project_dir: ".",
+            priority: 5,
+            tags: ["patient-zero", "strict"],
+          },
+        },
+      ],
+    });
+
+    const boundedDispatch = await callTool(client, "plan.dispatch", {
+      mutation: nextMutation("patient-zero-dispatch", "plan.dispatch.disabled", () => mutationCounter++),
+      plan_id: boundedPlan.plan.plan_id,
+    });
+    assert.equal(boundedDispatch.blocked_count, 1);
+    assert.equal(boundedDispatch.dispatched_count, 0);
+    assert.equal(boundedDispatch.results[0].action, "approval_required");
+    assert.equal(boundedDispatch.results[0].policy_profile, "strict");
+  } finally {
+    await closeClient(client);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("privileged.exec only runs when Patient Zero is armed and logs every privileged action", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-control-plane-privileged-"));
   const dbPath = path.join(tempDir, "hub.sqlite");

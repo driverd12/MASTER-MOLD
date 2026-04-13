@@ -3,12 +3,19 @@ import {
   extractBudgetUsage,
   normalizePermissionProfileId,
   permissionProfileAllowsRequirement,
-  resolveInheritedPermissionProfileId,
   type BudgetUsageRecord,
   type FeatureFlagId,
   type PermissionProfileId,
 } from "./control_plane.js";
-import { Storage, type AgentSessionRecord, type GoalRecord, type PlanRecord, type PlanStepRecord, type TaskRecord } from "./storage.js";
+import {
+  Storage,
+  type AgentSessionRecord,
+  type GoalAutonomyMode,
+  type GoalRecord,
+  type PlanRecord,
+  type PlanStepRecord,
+  type TaskRecord,
+} from "./storage.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -67,15 +74,48 @@ function readDeclaredPermissionProfile(...sources: unknown[]): PermissionProfile
   return null;
 }
 
-export function resolveGoalPermissionProfileId(storage: Storage, goal: GoalRecord | null) {
+export function isPatientZeroExecutionOverrideEnabled(storage: Storage) {
+  const patientZero = storage.getPatientZeroState();
+  return patientZero.enabled && patientZero.autonomy_enabled;
+}
+
+export function resolveEffectiveDefaultPermissionProfileId(
+  storage: Storage,
+  state: ReturnType<Storage["getPermissionProfilesState"]> = storage.getPermissionProfilesState()
+) {
+  return isPatientZeroExecutionOverrideEnabled(storage) ? "high_risk" : state.default_profile;
+}
+
+export function resolveEffectiveAutonomyMode(
+  storage: Storage,
+  autonomyMode: GoalAutonomyMode | null | undefined
+): GoalAutonomyMode {
+  if (autonomyMode) {
+    return autonomyMode;
+  }
+  return isPatientZeroExecutionOverrideEnabled(storage)
+    ? "execute_destructive_with_approval"
+    : "execute_bounded";
+}
+
+function resolveInheritedPermissionProfileIdForStorage(storage: Storage, ...candidates: unknown[]): PermissionProfileId {
   const state = storage.getPermissionProfilesState();
-  return resolveInheritedPermissionProfileId(state, goal?.metadata?.permission_profile);
+  for (const candidate of candidates) {
+    const normalized = normalizePermissionProfileId(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return resolveEffectiveDefaultPermissionProfileId(storage, state);
+}
+
+export function resolveGoalPermissionProfileId(storage: Storage, goal: GoalRecord | null) {
+  return resolveInheritedPermissionProfileIdForStorage(storage, goal?.metadata?.permission_profile);
 }
 
 export function resolvePlanPermissionProfileId(storage: Storage, plan: PlanRecord | null, goal?: GoalRecord | null) {
-  const state = storage.getPermissionProfilesState();
-  return resolveInheritedPermissionProfileId(
-    state,
+  return resolveInheritedPermissionProfileIdForStorage(
+    storage,
     plan?.metadata?.permission_profile,
     goal?.metadata?.permission_profile
   );
@@ -87,9 +127,8 @@ export function resolvePlanStepPermissionProfileId(
   plan?: PlanRecord | null,
   goal?: GoalRecord | null
 ) {
-  const state = storage.getPermissionProfilesState();
-  return resolveInheritedPermissionProfileId(
-    state,
+  return resolveInheritedPermissionProfileIdForStorage(
+    storage,
     step?.metadata?.permission_profile,
     isRecord(step?.input) ? step!.input.permission_profile : null,
     plan?.metadata?.permission_profile,
@@ -110,13 +149,12 @@ function resolveTaskPlanContext(storage: Storage, task: TaskRecord) {
 }
 
 export function resolveTaskPermissionProfileId(storage: Storage, task: TaskRecord | null) {
-  const state = storage.getPermissionProfilesState();
   if (!task) {
-    return state.default_profile;
+    return resolveEffectiveDefaultPermissionProfileId(storage);
   }
   const context = resolveTaskPlanContext(storage, task);
-  return resolveInheritedPermissionProfileId(
-    state,
+  return resolveInheritedPermissionProfileIdForStorage(
+    storage,
     task.metadata?.permission_profile,
     task.payload?.permission_profile,
     context.step?.metadata?.permission_profile,
@@ -127,9 +165,8 @@ export function resolveTaskPermissionProfileId(storage: Storage, task: TaskRecor
 }
 
 export function resolveSessionPermissionProfileId(storage: Storage, session: AgentSessionRecord | null) {
-  const state = storage.getPermissionProfilesState();
-  return resolveInheritedPermissionProfileId(
-    state,
+  return resolveInheritedPermissionProfileIdForStorage(
+    storage,
     session?.capabilities?.permission_profile,
     session?.metadata?.permission_profile
   );
@@ -153,8 +190,9 @@ export function resolvePermissionProfileChain(
   const task = params.task_id ? storage.getTaskById(params.task_id) : null;
   const session = params.session_id ? storage.getAgentSessionById(params.session_id) : null;
   const taskContext = task ? resolveTaskPlanContext(storage, task) : { plan: null, step: null, goal: null };
-  const resolved = resolveInheritedPermissionProfileId(
-    state,
+  const effectiveDefaultProfile = resolveEffectiveDefaultPermissionProfileId(storage, state);
+  const resolved = resolveInheritedPermissionProfileIdForStorage(
+    storage,
     session?.metadata?.permission_profile,
     session?.capabilities?.permission_profile,
     task?.metadata?.permission_profile,
@@ -181,7 +219,8 @@ export function resolvePermissionProfileChain(
       plan_declared: readDeclaredPermissionProfile(plan?.metadata, taskContext.plan?.metadata),
       goal_id: params.goal_id ?? taskContext.goal?.goal_id ?? null,
       goal_declared: readDeclaredPermissionProfile(goal?.metadata, taskContext.goal?.metadata),
-      default_profile: state.default_profile,
+      default_profile: effectiveDefaultProfile,
+      persisted_default_profile: state.default_profile,
     },
   };
 }

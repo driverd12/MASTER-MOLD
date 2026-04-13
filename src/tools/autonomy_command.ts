@@ -1,7 +1,12 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { type GoalRecord, type PlanRecord, Storage } from "../storage.js";
-import { mergeDeclaredPermissionProfile } from "../control_plane_runtime.js";
+import {
+  isPatientZeroExecutionOverrideEnabled,
+  mergeDeclaredPermissionProfile,
+  resolveEffectiveAutonomyMode,
+  resolveEffectiveDefaultPermissionProfileId,
+} from "../control_plane_runtime.js";
 import { routeObjectiveBackends } from "./model_router.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
 import { resolveSwarmProfile, summarizeMemoryPreflight, type SwarmProfileRecord } from "./swarm_profile.js";
@@ -42,7 +47,7 @@ export const autonomyCommandBaseSchema = z.object({
   goal_id: z.string().min(1).max(200).optional(),
   priority: z.number().int().min(0).max(100).optional(),
   risk_tier: goalRiskTierSchema.default("medium"),
-  autonomy_mode: autonomyModeSchema.default("execute_bounded"),
+  autonomy_mode: autonomyModeSchema.optional(),
   acceptance_criteria: z.array(z.string().min(1)).optional(),
   constraints: z.array(z.string().min(1)).optional(),
   assumptions: z.array(z.string().min(1)).optional(),
@@ -276,7 +281,23 @@ export async function autonomyCommand(
         source_model: input.source_model,
         source_agent: input.source_agent ?? "ring-leader",
       };
-      const intakeMetadata = mergeDeclaredPermissionProfile(input.metadata ?? {}, input.permission_profile);
+      const patientZeroExecutionOverride = isPatientZeroExecutionOverrideEnabled(storage);
+      const effectiveAutonomyMode = resolveEffectiveAutonomyMode(storage, input.autonomy_mode);
+      const effectiveDefaultPermissionProfile = resolveEffectiveDefaultPermissionProfileId(storage);
+      const patientZeroFullControlDefaultsApplied = patientZeroExecutionOverride && !input.autonomy_mode;
+      const intakeMetadata = mergeDeclaredPermissionProfile(
+        {
+          ...(input.metadata ?? {}),
+          ...(patientZeroFullControlDefaultsApplied
+            ? {
+                patient_zero_control_eligible: true,
+                patient_zero_effective_autonomy_mode: effectiveAutonomyMode,
+                patient_zero_effective_permission_profile: input.permission_profile ?? effectiveDefaultPermissionProfile,
+              }
+            : {}),
+        },
+        input.permission_profile
+      );
       const title = input.title?.trim() || deriveTitle(input.objective);
       const acceptanceCriteria = input.acceptance_criteria?.length
         ? dedupeStrings(input.acceptance_criteria)
@@ -386,7 +407,7 @@ export async function autonomyCommand(
         status: "active",
         priority: input.priority,
         risk_tier: input.risk_tier,
-        autonomy_mode: input.autonomy_mode,
+        autonomy_mode: effectiveAutonomyMode,
         target_entity_type: input.target_entity_type,
         target_entity_id: input.target_entity_id,
         acceptance_criteria: acceptanceCriteria,
@@ -547,6 +568,9 @@ export async function autonomyCommand(
           objective: input.objective,
           compiled_plan_id: compiledPlanId,
           compile_objective: input.compile_objective,
+          effective_autonomy_mode: effectiveAutonomyMode,
+          effective_permission_profile: input.permission_profile ?? effectiveDefaultPermissionProfile,
+          patient_zero_full_control_defaults_applied: patientZeroFullControlDefaultsApplied,
           execution_ok: readBoolean(execution.ok),
           goal_autorun_daemon_action: daemonAction,
           matched_specialist_domains: matchedDomains,
@@ -563,6 +587,9 @@ export async function autonomyCommand(
         ok: true,
         objective: input.objective,
         title,
+        effective_autonomy_mode: effectiveAutonomyMode,
+        effective_permission_profile: input.permission_profile ?? effectiveDefaultPermissionProfile,
+        patient_zero_full_control_defaults_applied: patientZeroFullControlDefaultsApplied,
         goal: goalAfter,
         plan: planAfter,
         bootstrap: bootstrapResult,

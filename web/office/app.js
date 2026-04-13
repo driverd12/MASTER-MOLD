@@ -10,6 +10,7 @@
     patientZeroNoteDraft: "",
     patientZeroNoteDirty: false,
     patientZeroLastSavedNote: "",
+    intakeModeDirty: false,
   };
 
   var els = {
@@ -22,6 +23,7 @@
     eventsView: document.querySelector("#events-view"),
     tabs: Array.prototype.slice.call(document.querySelectorAll(".tabs__button")),
     intakeForm: document.querySelector("#intake-form"),
+    intakeMode: document.querySelector("#intake-mode"),
     intakeResult: document.querySelector("#intake-result"),
     agentDetail: document.querySelector("#agent-detail"),
     refreshButton: document.querySelector("#refresh-button"),
@@ -593,6 +595,7 @@
   function renderAll() {
     var patientZeroEnabled = !!(state.snapshot && state.snapshot.summary && state.snapshot.summary.patient_zero && state.snapshot.summary.patient_zero.enabled);
     setPatientZeroTone(patientZeroEnabled ? "enabled" : "disabled");
+    syncIntakeMode(patientZeroEnabled);
     renderSubtitle();
     renderStatusStrip();
     renderOfficeView();
@@ -609,6 +612,21 @@
       els.subtitle.textContent = state.snapshot
         ? "Thread " + state.snapshot.thread_id + " · data age " + relativeTime(state.snapshot.fetched_at_iso)
         : "Connecting to live MCP operator surface";
+    }
+  }
+
+  function syncIntakeMode(patientZeroEnabled) {
+    if (!els.intakeMode) {
+      return;
+    }
+    var autoOption = els.intakeMode.querySelector('option[value=""]');
+    if (autoOption) {
+      autoOption.textContent = patientZeroEnabled
+        ? "auto (Patient Zero full control)"
+        : "auto (bounded unless Patient Zero is armed)";
+    }
+    if (!state.intakeModeDirty) {
+      els.intakeMode.value = "";
     }
   }
 
@@ -781,7 +799,7 @@
         title: titleNode ? String(titleNode.value || "").trim() : "",
         objective: objective,
         risk: riskNode ? riskNode.value : "medium",
-        mode: modeNode ? modeNode.value : "execute_bounded",
+        mode: modeNode ? modeNode.value : "",
         dry_run: dryRunNode ? !!dryRunNode.checked : false,
       }),
     }).then(function (result) {
@@ -801,6 +819,11 @@
         submitIntake(event).catch(function (error) {
           setResultText(String(error));
         });
+      });
+    }
+    if (els.intakeMode) {
+      els.intakeMode.addEventListener("change", function () {
+        state.intakeModeDirty = String(els.intakeMode.value || "").trim().length > 0;
       });
     }
     if (els.refreshButton) {

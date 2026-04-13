@@ -20,6 +20,7 @@ Preferred operator-facing language:
 - `office council` for the multi-agent orchestration layer
 - `Patient Zero` for the fully armed local execution posture
   Local-first autonomy is considered armed when self-drive, autopilot execution, local agents, and terminal tooling are ready; optional bridge runtimes can remain degraded without disarming the core local autonomy fabric.
+  While Patient Zero remains armed, undeclared IDE/CLI intake defaults also elevate: the effective permission profile becomes `high_risk`, and autonomy ingress defaults move from bounded execution to the elevated local-control lane unless the operator explicitly picks a lower mode.
 
 ## Office TUI and Council Shells
 

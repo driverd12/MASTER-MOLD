@@ -7,6 +7,7 @@ import {
   buildBudgetUsageFromBudget,
   evaluateFeatureFlagForStorage,
   recordBudgetLedgerUsage,
+  resolveEffectiveDefaultPermissionProfileId,
   resolvePermissionProfileChain,
 } from "../control_plane_runtime.js";
 import { Storage } from "../storage.js";
@@ -184,9 +185,13 @@ function mergeFeatureFlagPatches(storage: Storage, patches: z.infer<typeof featu
 export function permissionProfileControl(storage: Storage, input: z.infer<typeof permissionProfileSchema>) {
   if (input.action === "status") {
     const state = storage.getPermissionProfilesState();
+    const effectiveDefaultProfile = resolveEffectiveDefaultPermissionProfileId(storage, state);
     return {
       state,
-      summary: summarizePermissionProfiles({ state }),
+      summary: {
+        ...summarizePermissionProfiles({ state }),
+        effective_default_profile: effectiveDefaultProfile,
+      },
       source: "permission.profile",
     };
   }
@@ -199,13 +204,17 @@ export function permissionProfileControl(storage: Storage, input: z.infer<typeof
       task_id: input.task_id,
       session_id: input.session_id,
     });
+    const effectiveDefaultProfile = resolveEffectiveDefaultPermissionProfileId(storage, resolved.state);
     return {
       ...resolved,
-      summary: summarizePermissionProfiles({
-        state: resolved.state,
-        session_profile_ids: resolved.chain.session_declared ? [resolved.chain.session_declared] : [],
-        task_profile_ids: resolved.chain.task_declared ? [resolved.chain.task_declared] : [],
-      }),
+      summary: {
+        ...summarizePermissionProfiles({
+          state: resolved.state,
+          session_profile_ids: resolved.chain.session_declared ? [resolved.chain.session_declared] : [],
+          task_profile_ids: resolved.chain.task_declared ? [resolved.chain.task_declared] : [],
+        }),
+        effective_default_profile: effectiveDefaultProfile,
+      },
       source: "permission.profile",
     };
   }
@@ -222,7 +231,10 @@ export function permissionProfileControl(storage: Storage, input: z.infer<typeof
       });
       return {
         state,
-        summary: summarizePermissionProfiles({ state }),
+        summary: {
+          ...summarizePermissionProfiles({ state }),
+          effective_default_profile: resolveEffectiveDefaultPermissionProfileId(storage, state),
+        },
         source: "permission.profile",
       };
     },

@@ -11,7 +11,7 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { Storage, type GoalRecord, type PlanRecord, type PlanStepRecord } from "./storage.js";
 import { listToolCatalogEntries, registerToolCatalogEntry } from "./control_plane.js";
-import { mergeDeclaredPermissionProfile } from "./control_plane_runtime.js";
+import { isPatientZeroExecutionOverrideEnabled, mergeDeclaredPermissionProfile } from "./control_plane_runtime.js";
 import {
   desktopAct,
   desktopActSchema,
@@ -752,6 +752,10 @@ function normalizeExecutionPolicyProfile(value: unknown): ExecutionPolicyProfile
   return normalized === "strict" || normalized === "bounded" || normalized === "aggressive" ? normalized : null;
 }
 
+function goalUsesPatientZeroFullControlDefaults(goal: GoalRecord | null) {
+  return Boolean(goal && isRecord(goal.metadata) && goal.metadata.patient_zero_control_eligible === true);
+}
+
 function resolvePlanDispatchPolicyProfile(
   goal: GoalRecord | null,
   plan: PlanRecord,
@@ -772,6 +776,9 @@ function resolvePlanDispatchPolicyProfile(
   const goalProfile = goal ? normalizeExecutionPolicyProfile(goal.metadata.policy_profile) : null;
   if (goalProfile) {
     return goalProfile;
+  }
+  if (goalUsesPatientZeroFullControlDefaults(goal) && isPatientZeroExecutionOverrideEnabled(storage)) {
+    return "aggressive";
   }
   if (goal?.autonomy_mode === "execute_bounded") {
     return "bounded";

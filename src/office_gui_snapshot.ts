@@ -927,7 +927,9 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
       },
       control_plane: {
         tool_catalog_count: parseAnyInt(kernelToolCatalog.total_count),
-        permission_default_profile: String(kernelPermissionProfiles.default_profile ?? "n/a"),
+        permission_default_profile: String(
+          kernelPermissionProfiles.effective_default_profile ?? kernelPermissionProfiles.default_profile ?? "n/a"
+        ),
         projected_cost_usd: parseAnyFloat(kernelBudgetLedger.projected_cost_usd),
         actual_cost_usd: parseAnyFloat(kernelBudgetLedger.actual_cost_usd),
         warm_cache_enabled: Boolean(asDict(kernelWarmCache.state).enabled || kernelWarmCache.enabled),
