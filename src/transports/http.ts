@@ -379,12 +379,68 @@ function parseOfficeSnapshotPayload(raw: string): OfficeSnapshotPayload | null {
   }
 }
 
-function parseJsonText(raw: string) {
+function parseJsonCandidate(raw: string): { ok: true; value: unknown } | { ok: false } {
   try {
-    return JSON.parse(raw);
+    return { ok: true, value: JSON.parse(raw) };
   } catch {
+    return { ok: false };
+  }
+}
+
+export function parseJsonText(raw: string) {
+  const text = String(raw ?? "").trim();
+  if (!text) {
     return null;
   }
+
+  const direct = parseJsonCandidate(text);
+  if (direct.ok) {
+    if (typeof direct.value === "string") {
+      const nested = parseJsonCandidate(direct.value.trim());
+      if (nested.ok) {
+        return nested.value;
+      }
+    }
+    return direct.value;
+  }
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  for (let index = 0; index < lines.length; index += 1) {
+    const candidate = lines.slice(index).join("\n");
+    const parsed = parseJsonCandidate(candidate);
+    if (parsed.ok) {
+      if (typeof parsed.value === "string") {
+        const nested = parseJsonCandidate(parsed.value.trim());
+        if (nested.ok) {
+          return nested.value;
+        }
+      }
+      return parsed.value;
+    }
+  }
+
+  const objectStart = text.indexOf("{");
+  const objectEnd = text.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    const parsed = parseJsonCandidate(text.slice(objectStart, objectEnd + 1));
+    if (parsed.ok) {
+      return parsed.value;
+    }
+  }
+
+  const listStart = text.indexOf("[");
+  const listEnd = text.lastIndexOf("]");
+  if (listStart >= 0 && listEnd > listStart) {
+    const parsed = parseJsonCandidate(text.slice(listStart, listEnd + 1));
+    if (parsed.ok) {
+      return parsed.value;
+    }
+  }
+
+  return null;
 }
 
 function buildOfficeMutation(action: string) {
@@ -510,6 +566,29 @@ async function readOfficeSnapshotForRefresh(
   options: HttpOptions,
   input: { threadId: string; theme: string; forceLive: boolean }
 ) {
+  const readRawFallbackSnapshot = async () => {
+    if (!options.officeRawSnapshot) {
+      return null;
+    }
+    const rawFallback = await Promise.resolve(
+      options.officeRawSnapshot({
+        threadId: input.threadId,
+        theme: input.theme,
+      })
+    );
+    if (rawFallback && typeof rawFallback === "object" && !Array.isArray(rawFallback)) {
+      return buildOfficeGuiSnapshot(rawFallback as Record<string, unknown>, { theme: input.theme });
+    }
+    return null;
+  };
+
+  if (officeSnapshotRefreshMode() === "stdio") {
+    const rawPreferred = await readRawFallbackSnapshot();
+    if (rawPreferred) {
+      return rawPreferred;
+    }
+  }
+
   if (officeSnapshotRefreshMode() === "stdio" && fs.existsSync(stdioServerEntry)) {
     const rawArgs = {
       thread_id: input.threadId,
@@ -526,35 +605,62 @@ async function readOfficeSnapshotForRefresh(
       include_runtime_workers: true,
       metadata: input.forceLive ? { source: "http.live" } : undefined,
     };
-    const result = await runLocalCommand(
-      process.execPath,
-      [
-        mcpToolCallScript,
-        "--tool",
-        "office.snapshot",
-        "--args",
-        JSON.stringify(rawArgs),
-        "--transport",
-        "stdio",
-        "--stdio-command",
+    let result: OfficeSnapshotCommandResult;
+    try {
+      result = await runLocalCommand(
         process.execPath,
-        "--stdio-args",
-        "dist/server.js",
-        "--cwd",
-        repoRoot,
-      ],
-      {
-        cwd: repoRoot,
-        env: officeSnapshotChildEnv(),
-        timeoutMs: officeSnapshotNodeTimeoutMs(),
+        [
+          mcpToolCallScript,
+          "--tool",
+          "office.snapshot",
+          "--args",
+          JSON.stringify(rawArgs),
+          "--transport",
+          "stdio",
+          "--stdio-command",
+          process.execPath,
+          "--stdio-args",
+          "dist/server.js",
+          "--cwd",
+          repoRoot,
+        ],
+        {
+          cwd: repoRoot,
+          env: officeSnapshotChildEnv(),
+          timeoutMs: officeSnapshotNodeTimeoutMs(),
+        }
+      );
+    } catch (error) {
+      const rawFallback = await readRawFallbackSnapshot();
+      if (rawFallback) {
+        return rawFallback;
       }
-    );
+      throw error;
+    }
     if (result.code !== 0) {
+      const rawFallback = await readRawFallbackSnapshot();
+      if (rawFallback) {
+        return rawFallback;
+      }
       throw new Error(result.stderr.trim() || `office snapshot child exited with code ${result.code}`);
     }
     const rawPayload = parseJsonText(result.stdout);
     if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
-      throw new Error("office snapshot child returned a non-object payload");
+      const rawFallback = await readRawFallbackSnapshot();
+      if (rawFallback) {
+        return rawFallback;
+      }
+    }
+    if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
+      const preview = String(result.stdout || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 200);
+      throw new Error(
+        preview
+          ? `office snapshot child returned a non-object payload: ${preview}`
+          : "office snapshot child returned a non-object payload"
+      );
     }
     return buildOfficeGuiSnapshot(rawPayload as Record<string, unknown>, { theme: input.theme });
   }

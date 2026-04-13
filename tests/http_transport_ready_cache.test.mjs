@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { startHttpTransport } from "../dist/transports/http.js";
+import { parseJsonText, startHttpTransport } from "../dist/transports/http.js";
 
 function officeHttpCachePath(cacheDir, cacheFile) {
   return path.join(cacheDir, "web", cacheFile);
@@ -14,6 +14,19 @@ function officeHttpCachePath(cacheDir, cacheFile) {
 function officeDashboardCachePath(cacheDir, cacheFile) {
   return path.join(cacheDir, "dashboard", cacheFile);
 }
+
+test("parseJsonText unwraps quoted JSON payloads from child tools", () => {
+  const wrapped = JSON.stringify(JSON.stringify({ ok: true, nested: { value: 7 } }));
+  assert.deepEqual(parseJsonText(wrapped), { ok: true, nested: { value: 7 } });
+});
+
+test("parseJsonText recovers a trailing JSON object from noisy child stdout", () => {
+  const noisy = ['warning: stale child preamble', '', '{"ok":true,"agents":[{"agent_id":"ring-leader"}]}'].join("\n");
+  assert.deepEqual(parseJsonText(noisy), {
+    ok: true,
+    agents: [{ agent_id: "ring-leader" }],
+  });
+});
 
 test("/ready falls back to the last successful cached snapshot when the live health snapshot stalls", { concurrency: false }, async () => {
   const previousTimeout = process.env.MCP_HTTP_READY_TIMEOUT_MS;

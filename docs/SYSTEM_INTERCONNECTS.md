@@ -321,7 +321,7 @@ flowchart TD
 - `/ready` is the authoritative HTTP readiness gate for the office launcher and automation wrappers.
 - `/health` is intentionally cheap and only proves that the listener is alive.
 - `/office/api/snapshot` serves cached snapshots by default and uses explicit live refreshes sparingly to avoid saturating the daemon.
-- The launchd HTTP runner sets `MCP_HTTP_OFFICE_SNAPSHOT_REFRESH_MODE=stdio`, so office GUI snapshot refreshes run through a separate STDIO child instead of blocking the long-lived HTTP event loop during SQLite-heavy reads.
+- The launchd HTTP runner sets `MCP_HTTP_OFFICE_SNAPSHOT_REFRESH_MODE=stdio`, but the office GUI now prefers a direct raw-snapshot-to-GUI transform when that lane is available and only falls back to the nested STDIO child when it must. This keeps the operator surface alive when the child lane is noisy or slow.
 - `scripts/agent_office_gui.mjs` is the cross-platform office launcher path for macOS, Linux, and win32. It prefers launchd on macOS when available and falls back to the detached Node HTTP runner everywhere else.
 - `Agent Office.app` and `Agentic Suite.app` are thin installed wrappers that invoke the Node launchers; they do not bypass the launcher logic or talk to the MCP HTTP listener directly.
 - `scripts/agentic_suite_launch.mjs` is the cross-platform suite/app launcher. It first ensures the office surface is available, then tries requested IDE windows, then reuses the office launcher for browser fallback, while `status` emits machine-readable readiness with next actions.
