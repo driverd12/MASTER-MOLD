@@ -51,6 +51,17 @@ function actorLabel(input: z.infer<typeof patientZeroSchema>) {
   return String(input.source_agent || input.source_client || "operator").trim() || "operator";
 }
 
+function ageSeconds(value: string | null | undefined) {
+  if (!value) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(0, (Date.now() - parsed) / 1000);
+}
+
 const PATIENT_ZERO_TERMINAL_TOOLKIT = ["codex", "claude", "cursor", "gemini", "gh"] as const;
 const PATIENT_ZERO_TERMINAL_ALLOWLIST = PATIENT_ZERO_TERMINAL_TOOLKIT.map((entry) => `${entry}`);
 const PATIENT_ZERO_BRIDGE_AGENT_IDS = ["codex", "claude", "cursor", "gemini", "github-copilot", "local-imprint"] as const;
@@ -89,10 +100,63 @@ function buildAutonomyControlStatus(storage: Storage) {
   const commandAllowlist = Array.isArray(autopilot.config.command_allowlist)
     ? autopilot.config.command_allowlist.map((entry) => String(entry ?? "").trim()).filter(Boolean)
     : [];
-  const bridgeToolkit = PATIENT_ZERO_BRIDGE_AGENT_IDS.map((agent_id) => ({
-    agent_id,
-    armed: specialistAgentIds.includes(agent_id),
-  }));
+  const providerBridgeDiagnostics = Array.isArray(maintainState?.provider_bridge_diagnostics)
+    ? maintainState.provider_bridge_diagnostics
+    : [];
+  const configuredIntervalSeconds = Number(maintainState?.interval_seconds ?? maintainRuntime.config.interval_seconds ?? 120);
+  const intervalSeconds = Number.isFinite(configuredIntervalSeconds) && configuredIntervalSeconds > 0 ? configuredIntervalSeconds : 120;
+  const providerBridgeGeneratedAt = String(maintainState?.last_provider_bridge_check_at ?? maintainState?.updated_at ?? "").trim() || null;
+  const providerBridgeDiagnosticsStale =
+    providerBridgeDiagnostics.length === 0 || ageSeconds(providerBridgeGeneratedAt) > Math.max(intervalSeconds * 3, 300);
+  const providerBridgeDiagnosticsByAgent = new Map<
+    string,
+    Array<{
+      status: string;
+      connected: boolean;
+    }>
+  >();
+  for (const entry of providerBridgeDiagnostics) {
+    const record = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+    const officeAgentId = String(record.office_agent_id ?? "").trim();
+    if (!officeAgentId) {
+      continue;
+    }
+    const bucket = providerBridgeDiagnosticsByAgent.get(officeAgentId) ?? [];
+    bucket.push({
+      status: String(record.status ?? "").trim().toLowerCase(),
+      connected: record.connected === true,
+    });
+    providerBridgeDiagnosticsByAgent.set(officeAgentId, bucket);
+  }
+  const bridgeToolkit = PATIENT_ZERO_BRIDGE_AGENT_IDS.map((agent_id) => {
+    const armed = specialistAgentIds.includes(agent_id);
+    const runtimeEntries = providerBridgeDiagnosticsByAgent.get(agent_id) ?? [];
+    const runtimeReady =
+      armed &&
+      !providerBridgeDiagnosticsStale &&
+      runtimeEntries.some((entry) => entry.connected || entry.status === "connected");
+    const runtimeStatus = !armed
+      ? "not-armed"
+      : providerBridgeDiagnosticsStale
+        ? providerBridgeDiagnostics.length > 0
+          ? "stale"
+          : "unknown"
+        : runtimeEntries.some((entry) => entry.connected || entry.status === "connected")
+          ? "connected"
+          : runtimeEntries.some((entry) => entry.status === "configured")
+            ? "configured"
+            : runtimeEntries.some((entry) => entry.status === "disconnected")
+              ? "disconnected"
+              : runtimeEntries.some((entry) => entry.status === "unavailable")
+                ? "unavailable"
+                : "unknown";
+    return {
+      agent_id,
+      armed,
+      runtime_ready: runtimeReady,
+      runtime_status: runtimeStatus,
+    };
+  });
   const localAgentToolkit = PATIENT_ZERO_LOCAL_AGENT_IDS.map((agent_id) => ({
     agent_id,
     armed: specialistAgentIds.includes(agent_id),
@@ -101,7 +165,9 @@ function buildAutonomyControlStatus(storage: Storage) {
     command,
     armed: commandAllowlist.some((entry) => entry === `${command}` || entry === `${command} `),
   }));
-  const bridgeToolkitReady = bridgeToolkit.every((entry) => entry.armed);
+  const bridgeToolkitConfigured = bridgeToolkit.every((entry) => entry.armed);
+  const bridgeRuntimeKnown = !providerBridgeDiagnosticsStale && providerBridgeDiagnostics.length > 0;
+  const bridgeToolkitReady = bridgeToolkit.every((entry) => entry.armed && entry.runtime_ready);
   const localAgentToolkitReady = localAgentToolkit.every((entry) => entry.armed);
   const terminalToolkitReady = terminalToolkit.every((entry) => entry.armed);
   return {
@@ -127,6 +193,9 @@ function buildAutonomyControlStatus(storage: Storage) {
       local_agents: localAgentToolkit,
       terminal_commands: terminalToolkit,
       bridge_toolkit_ready: bridgeToolkitReady,
+      bridge_toolkit_configured: bridgeToolkitConfigured,
+      bridge_runtime_known: bridgeRuntimeKnown,
+      bridge_diagnostics_stale: providerBridgeDiagnosticsStale,
       local_agent_spawn_ready: localAgentToolkitReady,
       terminal_toolkit_ready: terminalToolkitReady,
       imprint_ready: specialistAgentIds.includes("local-imprint"),
@@ -367,7 +436,7 @@ export function buildPatientZeroReport(storage: Storage) {
 
   const recentActivity = [
     `Autonomy: ${autonomyControl.autonomous_control_enabled ? "armed" : "advisory only"} · self-drive ${autonomyControl.maintain.self_drive_enabled ? "on" : "off"} · autopilot exec ${autonomyControl.autopilot.execute_enabled ? "on" : "off"}`,
-    `Toolkit: bridge ${autonomyControl.toolkit.bridge_toolkit_ready ? "ready" : "partial"} · local-agents ${autonomyControl.toolkit.local_agent_spawn_ready ? "ready" : "partial"} · terminal ${autonomyControl.toolkit.terminal_toolkit_ready ? "ready" : "partial"} · imprint ${autonomyControl.toolkit.imprint_ready ? "ready" : "off"}`,
+    `Toolkit: bridge ${autonomyControl.toolkit.bridge_toolkit_ready ? "runtime-ready" : autonomyControl.toolkit.bridge_runtime_known ? "runtime-partial" : "runtime-unknown"} · local-agents ${autonomyControl.toolkit.local_agent_spawn_ready ? "ready" : "partial"} · terminal ${autonomyControl.toolkit.terminal_toolkit_ready ? "ready" : "partial"} · imprint ${autonomyControl.toolkit.imprint_ready ? "ready" : "off"}`,
     ...(lastSelfDriveAt || lastSelfDriveGoalId
       ? [
           `Ingress: last autonomous mission ${compactText(

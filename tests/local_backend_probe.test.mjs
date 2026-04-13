@@ -1,7 +1,43 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
-import { probeLocalOllamaBackend, setLocalOllamaModelResidency } from "../dist/local_backend_probe.js";
+import {
+  canUseLocalOllamaCliForEndpoint,
+  probeLocalOllamaBackend,
+  setLocalOllamaModelResidency,
+} from "../dist/local_backend_probe.js";
+
+test("canUseLocalOllamaCliForEndpoint only allows the local CLI host", () => {
+  const originalOllamaHost = process.env.OLLAMA_HOST;
+  delete process.env.OLLAMA_HOST;
+  try {
+    assert.equal(canUseLocalOllamaCliForEndpoint("http://127.0.0.1:11434"), true);
+    assert.equal(canUseLocalOllamaCliForEndpoint("http://localhost:11434"), true);
+    assert.equal(canUseLocalOllamaCliForEndpoint("http://127.0.0.1:31337"), false);
+    assert.equal(canUseLocalOllamaCliForEndpoint("http://10.0.0.8:11434"), false);
+  } finally {
+    if (originalOllamaHost === undefined) {
+      delete process.env.OLLAMA_HOST;
+    } else {
+      process.env.OLLAMA_HOST = originalOllamaHost;
+    }
+  }
+});
+
+test("canUseLocalOllamaCliForEndpoint respects OLLAMA_HOST overrides", () => {
+  const originalOllamaHost = process.env.OLLAMA_HOST;
+  process.env.OLLAMA_HOST = "http://localhost:22434";
+  try {
+    assert.equal(canUseLocalOllamaCliForEndpoint("http://127.0.0.1:22434"), true);
+    assert.equal(canUseLocalOllamaCliForEndpoint("http://localhost:11434"), false);
+  } finally {
+    if (originalOllamaHost === undefined) {
+      delete process.env.OLLAMA_HOST;
+    } else {
+      process.env.OLLAMA_HOST = originalOllamaHost;
+    }
+  }
+});
 
 test("probeLocalOllamaBackend measures real service and benchmark data", async () => {
   const requests = [];
@@ -88,6 +124,8 @@ test("probeLocalOllamaBackend measures real service and benchmark data", async (
     assert.equal(result.resident_expires_at, "2026-03-30T02:30:00Z");
     assert.ok(result.resident_vram_gb !== null);
     assert.ok(result.resident_vram_gb > 1.9);
+    assert.equal(result.processor_summary, null);
+    assert.equal(result.gpu_offload_ratio, null);
     assert.equal(result.benchmark_attempted, true);
     assert.equal(result.benchmark_ok, true);
     assert.equal(result.benchmark_eval_count, 8);

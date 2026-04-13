@@ -78,6 +78,41 @@ function normalizeBaseUrl(value: string) {
   return value.replace(/\/+$/, "");
 }
 
+function normalizeOllamaCliBaseUrl(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "http://127.0.0.1:11434";
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    return normalizeBaseUrl(raw);
+  }
+  return normalizeBaseUrl(`http://${raw}`);
+}
+
+function normalizeComparableLoopbackUrl(value: string) {
+  const parsed = new URL(value);
+  const host = parsed.hostname.trim().toLowerCase();
+  const comparableHost =
+    host === "localhost" || host === "::1" || host === "[::1]" ? "127.0.0.1" : host;
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  return `${parsed.protocol}//${comparableHost}:${port}`;
+}
+
+export function canUseLocalOllamaCliForEndpoint(endpoint: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.trim().toLowerCase();
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+    return false;
+  }
+  const cliBaseUrl = normalizeOllamaCliBaseUrl(process.env.OLLAMA_HOST);
+  return normalizeComparableLoopbackUrl(parsed.toString()) === normalizeComparableLoopbackUrl(cliBaseUrl);
+}
+
 async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number) {
   const startedAt = performance.now();
   const response = await fetch(url, {
@@ -111,8 +146,15 @@ function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? Number(value) : null;
 }
 
-function parseOllamaProcessorSummary(modelId: string) {
-  const result = spawnSync("ollama", ["ps"], { encoding: "utf8" });
+function parseOllamaProcessorSummary(endpoint: string, modelId: string) {
+  if (!canUseLocalOllamaCliForEndpoint(endpoint)) {
+    return { processor_summary: null, gpu_offload_ratio: null };
+  }
+  const result = spawnSync("ollama", ["ps"], {
+    encoding: "utf8",
+    timeout: 2500,
+    maxBuffer: 1024 * 1024,
+  });
   if (result.status !== 0) {
     return { processor_summary: null, gpu_offload_ratio: null };
   }
@@ -241,7 +283,7 @@ export async function probeLocalOllamaBackend(input: {
         residentVramBytes === null ? null : Number((residentVramBytes / 1024 / 1024 / 1024).toFixed(4));
       residentContextLength = readNumber(residentMatch.context_length);
       residentExpiresAt = readString(residentMatch.expires_at);
-      const processorProbe = parseOllamaProcessorSummary(input.model_id);
+      const processorProbe = parseOllamaProcessorSummary(baseUrl, input.model_id);
       processorSummary = processorProbe.processor_summary;
       gpuOffloadRatio = processorProbe.gpu_offload_ratio;
     }

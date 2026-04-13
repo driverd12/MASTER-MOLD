@@ -362,7 +362,7 @@ test("patient.zero arms and disarms explicit elevated local control with an oper
     assert.equal(armed.summary.posture, "armed");
     assert.equal(typeof armed.summary.browser_ready, "boolean");
     assert.equal(armed.summary.root_shell_enabled, true);
-    assert.equal(armed.summary.autonomous_control_enabled, true);
+    assert.equal(armed.summary.autonomous_control_enabled, false);
     assert.equal(armed.summary.full_control_authority, false);
     assert.equal(armed.summary.last_operator_note, "Taking over while the operator steps away.");
     assert.equal(armed.desktop_control.state.enabled, true);
@@ -371,7 +371,9 @@ test("patient.zero arms and disarms explicit elevated local control with an oper
     assert.equal(armed.desktop_control.state.allow_listen, true);
     assert.equal(armed.autonomy_control.maintain.self_drive_enabled, true);
     assert.equal(armed.autonomy_control.autopilot.execute_enabled, true);
-    assert.equal(armed.autonomy_control.toolkit.bridge_toolkit_ready, true);
+    assert.equal(armed.autonomy_control.toolkit.bridge_toolkit_ready, false);
+    assert.equal(armed.autonomy_control.toolkit.bridge_toolkit_configured, true);
+    assert.equal(armed.autonomy_control.toolkit.bridge_runtime_known, false);
     assert.equal(armed.autonomy_control.toolkit.local_agent_spawn_ready, true);
     assert.equal(armed.autonomy_control.toolkit.terminal_toolkit_ready, true);
     assert.equal(armed.autonomy_control.toolkit.imprint_ready, true);
