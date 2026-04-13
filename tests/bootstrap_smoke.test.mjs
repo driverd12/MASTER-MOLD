@@ -218,6 +218,19 @@ test("bootstrap_doctor.mjs includes Apple Silicon Ollama MLX readiness guidance"
   assert.match(doctorSource, /Apple Silicon MLX/, "doctor should expose an Apple Silicon MLX advisory section");
   assert.match(doctorSource, /qwen3\.5:35b-a3b-coding-nvfp4/, "doctor should mention the Ollama MLX preview coding model");
   assert.match(doctorSource, /0\.19\+/, "doctor should mention the Ollama 0.19 runtime floor for the MLX preview");
+  assert.match(doctorSource, /npm run ollama:mlx:preview/, "doctor should point to the guarded Apple Silicon setup command");
+});
+
+test("ollama MLX preview setup script is registered and Apple Silicon guarded", () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+  const scriptPath = path.join(REPO_ROOT, "scripts", "ollama_mlx_preview_setup.mjs");
+  const source = fs.readFileSync(scriptPath, "utf8");
+
+  assert.equal(packageJson.scripts["ollama:mlx:preview"], "node ./scripts/ollama_mlx_preview_setup.mjs");
+  assert.match(source, /process\.platform !== "darwin"/, "setup script should reject non-macOS hosts");
+  assert.match(source, /process\.arch !== "arm64"/, "setup script should reject non-Apple-Silicon hosts");
+  assert.match(source, /TRICHAT_OLLAMA_MODEL/, "setup script should wire the preferred local Ollama model");
+  assert.match(source, /qwen3\.5:35b-a3b-coding-nvfp4/, "setup script should target the MLX preview model");
 });
 
 test("bootstrap env pins are present and aligned with package metadata", () => {

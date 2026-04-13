@@ -368,7 +368,7 @@ function reportAppleSiliconMlxAdvisory() {
   }
 
   write(`  ${PASS} recommended model ${c.dim}(${recommendedModel})${c.reset}`);
-  write(`  ${c.dim}Upgrade path: install Ollama 0.19+, then run \`ollama pull ${recommendedModel}\` and point the local Ollama backend at that model.${c.reset}`);
+  write(`  ${c.dim}Setup path: after upgrading Ollama to 0.19+, run \`npm run ollama:mlx:preview\` on Apple Silicon to pull the model and set it as the preferred local Ollama backend.${c.reset}`);
 }
 
 function findManifestTool(name) {

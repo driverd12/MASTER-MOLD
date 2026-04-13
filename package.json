@@ -47,6 +47,7 @@
     "trichat:roster": "node ./scripts/trichat_roster.mjs",
     "trichat:doctor": "node ./scripts/run_sh.mjs ./scripts/trichat_doctor.sh",
     "mlx:setup": "node ./scripts/run_sh.mjs ./scripts/mlx_local_backend_setup.sh",
+    "ollama:mlx:preview": "node ./scripts/ollama_mlx_preview_setup.mjs",
     "trichat:bridges:test": "npm run test:bridges",
     "trichat:smoke": "node ./scripts/run_sh.mjs ./scripts/trichat_smoke.sh",
     "trichat:dogfood": "node ./scripts/trichat_dogfood.mjs",
