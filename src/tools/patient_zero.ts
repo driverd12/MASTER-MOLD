@@ -64,7 +64,7 @@ function ageSeconds(value: string | null | undefined) {
 
 const PATIENT_ZERO_TERMINAL_TOOLKIT = ["codex", "claude", "cursor", "gemini", "gh"] as const;
 const PATIENT_ZERO_TERMINAL_ALLOWLIST = PATIENT_ZERO_TERMINAL_TOOLKIT.map((entry) => `${entry}`);
-const PATIENT_ZERO_BRIDGE_AGENT_IDS = ["codex", "claude", "cursor", "gemini", "github-copilot", "local-imprint"] as const;
+const PATIENT_ZERO_BRIDGE_AGENT_IDS = ["codex", "claude", "cursor", "gemini", "github-copilot"] as const;
 const PATIENT_ZERO_LOCAL_AGENT_IDS = [
   "implementation-director",
   "research-director",
@@ -165,21 +165,31 @@ function buildAutonomyControlStatus(storage: Storage) {
     command,
     armed: commandAllowlist.some((entry) => entry === `${command}` || entry === `${command} `),
   }));
+  const bridgeRuntimeReadyCount = bridgeToolkit.filter((entry) => entry.runtime_ready).length;
   const bridgeToolkitConfigured = bridgeToolkit.every((entry) => entry.armed);
   const bridgeRuntimeKnown = !providerBridgeDiagnosticsStale && providerBridgeDiagnostics.length > 0;
-  const bridgeToolkitReady = bridgeToolkit.every((entry) => entry.armed && entry.runtime_ready);
+  const bridgeToolkitReady = bridgeRuntimeReadyCount > 0;
   const localAgentToolkitReady = localAgentToolkit.every((entry) => entry.armed);
   const terminalToolkitReady = terminalToolkit.every((entry) => entry.armed);
+  const maintainDaemonEnabled = Boolean(maintainState?.enabled);
+  const autopilotDaemonEnabled = Boolean(autopilot.expected_running);
+  const autonomyCoreReady =
+    maintainDaemonEnabled &&
+    maintainSelfDriveEnabled &&
+    autopilotDaemonEnabled &&
+    autopilotExecuteEnabled &&
+    localAgentToolkitReady &&
+    terminalToolkitReady;
   return {
     maintain: {
-      daemon_enabled: Boolean(maintainState?.enabled),
+      daemon_enabled: maintainDaemonEnabled,
       running: Boolean(maintainRuntime.running),
       self_drive_enabled: maintainSelfDriveEnabled,
       last_self_drive_at: maintainState?.last_self_drive_at ?? null,
       last_self_drive_goal_id: maintainState?.last_self_drive_goal_id ?? null,
     },
     autopilot: {
-      daemon_enabled: Boolean(autopilot.expected_running),
+      daemon_enabled: autopilotDaemonEnabled,
       running: Boolean(autopilot.running),
       execute_enabled: autopilotExecuteEnabled,
       away_mode: String(autopilot.config.away_mode ?? "normal"),
@@ -195,18 +205,14 @@ function buildAutonomyControlStatus(storage: Storage) {
       bridge_toolkit_ready: bridgeToolkitReady,
       bridge_toolkit_configured: bridgeToolkitConfigured,
       bridge_runtime_known: bridgeRuntimeKnown,
+      bridge_runtime_ready_count: bridgeRuntimeReadyCount,
       bridge_diagnostics_stale: providerBridgeDiagnosticsStale,
       local_agent_spawn_ready: localAgentToolkitReady,
       terminal_toolkit_ready: terminalToolkitReady,
       imprint_ready: specialistAgentIds.includes("local-imprint"),
       github_cli_ready: commandAllowlist.some((entry) => entry === "gh" || entry === "gh "),
     },
-    autonomous_control_enabled:
-      maintainSelfDriveEnabled &&
-      autopilotExecuteEnabled &&
-      bridgeToolkitReady &&
-      localAgentToolkitReady &&
-      terminalToolkitReady,
+    autonomous_control_enabled: autonomyCoreReady,
   };
 }
 
@@ -464,7 +470,7 @@ export function buildPatientZeroReport(storage: Storage) {
     "Keep the local control plane truthful, bounded, and ready for the next delegated objective.";
   const concern =
     !fullControlAuthority && summary.enabled
-      ? `Full-control posture is armed, but autonomy=${autonomyControl.autonomous_control_enabled ? "ready" : "not-ready"}, toolkit=${autonomyControl.toolkit.bridge_toolkit_ready && autonomyControl.toolkit.local_agent_spawn_ready && autonomyControl.toolkit.terminal_toolkit_ready ? "ready" : "not-ready"}, and root=${summary.root_shell_enabled ? "ready" : "not-ready"}.`
+      ? `Full-control posture is armed, but autonomy=${autonomyControl.autonomous_control_enabled ? "ready" : "not-ready"}, local-tooling=${autonomyControl.toolkit.local_agent_spawn_ready && autonomyControl.toolkit.terminal_toolkit_ready ? "ready" : "not-ready"}, bridge-runtime=${autonomyControl.toolkit.bridge_toolkit_ready ? "ready" : autonomyControl.toolkit.bridge_runtime_known ? "partial" : "unknown"}, and root=${summary.root_shell_enabled ? "ready" : "not-ready"}.`
       : todayErrorCount > 0
       ? `Recent runtime errors detected today: ${todayErrorCount} event(s).`
       : desktopState.last_error

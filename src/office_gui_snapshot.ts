@@ -663,7 +663,6 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
     (Boolean(patientZeroSummary.autonomy_enabled) &&
       Boolean(maintainSelfDrive.enabled) &&
       Boolean(autopilotConfig.execute_enabled) &&
-      Boolean(patientZeroToolkit.bridge_toolkit_ready) &&
       Boolean(patientZeroToolkit.local_agent_spawn_ready) &&
       Boolean(patientZeroToolkit.terminal_toolkit_ready));
   const patientZeroFullControlAuthority =
@@ -843,6 +842,7 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
           bridge_toolkit_ready: Boolean(patientZeroToolkit.bridge_toolkit_ready),
           bridge_toolkit_configured: Boolean(patientZeroToolkit.bridge_toolkit_configured),
           bridge_runtime_known: Boolean(patientZeroToolkit.bridge_runtime_known),
+          bridge_runtime_ready_count: parseAnyInt(patientZeroToolkit.bridge_runtime_ready_count),
           bridge_diagnostics_stale: Boolean(patientZeroToolkit.bridge_diagnostics_stale),
           local_agent_spawn_ready: Boolean(patientZeroToolkit.local_agent_spawn_ready),
           terminal_toolkit_ready: Boolean(patientZeroToolkit.terminal_toolkit_ready),

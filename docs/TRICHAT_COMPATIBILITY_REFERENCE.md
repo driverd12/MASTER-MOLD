@@ -19,6 +19,7 @@ Preferred operator-facing language:
 - `Agent Office` for the GUI, TUI, and operator surfaces
 - `office council` for the multi-agent orchestration layer
 - `Patient Zero` for the fully armed local execution posture
+  Local-first autonomy is considered armed when self-drive, autopilot execution, local agents, and terminal tooling are ready; optional bridge runtimes can remain degraded without disarming the core local autonomy fabric.
 
 ## Office TUI and Council Shells
 

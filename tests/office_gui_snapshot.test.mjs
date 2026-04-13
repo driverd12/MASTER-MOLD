@@ -176,7 +176,8 @@ test("office gui snapshot surfaces control-plane rollup signals", () => {
             bridge_agents: [{ agent_id: "codex", armed: true }],
             local_agents: [{ agent_id: "local-imprint", armed: true }],
             terminal_commands: [{ command: "gh", armed: true }],
-            bridge_toolkit_ready: true,
+            bridge_toolkit_ready: false,
+            bridge_runtime_ready_count: 0,
             local_agent_spawn_ready: true,
             terminal_toolkit_ready: true,
             imprint_ready: true,
@@ -310,7 +311,8 @@ test("office gui snapshot marks Patient Zero full authority only when autonomy a
             bridge_agents: [{ agent_id: "codex", armed: true }],
             local_agents: [{ agent_id: "local-imprint", armed: true }],
             terminal_commands: [{ command: "gh", armed: true }],
-            bridge_toolkit_ready: true,
+            bridge_toolkit_ready: false,
+            bridge_runtime_ready_count: 0,
             local_agent_spawn_ready: true,
             terminal_toolkit_ready: true,
             imprint_ready: true,
@@ -339,6 +341,8 @@ test("office gui snapshot marks Patient Zero full authority only when autonomy a
 
   assert.equal(snapshot.summary.patient_zero.autonomous_control_enabled, true);
   assert.equal(snapshot.summary.patient_zero.full_control_authority, true);
+  assert.equal(snapshot.summary.patient_zero.toolkit.bridge_toolkit_ready, false);
+  assert.equal(snapshot.summary.patient_zero.toolkit.bridge_runtime_ready_count, 0);
   assert.equal(snapshot.summary.control_plane.patient_zero_autonomous_control_enabled, true);
   assert.equal(snapshot.summary.control_plane.patient_zero_full_control_authority, true);
 });
