@@ -124,7 +124,7 @@ test("buildTrainingReadiness stays blocked until trainer, gate, data, and comman
   });
   const ready = buildTrainingReadiness({
     trainer: { trainer_ready: true },
-    promotion_gate: { ready: true },
+    promotion_gate: { ready: false },
     train_records: [{ record_id: "corpus-1" }],
     eval_records: [{ record_id: "corpus-2" }],
     snapshot_path: "/tmp/snapshot.json",
@@ -136,7 +136,9 @@ test("buildTrainingReadiness stays blocked until trainer, gate, data, and comman
   assert.match(blocked.blockers.join(","), /trainer\.backend_unavailable/);
   assert.match(blocked.blockers.join(","), /training\.command_unwired/);
   assert.equal(ready.ready_for_training_execution, true);
+  assert.equal(ready.ready_for_safe_promotion, false);
   assert.deepEqual(ready.blockers, []);
+  assert.deepEqual(ready.promotion_blockers, ["promotion_gate.blocked"]);
 });
 
 test("detectAdapterArtifacts only reports full artifact presence when config, weights, and metrics exist", () => {

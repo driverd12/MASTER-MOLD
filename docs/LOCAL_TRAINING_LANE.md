@@ -8,6 +8,7 @@ The local adapter lane prepares explicit training packets for bounded local adap
 npm run local:training:status
 npm run local:training:bootstrap
 npm run local:training:prepare
+npm run local:training:train
 ```
 
 ## What `prepare` Writes
@@ -38,17 +39,27 @@ The registry entry is appended to `data/training/model_registry.json` with:
 - rollback metadata for the currently promoted Ollama model
 - safe promotion metadata that stays false until adapter artifacts and gates exist
 
+## Train Command
+
+`npm run local:training:train` runs a bounded MLX LoRA pass against the latest prepared packet.
+
+- It uses a trainable MLX companion model by default instead of pretending the active Ollama runtime model is directly fine-tuned in place.
+- On this Mac, the default companion is the cached `mlx-community/Qwen2.5-Coder-3B-Instruct-4bit` snapshot when present.
+- It materializes `train.jsonl`, `valid.jsonl`, and `test.jsonl` for `mlx_lm.lora`, writes adapter artifacts under `adapter/`, records `training_metrics.json`, and runs one adapter-backed generation smoke test.
+- It does not auto-promote the adapter into the live Ollama route. Training and promotion remain separate gates.
+
 ## Truthfulness Rules
 
 - `training_intent.weights_modified` remains `false` during `prepare`
 - `training_intent.executed` remains `false` during `prepare`
 - `safe_promotion_metadata.allowed_now` remains `false` until adapter artifacts exist and the gate is green
-- missing train commands, red capability gates, or missing evidence are surfaced as readiness blockers instead of being treated as success
+- missing train commands or missing evidence are surfaced as readiness blockers instead of being treated as success
+- a red promotion gate does not block training execution; it blocks later promotion and route cutover
 
 ## Next Best Target
 
-The next bounded implementation step is to wire an explicit local adapter training command that:
+The next bounded implementation step after `train` is to add an adapter-aware evaluation and deployment lane that:
 
-- consumes `train.jsonl` and `eval.jsonl`
-- emits adapter config, weights, and metrics artifacts into the run directory
-- records those artifacts back into the registry without auto-promoting the active model
+- verifies the trained adapter against bounded prompts or benchmark cases
+- decides whether the adapter should back an MLX-serving lane or an exported Ollama companion path
+- keeps rollback and live-route cutover explicit instead of optimistic

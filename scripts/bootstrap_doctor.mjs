@@ -596,6 +596,14 @@ function reportLocalTrainingSection() {
     );
     write(`  ${c.dim}Bootstrap path: run \`npm run local:training:bootstrap\` on this Apple Silicon host.${c.reset}`);
   }
+  if (payload.training_command?.available === true) {
+    write(
+      `  ${PASS} training command ${c.dim}(${payload.training_command.command}${payload.training_command?.source ? ` via ${payload.training_command.source}` : ""})${c.reset}`
+    );
+  } else {
+    recommendedMissing++;
+    write(`  ${WARN} ${c.yellow}local adapter train command is not wired yet${c.reset}`);
+  }
   if (payload.latest_run?.manifest_path) {
     write(`  ${PASS} prepared corpus ${c.dim}(${payload.latest_run.manifest_path})${c.reset}`);
   } else {

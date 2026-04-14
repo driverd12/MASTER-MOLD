@@ -380,6 +380,7 @@ export function buildTrainingReadiness({
   training_command,
 }) {
   const blockers = [];
+  const promotionBlockers = [];
   if (!snapshot_path) {
     blockers.push("sources.snapshot_missing");
   }
@@ -395,11 +396,11 @@ export function buildTrainingReadiness({
   if (trainer?.trainer_ready !== true) {
     blockers.push("trainer.backend_unavailable");
   }
-  if (promotion_gate?.ready !== true) {
-    blockers.push("promotion_gate.blocked");
-  }
   if (training_command?.available !== true) {
     blockers.push("training.command_unwired");
+  }
+  if (promotion_gate?.ready !== true) {
+    promotionBlockers.push("promotion_gate.blocked");
   }
 
   let nextBestTarget = "Wire an explicit MLX LoRA runner that consumes this packet and emits adapter artifacts plus metrics.";
@@ -409,15 +410,19 @@ export function buildTrainingReadiness({
     nextBestTarget = "Capture fresh imprint snapshots and capability reports before treating this packet as a training candidate.";
   } else if (!Array.isArray(train_records) || train_records.length === 0 || !Array.isArray(eval_records) || eval_records.length === 0) {
     nextBestTarget = "Collect more local evidence so the lane can keep distinct train and eval splits.";
+  } else if (training_command?.available !== true) {
+    nextBestTarget = "Wire a bounded `npm run local:training:train` command that consumes the prepared packet and emits adapter artifacts.";
   } else if (promotion_gate?.ready !== true) {
-    nextBestTarget = "Re-run the local capability soak until the benchmark and eval gate is promotion-clean.";
+    nextBestTarget = "Run the bounded local adapter trainer now; promotion stays blocked until the post-train eval gate is green.";
   }
 
   return {
     ready_for_packet_review: Array.isArray(train_records) ? train_records.length + (Array.isArray(eval_records) ? eval_records.length : 0) > 0 : false,
     ready_for_training_execution: blockers.length === 0,
+    ready_for_safe_promotion: blockers.length === 0 && promotionBlockers.length === 0,
     command_wired: training_command?.available === true,
     blockers,
+    promotion_blockers: promotionBlockers,
     next_best_target: nextBestTarget,
   };
 }
@@ -673,6 +678,8 @@ function statusLane() {
     recommended_next_target:
       latestRun?.status === "training_ready"
         ? "Run the bounded local adapter trainer against the prepared packet."
+        : latestRun?.status === "prepared_blocked" && latestRun?.readiness_blockers?.length === 0
+          ? "Run the bounded local adapter trainer against the prepared packet."
         : latestRun?.readiness_blockers?.includes?.("training.command_unwired")
           ? "Wire a local adapter train command that consumes the prepared packet."
           : null,
