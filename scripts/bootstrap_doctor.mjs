@@ -568,7 +568,7 @@ function reportMacosAuthoritySection() {
   if (!payload.ready_for_patient_zero_full_authority) {
     recommendedMissing++;
     write(
-      `  ${WARN} ${c.yellow}Patient Zero full-authority prerequisites are not fully satisfied (${(payload.blockers || []).join(", ") || "unknown blocker"})${c.reset}`
+      `  ${WARN} ${c.yellow}Patient Zero full-authority prerequisites are not fully satisfied (${(payload.blockers || []).join(", ") || "unknown blocker"}; optional unless you want full device control)${c.reset}`
     );
   } else {
     write(`  ${PASS} Patient Zero full-authority prerequisites ${c.dim}(audited and ready)${c.reset}`);
@@ -592,7 +592,7 @@ function reportLocalTrainingSection() {
   } else {
     recommendedMissing++;
     write(
-      `  ${WARN} ${c.yellow}trainer backend unavailable (${payload.trainer?.detail || "install mlx + mlx_lm for local adapter work"})${c.reset}`
+      `  ${WARN} ${c.yellow}trainer backend unavailable (${payload.trainer?.detail || "install mlx + mlx_lm for local adapter work"}; optional unless you plan to train local adapters)${c.reset}`
     );
     write(`  ${c.dim}Bootstrap path: run \`npm run local:training:bootstrap\` on this Apple Silicon host.${c.reset}`);
   }
@@ -660,7 +660,7 @@ function reportLocalTrainingSection() {
     }
   } else {
     recommendedMissing++;
-    write(`  ${WARN} ${c.yellow}no prepared local adapter corpus yet — run \`npm run local:training:prepare\`${c.reset}`);
+    write(`  ${WARN} ${c.yellow}no prepared local adapter corpus yet — run \`npm run local:training:prepare\` if you want the local training lane${c.reset}`);
   }
 }
 
@@ -864,12 +864,17 @@ write("");
 if (requiredFails === 0) {
   const recNote =
     recommendedMissing > 0
-      ? ` ${c.yellow}(${recommendedMissing} recommendation${recommendedMissing > 1 ? "s" : ""} missing)${c.reset}`
+      ? ` ${c.yellow}(${recommendedMissing} optional recommendation${recommendedMissing > 1 ? "s" : ""})${c.reset}`
       : "";
   const readinessLabel = launcherDegraded ? "ready with launcher caveats" : "ready";
   write(
     `${c.bold}[doctor]${c.reset} Result: ${c.green}${c.bold}${readinessLabel}${c.reset}${recNote}`
   );
+  if (recommendedMissing > 0) {
+    write(
+      `${c.dim}Standard MCP setup is complete. Remaining recommendations are for optional lanes such as HTTP bearer auth, Patient Zero full authority, local training, tmux, Ollama, or extra provider bridges.${c.reset}`
+    );
+  }
 } else {
   write(
     `${c.bold}[doctor]${c.reset} Result: ${c.red}${c.bold}not ready${c.reset} \u2014 ${requiredFails} required check${requiredFails > 1 ? "s" : ""} failed`

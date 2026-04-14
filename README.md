@@ -438,6 +438,8 @@ npm run bootstrap:env
 
 If `npm ci` says `EBADENGINE`, stop there and run `npm run bootstrap:env:install`. The repo now hard-stops early on unsupported Node/npm versions and points back to the pinned runtime path.
 
+When `npm run doctor` ends with `Result: ready`, the core MCP setup is complete. Any remaining recommendations are optional lanes such as HTTP auth, Patient Zero/full-device-control permissions, local training, tmux, Ollama, or provider bridges you have not chosen to activate yet.
+
 Start HTTP transport:
 
 ```bash

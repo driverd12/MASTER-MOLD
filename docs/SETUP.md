@@ -58,6 +58,8 @@ This will:
 
 If you jump straight to `npm ci` on an unsupported runtime, the repo now stops early with a direct remediation message instead of falling through into dependency noise. The preferred recovery path is still `npm run bootstrap:env:install`.
 
+When `npm run doctor` finishes with `Result: ready`, the standard MCP runtime is usable. Any remaining recommendations are optional capability lanes, not core bootstrap failures.
+
 Preview the platform install commands without executing them:
 
 ```bash
