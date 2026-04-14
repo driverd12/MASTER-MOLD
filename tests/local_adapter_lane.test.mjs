@@ -6,6 +6,7 @@ import path from "node:path";
 
 import {
   buildTrainingReadiness,
+  buildPrimaryWatchdogState,
   buildCorpusRecords,
   curateCorpusRecords,
   detectTrainerAvailability,
@@ -14,6 +15,7 @@ import {
   detectIntegrationCommand,
   detectPromotionCommand,
   detectSoakCommand,
+  detectWatchdogCommand,
   detectTrainingCommand,
   resolveTrainerPython,
   splitCuratedCorpus,
@@ -170,4 +172,42 @@ test("training lane commands are all discoverable from the current repo wiring",
   assert.equal(detectIntegrationCommand().available, true);
   assert.equal(detectCutoverCommand().available, true);
   assert.equal(detectSoakCommand().available, true);
+  assert.equal(detectWatchdogCommand().available, true);
+});
+
+test("buildPrimaryWatchdogState flags stale primary soak confidence", () => {
+  const originalNow = Date.now;
+  Date.now = () => Date.parse("2026-04-14T15:00:01.000Z");
+  try {
+    const fresh = buildPrimaryWatchdogState(
+      {
+        status: "adapter_primary_mlx",
+        primary_soak_ok: true,
+        primary_soak_completed_at: "2026-04-14T12:00:00.000Z",
+      },
+      {
+        primary_watchdog_contract: {
+          max_soak_age_minutes: 240,
+        },
+      }
+    );
+    assert.equal(fresh.should_run_watchdog, false);
+
+    const stale = buildPrimaryWatchdogState(
+      {
+        status: "adapter_primary_mlx",
+        primary_soak_ok: true,
+        primary_soak_completed_at: "2026-04-14T10:00:00.000Z",
+      },
+      {
+        primary_watchdog_contract: {
+          max_soak_age_minutes: 240,
+        },
+      }
+    );
+    assert.equal(stale.should_run_watchdog, true);
+    assert.equal(stale.stale, true);
+  } finally {
+    Date.now = originalNow;
+  }
 });

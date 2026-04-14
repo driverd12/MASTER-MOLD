@@ -636,10 +636,27 @@ function reportLocalTrainingSection() {
     recommendedMissing++;
     write(`  ${WARN} ${c.yellow}local adapter soak command is not wired yet${c.reset}`);
   }
+  if (payload.watchdog_command?.available === true) {
+    write(
+      `  ${PASS} watchdog command ${c.dim}(${payload.watchdog_command.command}${payload.watchdog_command?.source ? ` via ${payload.watchdog_command.source}` : ""})${c.reset}`
+    );
+  } else {
+    recommendedMissing++;
+    write(`  ${WARN} ${c.yellow}local adapter watchdog command is not wired yet${c.reset}`);
+  }
   if (payload.latest_run?.manifest_path) {
     write(`  ${PASS} prepared corpus ${c.dim}(${payload.latest_run.manifest_path})${c.reset}`);
     if (payload.latest_run?.status) {
       write(`  ${PASS} latest local adapter status ${c.dim}(${payload.latest_run.status})${c.reset}`);
+    }
+    if (payload.primary_watchdog?.applicable === true && payload.primary_watchdog?.should_run_watchdog === true) {
+      recommendedMissing++;
+      write(
+        `  ${WARN} ${c.yellow}primary adapter confidence is stale (${payload.primary_watchdog?.primary_soak_age_minutes ?? "n/a"} minutes since last green soak)${c.reset}`
+      );
+      write(
+        `  ${c.dim}Refresh path: run \`${payload.watchdog_command?.command || "npm run local:training:watchdog"}\` to re-soak or trip rollback.${c.reset}`
+      );
     }
   } else {
     recommendedMissing++;

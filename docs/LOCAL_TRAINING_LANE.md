@@ -13,6 +13,7 @@ npm run local:training:promote
 npm run local:training:integrate
 npm run local:training:cutover
 npm run local:training:soak
+npm run local:training:watchdog
 ```
 
 ## What `prepare` Writes
@@ -88,6 +89,15 @@ The registry entry is appended to `data/training/model_registry.json` with:
 - It compares each cycle's reward score against the accepted promotion score and the stored baseline contract, then trips deterministic rollback if a severe regression or repeated soft regressions appear.
 - If any cycle fails, it restores the previous router default immediately and records the rollback in both the manifest and the registration artifact.
 - If every cycle passes, it records a green primary-soak result without changing the rollback path silently.
+
+## Watchdog Command
+
+`npm run local:training:watchdog` is the bounded freshness-enforcement path for the active primary adapter.
+
+- It only applies when the accepted adapter is already the active router default.
+- It checks whether the last green soak is missing, failed, or older than the watchdog freshness contract.
+- If confidence is still fresh, it records a skip cleanly instead of rerunning work.
+- If confidence is stale, it reruns the bounded soak automatically so the primary either refreshes its proof or trips rollback.
 
 ## Truthfulness Rules
 

@@ -449,6 +449,68 @@ export function detectSoakCommand() {
   };
 }
 
+export function detectWatchdogCommand() {
+  const packageJson = readPackageJson();
+  const scripts = packageJson && typeof packageJson === "object" ? packageJson.scripts || {} : {};
+  const scripted = String(scripts["local:training:watchdog"] || "").trim();
+  if (scripted) {
+    return {
+      available: true,
+      command: "npm run local:training:watchdog",
+      source: "package.json",
+    };
+  }
+  const scriptPath = path.join(REPO_ROOT, "scripts", "local_adapter_watchdog.mjs");
+  if (fs.existsSync(scriptPath)) {
+    return {
+      available: true,
+      command: "node ./scripts/local_adapter_watchdog.mjs",
+      source: "scripts/local_adapter_watchdog.mjs",
+    };
+  }
+  return {
+    available: false,
+    command: null,
+    source: null,
+  };
+}
+
+function parseIsoTimestamp(value) {
+  const parsed = Date.parse(String(value || "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function buildPrimaryWatchdogState(latestRun, manifest) {
+  const status = String(latestRun?.status || manifest?.status || "").trim();
+  const applicable = status === "adapter_primary_mlx" || status === "adapter_primary_ollama";
+  const contract =
+    manifest?.primary_watchdog_contract && typeof manifest.primary_watchdog_contract === "object"
+      ? manifest.primary_watchdog_contract
+      : {};
+  const maxSoakAgeMinutes =
+    Number.isFinite(contract.max_soak_age_minutes) && Number(contract.max_soak_age_minutes) >= 15
+      ? Math.min(Number(contract.max_soak_age_minutes), 24 * 60)
+      : 240;
+  const completedAt =
+    String(latestRun?.primary_soak_completed_at || manifest?.primary_soak_result?.completed_at || "").trim() || null;
+  const completedAtMs = parseIsoTimestamp(completedAt);
+  const soakOk =
+    latestRun?.primary_soak_ok === true || (latestRun?.primary_soak_ok !== false && manifest?.primary_soak_result?.ok === true);
+  const ageMinutes =
+    completedAtMs !== null ? Number(((Date.now() - completedAtMs) / 60000).toFixed(2)) : null;
+  const stale = applicable && completedAtMs !== null ? ageMinutes > maxSoakAgeMinutes : applicable && completedAtMs === null;
+  const shouldRunWatchdog = applicable && (!soakOk || stale);
+  return {
+    applicable,
+    max_soak_age_minutes: maxSoakAgeMinutes,
+    primary_soak_completed_at: completedAt,
+    primary_soak_ok: soakOk,
+    primary_soak_age_minutes: ageMinutes,
+    stale,
+    should_run_watchdog: shouldRunWatchdog,
+  };
+}
+
 export function detectAdapterArtifacts(runDir) {
   const present = [];
   const missing = [];
@@ -718,6 +780,11 @@ function prepareLane() {
         require_artifacts: true,
       },
     },
+    primary_watchdog_contract: {
+      max_soak_age_minutes: 240,
+      soak_cycles: 1,
+      interval_seconds: 0,
+    },
     safe_promotion_metadata: {
       allowed_now: false,
       blockers: [
@@ -790,7 +857,12 @@ function statusLane() {
     integration_command: integrationCommand,
     cutover_command: cutoverCommand,
     soak_command: soakCommand,
+    watchdog_command: detectWatchdogCommand(),
     latest_run: latestRun,
+    primary_watchdog: buildPrimaryWatchdogState(
+      latestRun,
+      latestRun?.manifest_path && fs.existsSync(latestRun.manifest_path) ? readJson(latestRun.manifest_path) : null
+    ),
     training_root: TRAINING_ROOT,
     registry_path: REGISTRY_PATH,
     recommended_bootstrap_command: trainer.trainer_ready ? null : "npm run local:training:bootstrap",
@@ -811,7 +883,12 @@ function statusLane() {
                     : "The accepted adapter is live as a reachable local backend; wire an explicit cutover command before making it router-default."
                 : latestRun?.status === "adapter_primary_mlx" || latestRun?.status === "adapter_primary_ollama"
                   ? latestRun?.primary_soak_ok === true
-                    ? "The accepted adapter survived the bounded soak; keep the rollback path in place while you gather longer-running production evidence."
+                    ? buildPrimaryWatchdogState(
+                        latestRun,
+                        latestRun?.manifest_path && fs.existsSync(latestRun.manifest_path) ? readJson(latestRun.manifest_path) : null
+                      ).should_run_watchdog && detectWatchdogCommand().available
+                      ? "The accepted adapter is still primary but its confidence proof is stale; run the bounded watchdog to refresh or trip rollback."
+                      : "The accepted adapter survived the bounded soak; keep the rollback path in place while you gather longer-running production evidence."
                     : soakCommand.available
                       ? "The accepted adapter is the active router default; run the bounded soak command to keep comparing it against the rollback path."
                       : "The accepted adapter is the active router default; wire a bounded soak command so regressions trigger rollback instead of drifting silently."
