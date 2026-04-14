@@ -604,8 +604,19 @@ function reportLocalTrainingSection() {
     recommendedMissing++;
     write(`  ${WARN} ${c.yellow}local adapter train command is not wired yet${c.reset}`);
   }
+  if (payload.promotion_command?.available === true) {
+    write(
+      `  ${PASS} promotion command ${c.dim}(${payload.promotion_command.command}${payload.promotion_command?.source ? ` via ${payload.promotion_command.source}` : ""})${c.reset}`
+    );
+  } else {
+    recommendedMissing++;
+    write(`  ${WARN} ${c.yellow}local adapter promotion gate is not wired yet${c.reset}`);
+  }
   if (payload.latest_run?.manifest_path) {
     write(`  ${PASS} prepared corpus ${c.dim}(${payload.latest_run.manifest_path})${c.reset}`);
+    if (payload.latest_run?.status) {
+      write(`  ${PASS} latest local adapter status ${c.dim}(${payload.latest_run.status})${c.reset}`);
+    }
   } else {
     recommendedMissing++;
     write(`  ${WARN} ${c.yellow}no prepared local adapter corpus yet — run \`npm run local:training:prepare\`${c.reset}`);

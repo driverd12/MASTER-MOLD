@@ -550,7 +550,9 @@ function main() {
     blockers: [
       ...(artifacts.all_present ? [] : ["adapter_artifacts_missing"]),
       ...(generateSmoke.ok ? [] : ["adapter_generate_smoke_failed"]),
-      "ollama_route_not_integrated",
+      "adapter_eval_pending",
+      "mlx_adapter_runtime_not_integrated",
+      "ollama_adapter_export_not_implemented",
     ],
   };
   manifest.status = trainingSucceeded ? "adapter_trained_unpromoted" : "training_failed";

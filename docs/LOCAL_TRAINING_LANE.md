@@ -9,6 +9,7 @@ npm run local:training:status
 npm run local:training:bootstrap
 npm run local:training:prepare
 npm run local:training:train
+npm run local:training:promote
 ```
 
 ## What `prepare` Writes
@@ -48,6 +49,15 @@ The registry entry is appended to `data/training/model_registry.json` with:
 - It materializes `train.jsonl`, `valid.jsonl`, and `test.jsonl` for `mlx_lm.lora`, writes adapter artifacts under `adapter/`, records `training_metrics.json`, and runs one adapter-backed generation smoke test.
 - It does not auto-promote the adapter into the live Ollama route. Training and promotion remain separate gates.
 
+## Promotion Command
+
+`npm run local:training:promote` runs the bounded registration gate for the latest trained adapter.
+
+- It shells through the repo's benchmark and eval tooling instead of inventing a parallel acceptance path.
+- The benchmark command runs `scripts/local_adapter_eval.mjs`, which scores deterministic base-vs-adapter prompts, writes a reward file, and exits non-zero if the gate fails.
+- A passing gate records the candidate as `adapter_registered`, writes a durable registration artifact, and records explicit router/Ollama integration blockers instead of pretending the adapter is live.
+- A failing gate records the candidate as `adapter_rejected` with a durable report and leaves the current runtime untouched.
+
 ## Truthfulness Rules
 
 - `training_intent.weights_modified` remains `false` during `prepare`
@@ -55,11 +65,12 @@ The registry entry is appended to `data/training/model_registry.json` with:
 - `safe_promotion_metadata.allowed_now` remains `false` until adapter artifacts exist and the gate is green
 - missing train commands or missing evidence are surfaced as readiness blockers instead of being treated as success
 - a red promotion gate does not block training execution; it blocks later promotion and route cutover
+- `adapter_registered` does not mean "served live". It means "accepted by the bounded gate and recorded as eligible for future integration work."
 
 ## Next Best Target
 
-The next bounded implementation step after `train` is to add an adapter-aware evaluation and deployment lane that:
+The next bounded implementation step after `promote` is to add an adapter-aware deployment lane that:
 
-- verifies the trained adapter against bounded prompts or benchmark cases
-- decides whether the adapter should back an MLX-serving lane or an exported Ollama companion path
+- serves the accepted adapter through a real MLX runtime path or exports it into an Ollama-compatible path
+- proves that route integration uses a real reachable backend instead of metadata-only registration
 - keeps rollback and live-route cutover explicit instead of optimistic

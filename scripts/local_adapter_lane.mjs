@@ -345,6 +345,32 @@ export function detectTrainingCommand() {
   };
 }
 
+export function detectPromotionCommand() {
+  const packageJson = readPackageJson();
+  const scripts = packageJson && typeof packageJson === "object" ? packageJson.scripts || {} : {};
+  const scripted = String(scripts["local:training:promote"] || "").trim();
+  if (scripted) {
+    return {
+      available: true,
+      command: "npm run local:training:promote",
+      source: "package.json",
+    };
+  }
+  const scriptPath = path.join(REPO_ROOT, "scripts", "local_adapter_promote.mjs");
+  if (fs.existsSync(scriptPath)) {
+    return {
+      available: true,
+      command: "node ./scripts/local_adapter_promote.mjs",
+      source: "scripts/local_adapter_promote.mjs",
+    };
+  }
+  return {
+    available: false,
+    command: null,
+    source: null,
+  };
+}
+
 export function detectAdapterArtifacts(runDir) {
   const present = [];
   const missing = [];
@@ -606,6 +632,13 @@ function prepareLane() {
         rollback_model: currentPromotedModel,
         policy: "Restore the last promoted Ollama model if adapter eval or route verification fails.",
       },
+      promotion_eval: {
+        min_reward_score: 75,
+        min_delta_vs_baseline: -5,
+        max_test_loss: 8,
+        require_generate_smoke: true,
+        require_artifacts: true,
+      },
     },
     safe_promotion_metadata: {
       allowed_now: false,
@@ -666,11 +699,13 @@ function statusLane() {
   const registry = loadRegistry();
   const latestRun = Array.isArray(registry.runs) && registry.runs.length > 0 ? registry.runs[0] : null;
   const trainingCommand = detectTrainingCommand();
+  const promotionCommand = detectPromotionCommand();
   return {
     ok: true,
     current_model: currentModel(),
     trainer,
     training_command: trainingCommand,
+    promotion_command: promotionCommand,
     latest_run: latestRun,
     training_root: TRAINING_ROOT,
     registry_path: REGISTRY_PATH,
@@ -680,9 +715,15 @@ function statusLane() {
         ? "Run the bounded local adapter trainer against the prepared packet."
         : latestRun?.status === "prepared_blocked" && latestRun?.readiness_blockers?.length === 0
           ? "Run the bounded local adapter trainer against the prepared packet."
-        : latestRun?.readiness_blockers?.includes?.("training.command_unwired")
-          ? "Wire a local adapter train command that consumes the prepared packet."
-          : null,
+          : latestRun?.status === "adapter_trained_unpromoted" && promotionCommand.available
+            ? "Run the bounded local adapter promotion gate before treating this candidate as router-eligible."
+            : latestRun?.status === "adapter_registered"
+              ? "Implement an explicit MLX adapter serving or export path before live router or Ollama cutover."
+              : latestRun?.status === "adapter_rejected"
+                ? "Tune the corpus or training parameters, then rerun prepare, train, and promote."
+                : latestRun?.readiness_blockers?.includes?.("training.command_unwired")
+                  ? "Wire a local adapter train command that consumes the prepared packet."
+                  : null,
   };
 }
 
