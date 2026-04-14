@@ -266,6 +266,7 @@ test("bootstrap env pins are present and aligned with package metadata", () => {
   const pythonVersion = fs.readFileSync(path.join(REPO_ROOT, ".python-version"), "utf8").trim();
   const toolVersions = fs.readFileSync(path.join(REPO_ROOT, ".tool-versions"), "utf8");
 
+  assert.equal(packageJson.scripts.preinstall, "node ./scripts/preinstall_check.mjs");
   assert.equal(packageJson.packageManager, "npm@10.9.4");
   assert.equal(packageJson.engines?.npm, ">=10 <11");
   assert.equal(nvmrc, "22");

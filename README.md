@@ -413,6 +413,8 @@ npm run start:stdio
 
 If this is your first time with MCPlayground, think of it as a local AI-agent toolbench rather than a normal app you click through manually. You bootstrap the base runtime, then your MCP-capable AI client uses the tools here to build and adapt project-specific scaffolding, status surfaces, memories, and workflows.
 
+On macOS, do not start with `brew install npm` by itself. That often leaves your terminal on the latest Node/npm pair, which can overshoot this repo's supported range. Use `npm run bootstrap:env:install` or install `node@22` first, then rerun the bootstrap.
+
 On Windows, use the `npm run ...` scripts exactly as shown. Do not manually type bash-style environment prefixes such as `MCP_HTTP=1 node ...`; `npm run start:http` handles that in cross-platform Node code.
 
 ## Get or Update This Repo
@@ -433,6 +435,8 @@ git checkout main
 git pull --ff-only origin main
 npm run bootstrap:env
 ```
+
+If `npm ci` says `EBADENGINE`, stop there and run `npm run bootstrap:env:install`. The repo now hard-stops early on unsupported Node/npm versions and points back to the pinned runtime path.
 
 Start HTTP transport:
 

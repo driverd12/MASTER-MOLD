@@ -56,6 +56,8 @@ This will:
 - run `npm run build` if `dist/server.js` is missing
 - finish with `npm run doctor`
 
+If you jump straight to `npm ci` on an unsupported runtime, the repo now stops early with a direct remediation message instead of falling through into dependency noise. The preferred recovery path is still `npm run bootstrap:env:install`.
+
 Preview the platform install commands without executing them:
 
 ```bash
@@ -183,6 +185,7 @@ For full client examples, see [IDE + Agent Setup Guide](./IDE_AGENT_SETUP.md).
 - Missing tools in client: restart client process and verify it points at `dist/server.js`.
 - Missing agentic tools: confirm `MCP_DOMAIN_PACKS` is unset or includes `agentic`; `MCP_DOMAIN_PACKS=none` disables built-ins.
 - Version mismatch on bootstrap: switch Node with `nvm use`, `asdf`, or `mise`; switch Python with `pyenv`, `asdf`, or your platform package manager, then rerun `npm run bootstrap:env`.
+- macOS + Homebrew mismatch: `brew install npm` by itself can put you on the newest Node/npm pair, which may be outside this repo's supported range. Use `npm run bootstrap:env:install` or install `node@22`, reopen the terminal, and rerun the bootstrap.
 - Automated first-run remediation: run `npm run bootstrap:env:install` to install the pinned runtime prerequisites for the current supported platform profile.
 - Office GUI stutters or a browser reload hangs: run `npm run agents:off && npm run agents:on` to restart the launchd HTTP runner. The runner defaults office snapshot refreshes to a separate STDIO child process so cached GUI reads do not block `/health`, `/ready`, or other MCP client traffic.
 - Launchd feels wedged after a reboot, login churn, or repo move: `npm run agents:on` now clears both plist-bound and label-bound launchctl state before re-bootstrap, and `./scripts/agents_switch.sh status` plus `npm run production:doctor` now flag disabled keepalive agents instead of treating them as healthy.
