@@ -423,6 +423,32 @@ export function detectCutoverCommand() {
   };
 }
 
+export function detectSoakCommand() {
+  const packageJson = readPackageJson();
+  const scripts = packageJson && typeof packageJson === "object" ? packageJson.scripts || {} : {};
+  const scripted = String(scripts["local:training:soak"] || "").trim();
+  if (scripted) {
+    return {
+      available: true,
+      command: "npm run local:training:soak",
+      source: "package.json",
+    };
+  }
+  const scriptPath = path.join(REPO_ROOT, "scripts", "local_adapter_soak.mjs");
+  if (fs.existsSync(scriptPath)) {
+    return {
+      available: true,
+      command: "node ./scripts/local_adapter_soak.mjs",
+      source: "scripts/local_adapter_soak.mjs",
+    };
+  }
+  return {
+    available: false,
+    command: null,
+    source: null,
+  };
+}
+
 export function detectAdapterArtifacts(runDir) {
   const present = [];
   const missing = [];
@@ -754,6 +780,7 @@ function statusLane() {
   const promotionCommand = detectPromotionCommand();
   const integrationCommand = detectIntegrationCommand();
   const cutoverCommand = detectCutoverCommand();
+  const soakCommand = detectSoakCommand();
   return {
     ok: true,
     current_model: currentModel(),
@@ -762,6 +789,7 @@ function statusLane() {
     promotion_command: promotionCommand,
     integration_command: integrationCommand,
     cutover_command: cutoverCommand,
+    soak_command: soakCommand,
     latest_run: latestRun,
     training_root: TRAINING_ROOT,
     registry_path: REGISTRY_PATH,
@@ -782,7 +810,11 @@ function statusLane() {
                     ? "The accepted adapter is live as a reachable local backend; run the bounded cutover command if you want it to become router-default."
                     : "The accepted adapter is live as a reachable local backend; wire an explicit cutover command before making it router-default."
                 : latestRun?.status === "adapter_primary_mlx" || latestRun?.status === "adapter_primary_ollama"
-                  ? "The accepted adapter is the active router default; keep benchmarking it against the prior default and roll back if it regresses."
+                  ? latestRun?.primary_soak_ok === true
+                    ? "The accepted adapter survived the bounded soak; keep the rollback path in place while you gather longer-running production evidence."
+                    : soakCommand.available
+                      ? "The accepted adapter is the active router default; run the bounded soak command to keep comparing it against the rollback path."
+                      : "The accepted adapter is the active router default; wire a bounded soak command so regressions trigger rollback instead of drifting silently."
               : latestRun?.status === "adapter_rejected"
                 ? "Tune the corpus or training parameters, then rerun prepare, train, and promote."
                 : latestRun?.readiness_blockers?.includes?.("training.command_unwired")

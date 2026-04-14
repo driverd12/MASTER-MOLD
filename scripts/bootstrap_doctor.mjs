@@ -628,6 +628,14 @@ function reportLocalTrainingSection() {
     recommendedMissing++;
     write(`  ${WARN} ${c.yellow}local adapter cutover command is not wired yet${c.reset}`);
   }
+  if (payload.soak_command?.available === true) {
+    write(
+      `  ${PASS} soak command ${c.dim}(${payload.soak_command.command}${payload.soak_command?.source ? ` via ${payload.soak_command.source}` : ""})${c.reset}`
+    );
+  } else {
+    recommendedMissing++;
+    write(`  ${WARN} ${c.yellow}local adapter soak command is not wired yet${c.reset}`);
+  }
   if (payload.latest_run?.manifest_path) {
     write(`  ${PASS} prepared corpus ${c.dim}(${payload.latest_run.manifest_path})${c.reset}`);
     if (payload.latest_run?.status) {

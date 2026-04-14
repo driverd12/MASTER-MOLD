@@ -292,54 +292,90 @@ export function verifyCutoverOutcome({ candidateBackendId, routeResult, evalResu
   };
 }
 
-function rollbackRouterDefault({ previousDefaultBackendId, mutationCounter, transport }) {
+export function rollbackRouterDefault({ previousDefaultBackendId, mutationCounter, transport }) {
   if (!previousDefaultBackendId) {
     return {
       restored: false,
       reason: "No previous default backend was recorded.",
     };
   }
-  const router = callTool(REPO_ROOT, {
-    tool: "model.router",
-    args: {
-      action: "configure",
-      mutation: createMutation("rollback", "router-configure", mutationCounter),
-      enabled: true,
-      strategy: "prefer_quality",
-      default_backend_id: previousDefaultBackendId,
-    },
-    transport,
-  });
-  const maintain = callTool(REPO_ROOT, {
-    tool: "autonomy.maintain",
-    args: {
-      action: "run_once",
-      mutation: createMutation("rollback", "maintain", mutationCounter),
-      local_host_id: "local",
-      ensure_bootstrap: false,
-      start_goal_autorun_daemon: false,
-      run_goal_hygiene: false,
-      run_task_recovery: false,
-      start_runtime_workers: false,
-      start_task_auto_retry_daemon: false,
-      start_transcript_auto_squish_daemon: false,
-      start_imprint_auto_snapshot_daemon: false,
-      start_trichat_auto_retention_daemon: false,
-      start_trichat_turn_watchdog_daemon: false,
-      start_reaction_engine_daemon: false,
-      refresh_learning_summary: false,
-      maintain_tmux_controller: false,
-      enable_self_drive: false,
-      run_eval_if_due: false,
-      run_optimizer_if_due: false,
-      publish_runtime_event: false,
-    },
-    transport,
-  });
+  const transports = [...new Set([transport, transport === "http" ? "stdio" : "http"])].filter(Boolean);
+  let router = null;
+  const routerErrors = [];
+  for (const candidateTransport of transports) {
+    try {
+      router = callTool(REPO_ROOT, {
+        tool: "model.router",
+        args: {
+          action: "configure",
+          mutation: createMutation("rollback", "router-configure", mutationCounter),
+          enabled: true,
+          strategy: "prefer_quality",
+          default_backend_id: previousDefaultBackendId,
+        },
+        transport: candidateTransport,
+      });
+      router.transport = candidateTransport;
+      break;
+    } catch (error) {
+      routerErrors.push({
+        transport: candidateTransport,
+        error: error instanceof Error ? error.stack || error.message : String(error),
+      });
+    }
+  }
+  if (!router) {
+    return {
+      restored: false,
+      reason: "Failed to restore the previous default backend.",
+      errors: routerErrors,
+    };
+  }
+
+  let maintain = null;
+  const maintainErrors = [];
+  for (const candidateTransport of transports) {
+    try {
+      maintain = callTool(REPO_ROOT, {
+        tool: "autonomy.maintain",
+        args: {
+          action: "run_once",
+          mutation: createMutation("rollback", "maintain", mutationCounter),
+          local_host_id: "local",
+          ensure_bootstrap: false,
+          start_goal_autorun_daemon: false,
+          run_goal_hygiene: false,
+          run_task_recovery: false,
+          start_runtime_workers: false,
+          start_task_auto_retry_daemon: false,
+          start_transcript_auto_squish_daemon: false,
+          start_imprint_auto_snapshot_daemon: false,
+          start_trichat_auto_retention_daemon: false,
+          start_trichat_turn_watchdog_daemon: false,
+          start_reaction_engine_daemon: false,
+          refresh_learning_summary: false,
+          maintain_tmux_controller: false,
+          enable_self_drive: false,
+          run_eval_if_due: false,
+          run_optimizer_if_due: false,
+          publish_runtime_event: false,
+        },
+        transport: candidateTransport,
+      });
+      maintain.transport = candidateTransport;
+      break;
+    } catch (error) {
+      maintainErrors.push({
+        transport: candidateTransport,
+        error: error instanceof Error ? error.stack || error.message : String(error),
+      });
+    }
+  }
   return {
     restored: true,
     router,
     maintain,
+    errors: maintainErrors,
   };
 }
 

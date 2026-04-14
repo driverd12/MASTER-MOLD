@@ -12,6 +12,7 @@ npm run local:training:train
 npm run local:training:promote
 npm run local:training:integrate
 npm run local:training:cutover
+npm run local:training:soak
 ```
 
 ## What `prepare` Writes
@@ -78,6 +79,15 @@ The registry entry is appended to `data/training/model_registry.json` with:
 - On Ollama companion cutover, it also aligns `.env` with the promoted companion model so CLI-driven local inference does not drift from the router default.
 - On success, the lane records `adapter_primary_mlx` or `adapter_primary_ollama`.
 
+## Soak Command
+
+`npm run local:training:soak` is the bounded comparative confidence pass for the new primary backend.
+
+- It only runs after the adapter is already the active router default.
+- It reruns the eval suite and route verification for several cycles, using the recorded rollback backend as the recovery target.
+- If any cycle fails, it restores the previous router default immediately and records the rollback in both the manifest and the registration artifact.
+- If every cycle passes, it records a green primary-soak result without changing the rollback path silently.
+
 ## Truthfulness Rules
 
 - `training_intent.weights_modified` remains `false` during `prepare`
@@ -88,11 +98,13 @@ The registry entry is appended to `data/training/model_registry.json` with:
 - `adapter_registered` does not mean "served live". It means "accepted by the bounded gate and recorded as eligible for integration work."
 - `adapter_served_mlx` means the accepted adapter is reachable through the managed MLX runtime.
 - `adapter_exported_ollama` means the accepted adapter was exported into a local Ollama companion model and verified.
+- `adapter_primary_mlx` or `adapter_primary_ollama` means the adapter is the active router default.
+- a green soak result means the new primary survived repeated bounded checks; it does not mean the rollback path should be deleted.
 
 ## Next Best Target
 
-The next bounded implementation step after `cutover` is comparative soak coverage:
+The next bounded implementation step after `soak` is longer-duration production evidence:
 
-- keep benchmarking the new primary backend against the prior default
-- add longer-lived router/office/autonomy soak runs before calling the new primary fully production-stable
+- add longer-lived office/autonomy/runtime stress runs while the new primary stays active
+- promote only after repeated overnight evidence, not one short soak
 - keep rollback explicit instead of allowing silent drift

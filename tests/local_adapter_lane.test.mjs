@@ -13,6 +13,7 @@ import {
   detectCutoverCommand,
   detectIntegrationCommand,
   detectPromotionCommand,
+  detectSoakCommand,
   detectTrainingCommand,
   resolveTrainerPython,
   splitCuratedCorpus,
@@ -168,4 +169,5 @@ test("training lane commands are all discoverable from the current repo wiring",
   assert.equal(detectPromotionCommand().available, true);
   assert.equal(detectIntegrationCommand().available, true);
   assert.equal(detectCutoverCommand().available, true);
+  assert.equal(detectSoakCommand().available, true);
 });
