@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,27 @@ const TRAINING_ROOT = path.join(REPO_ROOT, "data", "training", "local_adapter_la
 const REGISTRY_PATH = path.join(REPO_ROOT, "data", "training", "model_registry.json");
 const VENV_MLX_PYTHON = path.join(REPO_ROOT, ".venv-mlx", "bin", "python");
 const DEFAULT_MODEL = "llama3.2:3b";
+const DEFAULT_BENCHMARK_SUITE_ID = "autonomy.smoke.local";
+const DEFAULT_EVAL_SUITE_ID = "autonomy.control-plane";
+const REGISTRY_SCHEMA_VERSION = "training.model_registry.v2";
+const MANIFEST_SCHEMA_VERSION = "local_training_packet.v2";
+const DEFAULT_EVAL_FRACTION = 0.2;
+const MIN_CORPUS_CHAR_COUNT = 20;
+const MIN_CORPUS_WORD_COUNT = 4;
+const EXPECTED_ADAPTER_ARTIFACTS = [
+  {
+    artifact: "adapter_config",
+    candidates: ["adapter_config.json"],
+  },
+  {
+    artifact: "adapter_weights",
+    candidates: ["adapters.safetensors", "adapter_model.safetensors"],
+  },
+  {
+    artifact: "training_metrics",
+    candidates: ["training_metrics.json", "metrics.json"],
+  },
+];
 
 function readEnvValue(key) {
   try {
@@ -85,6 +107,46 @@ function readJson(filePath) {
   } catch {
     return null;
   }
+}
+
+function readPackageJson() {
+  return readJson(path.join(REPO_ROOT, "package.json")) || {};
+}
+
+function normalizeCorpusText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function wordCount(text) {
+  return normalizeCorpusText(text)
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+function fingerprintText(text) {
+  return crypto.createHash("sha256").update(String(text || "")).digest("hex");
+}
+
+function sanitizeSlug(value, fallback = "candidate") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+function buildCandidateId(model, runId) {
+  return `local-adapter-${sanitizeSlug(model, "base-model")}-${sanitizeSlug(runId, "run")}`;
+}
+
+function sourceTypeCounts(records) {
+  const counts = {};
+  for (const record of records) {
+    const sourceType = String(record?.source_type || "unknown").trim() || "unknown";
+    counts[sourceType] = (counts[sourceType] ?? 0) + 1;
+  }
+  return counts;
 }
 
 export function resolveTrainerPython(input = {}) {
@@ -179,6 +241,187 @@ export function buildCorpusRecords(snapshotPayload, reportPayloads = []) {
   });
 }
 
+export function curateCorpusRecords(rawRecords = [], options = {}) {
+  const minCharCount = Math.max(1, Math.trunc(options.min_char_count ?? MIN_CORPUS_CHAR_COUNT));
+  const minWordCount = Math.max(1, Math.trunc(options.min_word_count ?? MIN_CORPUS_WORD_COUNT));
+  const accepted = [];
+  const stats = {
+    input_records: 0,
+    accepted_records: 0,
+    rejected_empty: 0,
+    rejected_too_short: 0,
+    rejected_duplicate: 0,
+    min_char_count: minCharCount,
+    min_word_count: minWordCount,
+    source_type_breakdown: {},
+  };
+  const seen = new Set();
+  for (const record of Array.isArray(rawRecords) ? rawRecords : []) {
+    stats.input_records += 1;
+    const sourceType = String(record?.source_type || "unknown").trim() || "unknown";
+    stats.source_type_breakdown[sourceType] = (stats.source_type_breakdown[sourceType] ?? 0) + 1;
+    const text = normalizeCorpusText(record?.text);
+    if (!text) {
+      stats.rejected_empty += 1;
+      continue;
+    }
+    const charCount = text.length;
+    const words = wordCount(text);
+    if (charCount < minCharCount && words < minWordCount) {
+      stats.rejected_too_short += 1;
+      continue;
+    }
+    const fingerprint = fingerprintText(text.toLowerCase());
+    if (seen.has(fingerprint)) {
+      stats.rejected_duplicate += 1;
+      continue;
+    }
+    seen.add(fingerprint);
+    accepted.push({
+      record_id: `corpus-${fingerprint.slice(0, 16)}`,
+      kind: String(record?.kind || "plain_text_corpus").trim() || "plain_text_corpus",
+      source_type: sourceType,
+      source_id: record?.source_id ?? null,
+      text,
+      char_count: charCount,
+      word_count: words,
+      fingerprint,
+    });
+  }
+  stats.accepted_records = accepted.length;
+  return {
+    records: accepted,
+    stats,
+  };
+}
+
+export function splitCuratedCorpus(records = [], options = {}) {
+  const evalFraction = Number.isFinite(options.eval_fraction)
+    ? Math.min(0.5, Math.max(0, Number(options.eval_fraction)))
+    : DEFAULT_EVAL_FRACTION;
+  const sorted = [...(Array.isArray(records) ? records : [])].sort((left, right) =>
+    String(left?.record_id || "").localeCompare(String(right?.record_id || ""))
+  );
+  if (sorted.length <= 1) {
+    return {
+      train_records: sorted,
+      eval_records: [],
+      strategy: "deterministic_eval_split",
+      eval_fraction: evalFraction,
+    };
+  }
+  const evalCount = Math.min(sorted.length - 1, Math.max(1, Math.round(sorted.length * evalFraction)));
+  return {
+    train_records: sorted.slice(evalCount),
+    eval_records: sorted.slice(0, evalCount),
+    strategy: "deterministic_eval_split",
+    eval_fraction: evalFraction,
+  };
+}
+
+export function detectTrainingCommand() {
+  const packageJson = readPackageJson();
+  const scripts = packageJson && typeof packageJson === "object" ? packageJson.scripts || {} : {};
+  const scripted = String(scripts["local:training:train"] || "").trim();
+  if (scripted) {
+    return {
+      available: true,
+      command: "npm run local:training:train",
+      source: "package.json",
+    };
+  }
+  const scriptPath = path.join(REPO_ROOT, "scripts", "local_adapter_train.mjs");
+  if (fs.existsSync(scriptPath)) {
+    return {
+      available: true,
+      command: "node ./scripts/local_adapter_train.mjs",
+      source: "scripts/local_adapter_train.mjs",
+    };
+  }
+  return {
+    available: false,
+    command: null,
+    source: null,
+  };
+}
+
+export function detectAdapterArtifacts(runDir) {
+  const present = [];
+  const missing = [];
+  for (const definition of EXPECTED_ADAPTER_ARTIFACTS) {
+    const match = definition.candidates.find((candidate) => fs.existsSync(path.join(runDir, candidate)));
+    if (match) {
+      present.push({
+        artifact: definition.artifact,
+        path: path.join(runDir, match),
+      });
+    } else {
+      missing.push(definition.artifact);
+    }
+  }
+  return {
+    expected: EXPECTED_ADAPTER_ARTIFACTS.map((entry) => ({
+      artifact: entry.artifact,
+      candidates: [...entry.candidates],
+    })),
+    present,
+    missing,
+    all_present: missing.length === 0,
+  };
+}
+
+export function buildTrainingReadiness({
+  trainer,
+  promotion_gate,
+  train_records,
+  eval_records,
+  snapshot_path,
+  capability_reports,
+  training_command,
+}) {
+  const blockers = [];
+  if (!snapshot_path) {
+    blockers.push("sources.snapshot_missing");
+  }
+  if (!Array.isArray(capability_reports) || capability_reports.length === 0) {
+    blockers.push("sources.capability_report_missing");
+  }
+  if (!Array.isArray(train_records) || train_records.length === 0) {
+    blockers.push("dataset.train_missing");
+  }
+  if (!Array.isArray(eval_records) || eval_records.length === 0) {
+    blockers.push("dataset.eval_missing");
+  }
+  if (trainer?.trainer_ready !== true) {
+    blockers.push("trainer.backend_unavailable");
+  }
+  if (promotion_gate?.ready !== true) {
+    blockers.push("promotion_gate.blocked");
+  }
+  if (training_command?.available !== true) {
+    blockers.push("training.command_unwired");
+  }
+
+  let nextBestTarget = "Wire an explicit MLX LoRA runner that consumes this packet and emits adapter artifacts plus metrics.";
+  if (trainer?.trainer_ready !== true) {
+    nextBestTarget = "Run `npm run local:training:bootstrap` on Apple Silicon before attempting a local adapter train run.";
+  } else if (!snapshot_path || !Array.isArray(capability_reports) || capability_reports.length === 0) {
+    nextBestTarget = "Capture fresh imprint snapshots and capability reports before treating this packet as a training candidate.";
+  } else if (!Array.isArray(train_records) || train_records.length === 0 || !Array.isArray(eval_records) || eval_records.length === 0) {
+    nextBestTarget = "Collect more local evidence so the lane can keep distinct train and eval splits.";
+  } else if (promotion_gate?.ready !== true) {
+    nextBestTarget = "Re-run the local capability soak until the benchmark and eval gate is promotion-clean.";
+  }
+
+  return {
+    ready_for_packet_review: Array.isArray(train_records) ? train_records.length + (Array.isArray(eval_records) ? eval_records.length : 0) > 0 : false,
+    ready_for_training_execution: blockers.length === 0,
+    command_wired: training_command?.available === true,
+    blockers,
+    next_best_target: nextBestTarget,
+  };
+}
+
 function writeJson(filePath, payload) {
   ensureDirectory(path.dirname(filePath));
   fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
@@ -186,7 +429,8 @@ function writeJson(filePath, payload) {
 
 function writeJsonl(filePath, rows) {
   ensureDirectory(path.dirname(filePath));
-  fs.writeFileSync(filePath, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`, "utf8");
+  const lines = Array.isArray(rows) ? rows.map((row) => JSON.stringify(row)).join("\n") : "";
+  fs.writeFileSync(filePath, lines.length > 0 ? `${lines}\n` : "", "utf8");
 }
 
 function loadRegistry() {
@@ -194,6 +438,7 @@ function loadRegistry() {
   return registry && typeof registry === "object"
     ? registry
     : {
+        schema_version: REGISTRY_SCHEMA_VERSION,
         updated_at: null,
         runs: [],
       };
@@ -205,6 +450,7 @@ function saveRegistry(runRecord) {
   runs.unshift(runRecord);
   const trimmedRuns = runs.slice(0, 25);
   writeJson(REGISTRY_PATH, {
+    schema_version: REGISTRY_SCHEMA_VERSION,
     updated_at: new Date().toISOString(),
     runs: trimmedRuns,
   });
@@ -260,16 +506,35 @@ function prepareLane() {
   const trainer = detectTrainerAvailability();
   const snapshot = latestSnapshot();
   const reports = latestCapabilityReports(5);
-  const records = buildCorpusRecords(snapshot?.payload || {}, reports.map((entry) => entry.payload));
+  const rawRecords = buildCorpusRecords(snapshot?.payload || {}, reports.map((entry) => entry.payload));
+  const curated = curateCorpusRecords(rawRecords);
+  const split = splitCuratedCorpus(curated.records);
   const gate = latestPromotionGate(reports, model);
   const runId = new Date().toISOString().replace(/[:.]/g, "-");
   const runDir = path.join(TRAINING_ROOT, runId);
   const corpusPath = path.join(runDir, "corpus.jsonl");
+  const trainPath = path.join(runDir, "train.jsonl");
+  const evalPath = path.join(runDir, "eval.jsonl");
   const manifestPath = path.join(runDir, "manifest.json");
   const currentPromotedModel = currentModel();
+  const trainingCommand = detectTrainingCommand();
+  const candidateId = buildCandidateId(model, runId);
+  const artifacts = detectAdapterArtifacts(runDir);
+  const readiness = buildTrainingReadiness({
+    trainer,
+    promotion_gate: gate,
+    train_records: split.train_records,
+    eval_records: split.eval_records,
+    snapshot_path: snapshot?.filePath || null,
+    capability_reports: reports.map((entry) => entry.filePath),
+    training_command: trainingCommand,
+  });
   const manifest = {
+    schema_version: MANIFEST_SCHEMA_VERSION,
     generated_at: new Date().toISOString(),
     run_id: runId,
+    lane: "local_adapter_lane",
+    candidate_id: candidateId,
     host: {
       hostname: os.hostname(),
       platform: process.platform,
@@ -283,37 +548,111 @@ function prepareLane() {
     sources: {
       snapshot_path: snapshot?.filePath || null,
       capability_reports: reports.map((entry) => entry.filePath),
+      source_type_breakdown: sourceTypeCounts(rawRecords),
     },
     corpus: {
       path: corpusPath,
-      record_count: records.length,
+      train_path: trainPath,
+      eval_path: evalPath,
+      input_record_count: rawRecords.length,
+      record_count: curated.records.length,
+      train_record_count: split.train_records.length,
+      eval_record_count: split.eval_records.length,
       format: "jsonl/plain_text_corpus",
+      split_strategy: split.strategy,
+      curation: curated.stats,
     },
-    status: trainer.trainer_ready ? "prepared" : "prepared_without_trainer",
-    next_action: trainer.trainer_ready
-      ? "Review the curated corpus and wire an explicit train command before running any local adapter job."
-      : "Run `npm run local:training:bootstrap` before attempting any local adapter run.",
+    training_intent: {
+      type: "lora_adapter_preparation",
+      weights_modified: false,
+      executed: false,
+      command_wired: trainingCommand.available,
+      train_command: trainingCommand.command,
+      command_source: trainingCommand.source,
+    },
+    artifacts,
+    evaluation_targets: {
+      ollama: {
+        provider: "ollama",
+        model: currentPromotedModel,
+        capability_report_path: gate.report_path,
+        capability_pass_rate: gate.pass_rate,
+        required_for_safe_promotion: true,
+      },
+      mlx: {
+        provider: "mlx",
+        trainer_ready: trainer.trainer_ready,
+        backend: trainer.backend,
+        python_path: trainer.python_path,
+        required_for_local_adapter_execution: true,
+      },
+    },
+    acceptance_contract: {
+      benchmark: {
+        suite_id: DEFAULT_BENCHMARK_SUITE_ID,
+        required_aggregate_metric: 100,
+      },
+      eval: {
+        suite_id: DEFAULT_EVAL_SUITE_ID,
+        required_aggregate_metric: 100,
+      },
+      rollback: {
+        required: true,
+        rollback_model: currentPromotedModel,
+        policy: "Restore the last promoted Ollama model if adapter eval or route verification fails.",
+      },
+    },
+    safe_promotion_metadata: {
+      allowed_now: false,
+      blockers: [
+        "adapter_artifacts_missing",
+        ...(gate.ready ? [] : ["promotion_gate_not_clean"]),
+      ],
+      target_candidate_id: candidateId,
+      target_base_model: model,
+      rollback_model: currentPromotedModel,
+    },
+    readiness,
+    status: readiness.ready_for_training_execution ? "training_ready" : "prepared_blocked",
+    next_action: readiness.next_best_target,
   };
-  writeJsonl(corpusPath, records);
+  writeJsonl(corpusPath, curated.records);
+  writeJsonl(trainPath, split.train_records);
+  writeJsonl(evalPath, split.eval_records);
   writeJson(manifestPath, manifest);
   saveRegistry({
+    lane: "local_adapter_lane",
     generated_at: manifest.generated_at,
     run_id: runId,
+    candidate_id: candidateId,
     base_model: model,
+    status: manifest.status,
     manifest_path: manifestPath,
     corpus_path: corpusPath,
-    record_count: records.length,
+    train_path: trainPath,
+    eval_path: evalPath,
+    record_count: curated.records.length,
+    train_record_count: split.train_records.length,
+    eval_record_count: split.eval_records.length,
     trainer_ready: trainer.trainer_ready,
     promotion_gate_ready: gate.ready,
+    promotion_gate_pass_rate: gate.pass_rate,
+    readiness_blockers: readiness.blockers,
+    rollback_model: currentPromotedModel,
+    evaluation_targets: Object.keys(manifest.evaluation_targets),
   });
   return {
     ok: true,
     prepared: true,
     manifest_path: manifestPath,
     corpus_path: corpusPath,
-    record_count: records.length,
+    train_path: trainPath,
+    eval_path: evalPath,
+    record_count: curated.records.length,
+    candidate_id: candidateId,
     trainer,
     promotion_gate: gate,
+    readiness,
   };
 }
 
@@ -321,14 +660,22 @@ function statusLane() {
   const trainer = detectTrainerAvailability();
   const registry = loadRegistry();
   const latestRun = Array.isArray(registry.runs) && registry.runs.length > 0 ? registry.runs[0] : null;
+  const trainingCommand = detectTrainingCommand();
   return {
     ok: true,
     current_model: currentModel(),
     trainer,
+    training_command: trainingCommand,
     latest_run: latestRun,
     training_root: TRAINING_ROOT,
     registry_path: REGISTRY_PATH,
     recommended_bootstrap_command: trainer.trainer_ready ? null : "npm run local:training:bootstrap",
+    recommended_next_target:
+      latestRun?.status === "training_ready"
+        ? "Run the bounded local adapter trainer against the prepared packet."
+        : latestRun?.readiness_blockers?.includes?.("training.command_unwired")
+          ? "Wire a local adapter train command that consumes the prepared packet."
+          : null,
   };
 }
 

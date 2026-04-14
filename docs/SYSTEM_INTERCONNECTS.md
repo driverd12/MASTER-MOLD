@@ -116,7 +116,7 @@ flowchart LR
 
 The Office GUI is a visibility surface for operators. Its readiness tracks the MCP HTTP surface and launcher path, not the stricter Patient Zero browser-actuation lane. Browser automation can be degraded while `/office/` remains healthy and truthful.
 
-Patient Zero full authority is also gated by macOS-owned permissions. The repo now exposes that explicitly through `macos_authority_audit.mjs` instead of implying that an armed banner bypasses Accessibility, Screen Recording, Full Disk Access, or the `mcagent` root-helper path.
+Patient Zero full authority is also gated by macOS-owned permissions. The repo now exposes that explicitly through `macos_authority_audit.mjs` instead of implying that an armed banner bypasses Accessibility, Screen Recording, microphone/listen-lane consent, Full Disk Access, or the `mcagent` root-helper + secret path.
 
 ## 2. Layered Runtime Stack
 

@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 // ── Repo root ────────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
+const HTTP_BEARER_TOKEN_PATH = resolve(ROOT, "data", "imprint", "http_bearer_token");
 
 // ── ANSI helpers ─────────────────────────────────────────────────────────────
 const isColorSupported =
@@ -516,7 +517,7 @@ function runJsonScript(scriptPath, args = []) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 8 * 1024 * 1024,
-      timeout: 15000,
+      timeout: 30000,
     });
     return JSON.parse(stdout);
   } catch {
@@ -524,7 +525,7 @@ function runJsonScript(scriptPath, args = []) {
   }
 }
 
-function runJsonCommand(command, args = [], timeout = 15000) {
+function runJsonCommand(command, args = [], timeout = 15000, env = undefined) {
   try {
     const stdout = execFileSync(command, args, {
       cwd: ROOT,
@@ -532,6 +533,7 @@ function runJsonCommand(command, args = [], timeout = 15000) {
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 8 * 1024 * 1024,
       timeout,
+      env,
     });
     return JSON.parse(stdout);
   } catch {
@@ -560,6 +562,7 @@ function reportMacosAuthoritySection() {
   render("console session", checks.console_session, "ready");
   render("Accessibility", checks.accessibility, "granted");
   render("Screen Recording", checks.screen_recording, "granted");
+  render("Microphone / listen lane", checks.microphone_listen_lane, "granted");
   render("Full Disk Access", checks.full_disk_access, "granted");
   render("mcagent root helper", checks.root_helper, "ready");
   if (!payload.ready_for_patient_zero_full_authority) {
@@ -603,11 +606,81 @@ function reportLocalTrainingSection() {
 
 function reportProviderBridgeSection() {
   write(`${c.bold}[doctor]${c.reset} Provider Bridges:`);
-  const payload = runJsonCommand(process.execPath, [
-    resolve(ROOT, "scripts", "run_sh.mjs"),
-    resolve(ROOT, "scripts", "provider_bridge.sh"),
-    "status",
-  ]);
+  const buildCommonArgs = (forceLive = false) => [
+    resolve(ROOT, "scripts", "mcp_tool_call.mjs"),
+    "--tool",
+    "provider.bridge",
+    "--args",
+    JSON.stringify({ action: "diagnose", source_client: "bootstrap_doctor.mjs", force_live: forceLive }),
+    "--cwd",
+    ROOT,
+  ];
+  const commonArgs = buildCommonArgs(false);
+  let payload = null;
+  if (existsSync(HTTP_BEARER_TOKEN_PATH)) {
+    const token = readFileSync(HTTP_BEARER_TOKEN_PATH, "utf8").trim();
+    if (token) {
+      payload = runJsonCommand(
+        process.execPath,
+        [
+          ...commonArgs,
+          "--transport",
+          "http",
+          "--url",
+          process.env.TRICHAT_MCP_URL || "http://127.0.0.1:8787/",
+          "--origin",
+          process.env.TRICHAT_MCP_ORIGIN || "http://127.0.0.1",
+        ],
+        8000,
+        {
+          ...process.env,
+          MCP_HTTP_BEARER_TOKEN: token,
+          MCP_TOOL_CALL_TIMEOUT_MS: "5000",
+        }
+      );
+    }
+  }
+  if (!payload) {
+    payload = runJsonCommand(
+      process.execPath,
+      [
+        ...commonArgs,
+        "--transport",
+        "stdio",
+        "--stdio-command",
+        process.env.TRICHAT_MCP_STDIO_COMMAND || "node",
+        "--stdio-args",
+        process.env.TRICHAT_MCP_STDIO_ARGS || "dist/server.js",
+      ],
+      12000,
+        {
+          ...process.env,
+          MCP_TOOL_CALL_TIMEOUT_MS: "8000",
+        }
+      );
+  }
+  if (payload?.onboarding?.stale_runtime_checks === true) {
+    const livePayload = runJsonCommand(
+      process.execPath,
+      [
+        ...buildCommonArgs(true),
+        "--transport",
+        "stdio",
+        "--stdio-command",
+        process.env.TRICHAT_MCP_STDIO_COMMAND || "node",
+        "--stdio-args",
+        process.env.TRICHAT_MCP_STDIO_ARGS || "dist/server.js",
+      ],
+      20000,
+      {
+        ...process.env,
+        MCP_TOOL_CALL_TIMEOUT_MS: "15000",
+      }
+    );
+    if (livePayload) {
+      payload = livePayload;
+    }
+  }
   if (!payload) {
     recommendedMissing++;
     write(`  ${WARN} ${c.yellow}provider bridge status unavailable — run \`npm run providers:status\`${c.reset}`);

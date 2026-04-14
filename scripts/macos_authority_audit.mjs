@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PRIVILEGED_HELPER_PATH = path.join(REPO_ROOT, "scripts", "privileged_exec.py");
+const DESKTOP_LISTEN_HELPER_PATH = path.join(REPO_ROOT, "scripts", "desktop_listen.swift");
+const HTTP_BEARER_TOKEN_PATH = path.join(REPO_ROOT, "data", "imprint", "http_bearer_token");
 const DEFAULT_SECRET_PATH = path.join(os.homedir(), ".codex", "secrets", "mcagent_admin_password");
 const DEFAULT_ACCOUNT = "mcagent";
 
@@ -71,6 +73,14 @@ function detectTerminalClient() {
     return "dev.warp.Warp-Stable";
   }
   return null;
+}
+
+function detectExecutableClientCandidates() {
+  return unique([
+    process.execPath,
+    readFirstLine(runCapture("which", ["node"]).stdout),
+    readFirstLine(runCapture("which", ["python3"]).stdout),
+  ]);
 }
 
 export function extractBundlePathFromCommand(command) {
@@ -206,6 +216,177 @@ export function summarizeTccService(rows, service, candidateClients) {
   };
 }
 
+function verifyListenHelperReady() {
+  const swiftReady = runCapture("which", ["swift"]).ok;
+  const helperPresent = fs.existsSync(DESKTOP_LISTEN_HELPER_PATH);
+  if (swiftReady && helperPresent) {
+    return {
+      status: "ready",
+      detail: "desktop.listen helper and swift runtime are available.",
+    };
+  }
+  const issues = [];
+  if (!swiftReady) {
+    issues.push("swift runtime not found in PATH");
+  }
+  if (!helperPresent) {
+    issues.push(`desktop listen helper missing at ${DESKTOP_LISTEN_HELPER_PATH}`);
+  }
+  return {
+    status: "blocked",
+    detail: issues.join("; "),
+  };
+}
+
+function summarizeMicrophoneListenLane(params) {
+  const listenHelper = verifyListenHelperReady();
+  if (listenHelper.status !== "ready") {
+    return {
+      status: "blocked",
+      detail: `${listenHelper.detail}; desktop.listen lane cannot run until this is fixed.`,
+      matched_clients: [],
+    };
+  }
+  if (params.tccQuery === null) {
+    return {
+      status: "unknown",
+      detail: `TCC database not found at ${params.tccDbPath}; cannot verify Microphone consent.`,
+      matched_clients: [],
+    };
+  }
+  if (!params.tccQuery.ok) {
+    return {
+      status: "unknown",
+      detail:
+        readFirstLine(params.tccQuery.stderr || params.tccQuery.error) ||
+        "TCC database is not readable; grant Full Disk Access to audit Microphone consent truthfully.",
+      matched_clients: [],
+    };
+  }
+  const baseline = summarizeTccService(params.tccRows, "kTCCServiceMicrophone", params.candidateClients);
+  if (baseline.status === "granted") {
+    return {
+      ...baseline,
+      detail: `${baseline.detail} Microphone consent is present for the active shell host.`,
+    };
+  }
+  if (baseline.status === "blocked") {
+    return {
+      ...baseline,
+      detail:
+        `${baseline.detail} Grant Microphone access for the active shell/IDE host in System Settings ` +
+        "→ Privacy & Security → Microphone.",
+    };
+  }
+  return {
+    ...baseline,
+    detail:
+      `${baseline.detail} Run desktop.listen once to trigger macOS consent, then grant Microphone access in ` +
+      "System Settings if prompted.",
+  };
+}
+
+function readDesktopControlStatus() {
+  const commonArgs = [
+    path.join(REPO_ROOT, "scripts", "mcp_tool_call.mjs"),
+    "--tool",
+    "desktop.control",
+    "--args",
+    JSON.stringify({ action: "status", source_client: "macos_authority_audit.mjs" }),
+    "--cwd",
+    REPO_ROOT,
+  ];
+  const attempts = [];
+  if (fs.existsSync(HTTP_BEARER_TOKEN_PATH)) {
+    const token = String(fs.readFileSync(HTTP_BEARER_TOKEN_PATH, "utf8") || "").trim();
+    if (token) {
+      attempts.push(
+        runCapture(
+          process.execPath,
+          [
+            ...commonArgs,
+            "--transport",
+            "http",
+            "--url",
+            process.env.TRICHAT_MCP_URL || "http://127.0.0.1:8787/",
+            "--origin",
+            process.env.TRICHAT_MCP_ORIGIN || "http://127.0.0.1",
+          ],
+          {
+            env: {
+              ...process.env,
+              MCP_HTTP_BEARER_TOKEN: token,
+              MCP_TOOL_CALL_TIMEOUT_MS: "5000",
+            },
+          }
+        )
+      );
+    }
+  }
+  attempts.push(
+    runCapture(
+      process.execPath,
+      [
+        ...commonArgs,
+        "--transport",
+        "stdio",
+        "--stdio-command",
+        process.env.TRICHAT_MCP_STDIO_COMMAND || "node",
+        "--stdio-args",
+        process.env.TRICHAT_MCP_STDIO_ARGS || "dist/server.js",
+      ],
+      {
+        env: {
+          ...process.env,
+          MCP_TOOL_CALL_TIMEOUT_MS: "5000",
+        },
+      }
+    )
+  );
+  for (const result of attempts) {
+    if (!result.ok) {
+      continue;
+    }
+    try {
+      return JSON.parse(result.stdout || "{}");
+    } catch {}
+  }
+  return null;
+}
+
+export function upgradeStatusWithDesktopProof(baseline, desktopStatus, lane) {
+  if (!baseline || baseline.status === "granted" || baseline.status === "blocked" || !desktopStatus) {
+    return baseline;
+  }
+  const state = desktopStatus.state && typeof desktopStatus.state === "object" ? desktopStatus.state : {};
+  const summary = desktopStatus.summary && typeof desktopStatus.summary === "object" ? desktopStatus.summary : {};
+  if (
+    lane === "microphone" &&
+    summary.listen_ready === true &&
+    typeof state.last_listen_at === "string" &&
+    !state.last_error
+  ) {
+    return {
+      ...baseline,
+      status: "granted",
+      detail: `${baseline.detail} Live desktop.listen proof succeeded at ${state.last_listen_at}.`,
+    };
+  }
+  if (
+    lane === "screen" &&
+    summary.observe_ready === true &&
+    typeof state.last_observation_at === "string" &&
+    !state.last_error
+  ) {
+    return {
+      ...baseline,
+      status: "granted",
+      detail: `${baseline.detail} Live desktop.observe proof succeeded at ${state.last_observation_at}.`,
+    };
+  }
+  return baseline;
+}
+
 function verifyRootHelper(secretPath, account) {
   if (!fs.existsSync(PRIVILEGED_HELPER_PATH)) {
     return {
@@ -274,6 +455,9 @@ export function summarizeAuthorityReadiness(checks) {
   if (checks.screen_recording?.status !== "granted") {
     blockers.push("screen_recording");
   }
+  if (checks.microphone_listen_lane?.status !== "granted") {
+    blockers.push("microphone_listen_lane");
+  }
   if (checks.root_helper?.status !== "ready") {
     blockers.push("root_helper");
   }
@@ -309,12 +493,14 @@ export function auditMacosAuthority() {
         "-separator",
         "\t",
         tccDbPath,
-        "select service,client,auth_value,auth_reason from access where service in ('kTCCServiceAccessibility','kTCCServiceScreenCapture');",
+        "select service,client,auth_value,auth_reason from access where service in ('kTCCServiceAccessibility','kTCCServiceScreenCapture','kTCCServiceMicrophone');",
       ])
     : null;
   const tccRows = tccQuery?.ok ? parseTccRows(tccQuery.stdout) : [];
+  const desktopControlStatus = readDesktopControlStatus();
   const candidateClients = unique([
     detectTerminalClient(),
+    ...detectExecutableClientCandidates(),
     ...collectAncestorBundleIds(),
     "com.apple.Terminal",
     "com.googlecode.iterm2",
@@ -325,7 +511,7 @@ export function auditMacosAuthority() {
     'tell application "System Events" to count (every process)',
   ]);
   const accessibilityStatus = classifyAppleEventsProbe(accessibilityProbe);
-  const screenRecordingStatus =
+  const screenRecordingStatus = upgradeStatusWithDesktopProof(
     tccQuery === null
       ? {
           status: "unknown",
@@ -338,7 +524,16 @@ export function auditMacosAuthority() {
             detail: readFirstLine(tccQuery.stderr || tccQuery.error) || "TCC database is not readable; grant Full Disk Access to audit Screen Recording truthfully.",
             matched_clients: [],
           }
-        : summarizeTccService(tccRows, "kTCCServiceScreenCapture", candidateClients);
+        : summarizeTccService(tccRows, "kTCCServiceScreenCapture", candidateClients),
+    desktopControlStatus,
+    "screen"
+  );
+  const microphoneListenLaneStatus = upgradeStatusWithDesktopProof(summarizeMicrophoneListenLane({
+    tccQuery,
+    tccRows,
+    tccDbPath,
+    candidateClients,
+  }), desktopControlStatus, "microphone");
   const fullDiskAccessStatus =
     tccQuery === null
       ? {
@@ -371,6 +566,7 @@ export function auditMacosAuthority() {
     },
     accessibility: accessibilityStatus,
     screen_recording: screenRecordingStatus,
+    microphone_listen_lane: microphoneListenLaneStatus,
     full_disk_access: fullDiskAccessStatus,
     root_helper: rootHelperStatus,
   };

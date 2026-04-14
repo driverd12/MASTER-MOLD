@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  evaluatePromotionGate,
   parseOllamaList,
+  selectRollbackTarget,
   resolvePreferredModelOrder,
   shouldPromoteModel,
   summarizeCaseRuns,
@@ -89,4 +91,191 @@ test("shouldPromoteModel only promotes fully passing capability soaks", () => {
     }),
     false
   );
+});
+
+test("selectRollbackTarget prefers a healthy non-candidate local Ollama backend", () => {
+  const target = selectRollbackTarget({
+    currentModel: "qwen3.5:35b-a3b-coding-nvfp4",
+    candidateBackendId: "ollama-qwen3-5-35b-a3b-coding-nvfp4",
+    routerState: {
+      backends: [
+        {
+          backend_id: "ollama-qwen3-5-35b-a3b-coding-nvfp4",
+          model_id: "qwen3.5:35b-a3b-coding-nvfp4",
+          provider: "ollama",
+          enabled: true,
+          capabilities: {
+            probe_healthy: false,
+            probe_model_loaded: false,
+          },
+        },
+        {
+          backend_id: "ollama-llama3-2-3b",
+          model_id: "llama3.2:3b",
+          provider: "ollama",
+          enabled: true,
+          capabilities: {
+            probe_healthy: true,
+            probe_model_loaded: true,
+          },
+        },
+      ],
+    },
+  });
+  assert.deepEqual(target, {
+    model: "llama3.2:3b",
+    backend_id: "ollama-llama3-2-3b",
+  });
+});
+
+test("evaluatePromotionGate blocks unhealthy candidates and default drift", () => {
+  const gate = evaluatePromotionGate({
+    model: "qwen3.5:35b-a3b-coding-nvfp4",
+    currentModel: "qwen3.5:35b-a3b-coding-nvfp4",
+    summary: {
+      total_cases: 5,
+      failed_cases: 2,
+      pass_rate: 60,
+    },
+    benchmarkRun: {
+      ok: true,
+      aggregate_metric_value: 100,
+      suite: { suite_id: "autonomy.smoke.local" },
+    },
+    evalRun: {
+      ok: true,
+      aggregate_metric_value: 100,
+      suite: { suite_id: "autonomy.control-plane" },
+    },
+    routerStatus: {
+      state: {
+        default_backend_id: "ollama-qwen3-5-35b-a3b-coding-nvfp4",
+        backends: [
+          {
+            backend_id: "ollama-qwen3-5-35b-a3b-coding-nvfp4",
+            model_id: "qwen3.5:35b-a3b-coding-nvfp4",
+            provider: "ollama",
+            enabled: true,
+            tags: ["local", "ollama", "gpu", "primary"],
+            capabilities: {
+              probe_healthy: false,
+              probe_model_known: true,
+              probe_model_loaded: false,
+              probe_benchmark_ok: false,
+            },
+          },
+          {
+            backend_id: "ollama-llama3-2-3b",
+            model_id: "llama3.2:3b",
+            provider: "ollama",
+            enabled: true,
+            tags: ["local", "ollama", "gpu"],
+            capabilities: {
+              probe_healthy: true,
+              probe_model_known: true,
+              probe_model_loaded: true,
+              probe_benchmark_ok: true,
+            },
+          },
+        ],
+      },
+    },
+    routeResult: {
+      selected_backend: {
+        backend_id: "ollama-llama3-2-3b",
+      },
+      ranked_backends: [
+        { backend: { backend_id: "ollama-llama3-2-3b" } },
+        { backend: { backend_id: "ollama-qwen3-5-35b-a3b-coding-nvfp4" } },
+      ],
+    },
+    bootstrapStatus: {
+      repairs_needed: ["eval.suite.default_drift"],
+    },
+  });
+
+  assert.equal(gate.ready, false);
+  assert.match(gate.blockers.join(","), /capability_soak\.failed/);
+  assert.match(gate.blockers.join(","), /router\.candidate_probe_unhealthy/);
+  assert.match(gate.blockers.join(","), /router\.route_not_candidate/);
+  assert.match(gate.blockers.join(","), /eval\.default_drift/);
+});
+
+test("evaluatePromotionGate passes when soak, benchmark, route, eval, and rollback evidence are all green", () => {
+  const gate = evaluatePromotionGate({
+    model: "qwen3.5:35b-a3b-coding-nvfp4",
+    currentModel: "llama3.2:3b",
+    summary: {
+      total_cases: 5,
+      failed_cases: 0,
+      pass_rate: 100,
+    },
+    benchmarkRun: {
+      ok: true,
+      aggregate_metric_value: 100,
+      run_id: "benchmark-run-test",
+      suite: { suite_id: "autonomy.smoke.local" },
+    },
+    evalRun: {
+      ok: true,
+      aggregate_metric_value: 100,
+      run_id: "eval-run-test",
+      suite: { suite_id: "autonomy.control-plane" },
+    },
+    routerStatus: {
+      state: {
+        default_backend_id: "ollama-llama3-2-3b",
+        backends: [
+          {
+            backend_id: "ollama-qwen3-5-35b-a3b-coding-nvfp4",
+            model_id: "qwen3.5:35b-a3b-coding-nvfp4",
+            provider: "ollama",
+            enabled: true,
+            tags: ["local", "ollama", "gpu", "apple-silicon"],
+            throughput_tps: 250,
+            latency_ms_p50: 700,
+            capabilities: {
+              probe_healthy: true,
+              probe_model_known: true,
+              probe_model_loaded: true,
+              probe_benchmark_ok: true,
+            },
+          },
+          {
+            backend_id: "ollama-llama3-2-3b",
+            model_id: "llama3.2:3b",
+            provider: "ollama",
+            enabled: true,
+            tags: ["local", "ollama", "gpu"],
+            capabilities: {
+              probe_healthy: true,
+              probe_model_known: true,
+              probe_model_loaded: true,
+              probe_benchmark_ok: true,
+            },
+          },
+        ],
+      },
+    },
+    routeResult: {
+      selected_backend: {
+        backend_id: "ollama-qwen3-5-35b-a3b-coding-nvfp4",
+      },
+      ranked_backends: [
+        { backend: { backend_id: "ollama-qwen3-5-35b-a3b-coding-nvfp4" } },
+        { backend: { backend_id: "ollama-llama3-2-3b" } },
+      ],
+    },
+    bootstrapStatus: {
+      repairs_needed: [],
+    },
+  });
+
+  assert.equal(gate.ready, true);
+  assert.equal(gate.blockers.length, 0);
+  assert.deepEqual(gate.evidence.rollback, {
+    available: true,
+    model: "llama3.2:3b",
+    backend_id: "ollama-llama3-2-3b",
+  });
 });

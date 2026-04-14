@@ -13,6 +13,7 @@ import {
   resolveRunnerBusSocketPath,
   waitForServerResourcesToClear,
 } from "../scripts/mcp_runner_support.mjs";
+import { runAutonomyKeepaliveOnce } from "../scripts/autonomy_keepalive_lib.mjs";
 
 function waitFor(predicate, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
@@ -94,6 +95,60 @@ test("acquireRunnerSingletonLock rejects a live competing owner and allows reuse
   assert.equal(third.ok, true);
   third.release();
   fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("runAutonomyKeepaliveOnce skips duplicate cycles when singleton lock is already held", async () => {
+  let callCount = 0;
+  const result = await runAutonomyKeepaliveOnce({
+    repoRoot: process.cwd(),
+    transport: "http",
+    env: {
+      AUTONOMY_KEEPALIVE_SINGLETON_TIMEOUT_MS: "1200",
+    },
+    now: 1710000000000,
+    pid: 1234,
+    acquireLockFn: async () => ({ ok: false, release: () => {} }),
+    waitForHttpReadyFn: async () => true,
+    callToolFn: () => {
+      callCount += 1;
+      return { ok: true };
+    },
+  });
+  assert.equal(callCount, 0);
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, "singleton_locked");
+  assert.equal(result.singleton_lock?.acquired, false);
+});
+
+test("runAutonomyKeepaliveOnce releases singleton lock after retryable HTTP fallback", async () => {
+  const callTransports = [];
+  let released = 0;
+  const result = await runAutonomyKeepaliveOnce({
+    repoRoot: process.cwd(),
+    transport: "http",
+    env: {},
+    now: 1710000000100,
+    pid: 4321,
+    acquireLockFn: async () => ({
+      ok: true,
+      release: () => {
+        released += 1;
+      },
+    }),
+    waitForHttpReadyFn: async () => true,
+    callToolFn: (_repoRoot, input) => {
+      callTransports.push(input.transport);
+      if (input.transport === "http") {
+        throw new Error("socket hang up");
+      }
+      return { ok: true, handled_by: input.transport };
+    },
+  });
+  assert.deepEqual(callTransports, ["http", "stdio"]);
+  assert.equal(released, 1);
+  assert.equal(result.transport, "stdio");
+  assert.equal(result.transport_fallback_from, "http");
 });
 
 test("waitForServerResourcesToClear waits for a busy TCP port to become free", async () => {

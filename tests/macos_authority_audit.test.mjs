@@ -7,6 +7,7 @@ import {
   parseTccRows,
   summarizeAuthorityReadiness,
   summarizeTccService,
+  upgradeStatusWithDesktopProof,
 } from "../scripts/macos_authority_audit.mjs";
 
 test("extractBundlePathFromCommand finds app bundle paths in ancestor commands", () => {
@@ -38,18 +39,22 @@ test("parseTccRows and summarizeTccService classify matched clients", () => {
   const rows = parseTccRows([
     "kTCCServiceAccessibility\tcom.apple.Terminal\t2\t4",
     "kTCCServiceScreenCapture\tcom.apple.Terminal\t0\t4",
+    "kTCCServiceMicrophone\tcom.apple.Terminal\t2\t4",
   ].join("\n"));
   const accessibility = summarizeTccService(rows, "kTCCServiceAccessibility", ["com.apple.Terminal"]);
   const screen = summarizeTccService(rows, "kTCCServiceScreenCapture", ["com.apple.Terminal"]);
+  const microphone = summarizeTccService(rows, "kTCCServiceMicrophone", ["com.apple.Terminal"]);
   assert.equal(accessibility.status, "granted");
   assert.equal(screen.status, "blocked");
+  assert.equal(microphone.status, "granted");
 });
 
-test("summarizeAuthorityReadiness requires console, accessibility, screen recording, and root helper", () => {
+test("summarizeAuthorityReadiness requires console, accessibility, screen recording, microphone listen lane, and root helper", () => {
   const ready = summarizeAuthorityReadiness({
     console_session: { status: "ready" },
     accessibility: { status: "granted" },
     screen_recording: { status: "granted" },
+    microphone_listen_lane: { status: "granted" },
     full_disk_access: { status: "granted" },
     root_helper: { status: "ready" },
   });
@@ -57,9 +62,33 @@ test("summarizeAuthorityReadiness requires console, accessibility, screen record
     console_session: { status: "ready" },
     accessibility: { status: "blocked" },
     screen_recording: { status: "unknown" },
+    microphone_listen_lane: { status: "unknown" },
     full_disk_access: { status: "blocked" },
     root_helper: { status: "blocked" },
   });
   assert.equal(ready.ready_for_patient_zero_full_authority, true);
-  assert.deepEqual(blocked.blockers, ["accessibility", "screen_recording", "root_helper", "full_disk_access"]);
+  assert.deepEqual(blocked.blockers, ["accessibility", "screen_recording", "microphone_listen_lane", "root_helper", "full_disk_access"]);
+});
+
+test("upgradeStatusWithDesktopProof accepts recent live desktop lane evidence", () => {
+  const microphone = upgradeStatusWithDesktopProof(
+    { status: "unknown", detail: "No matching TCC rows were found for the active shell/app clients." },
+    {
+      state: { last_listen_at: "2026-04-14T13:32:10.111Z", last_error: null },
+      summary: { listen_ready: true },
+    },
+    "microphone"
+  );
+  const screen = upgradeStatusWithDesktopProof(
+    { status: "unknown", detail: "No matching TCC rows were found for the active shell/app clients." },
+    {
+      state: { last_observation_at: "2026-04-14T13:35:00.000Z", last_error: null },
+      summary: { observe_ready: true },
+    },
+    "screen"
+  );
+  assert.equal(microphone.status, "granted");
+  assert.match(microphone.detail, /Live desktop\.listen proof succeeded/);
+  assert.equal(screen.status, "granted");
+  assert.match(screen.detail, /Live desktop\.observe proof succeeded/);
 });
