@@ -103,6 +103,7 @@ if git remote | grep -qx 'all'; then
 fi
 
 git remote add all "$github_url"
+git remote set-url --add --push all "$github_url"
 git remote set-url --add --push all "$gitea_url"
 
 git remote -v
