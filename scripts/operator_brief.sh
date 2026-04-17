@@ -80,7 +80,7 @@ NODE
 
 TRANSPORT="$(resolve_transport)"
 ARGS_JSON="$(build_args)"
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mcplayground-operator-brief-XXXXXX")"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/master-mold-operator-brief-XXXXXX")"
 cleanup() {
   rm -rf "${TMP_DIR}"
 }

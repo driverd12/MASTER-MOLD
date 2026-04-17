@@ -68,7 +68,7 @@ const transport =
       });
 
 const client = new Client(
-  { name: "mcplayground-imprint-bootstrap", version: "0.1.0" },
+  { name: "master-mold-imprint-bootstrap", version: "0.1.0" },
   { capabilities: {} }
 );
 

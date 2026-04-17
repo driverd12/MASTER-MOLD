@@ -34,7 +34,7 @@ async function connectRemoteHttpClient() {
   const origin = readEnv("MCP_PROXY_HTTP_ORIGIN", readEnv("TRICHAT_MCP_ORIGIN", "http://127.0.0.1"));
   const bearerToken = readEnv("MCP_PROXY_HTTP_BEARER_TOKEN", readEnv("MCP_HTTP_BEARER_TOKEN", ""));
   const client = new Client(
-    { name: "mcplayground-provider-stdio-bridge", version: "1.0.0" },
+    { name: "master-mold-provider-stdio-bridge", version: "1.0.0" },
     { capabilities: {} }
   );
   const headers = {
@@ -61,7 +61,7 @@ async function connectRemoteStdioClient() {
     ...(dbPath ? { ANAMNESIS_HUB_DB_PATH: dbPath } : {}),
   };
   const client = new Client(
-    { name: "mcplayground-provider-stdio-bridge", version: "1.0.0" },
+    { name: "master-mold-provider-stdio-bridge", version: "1.0.0" },
     { capabilities: {} }
   );
   const transport = new StdioClientTransport({
@@ -105,7 +105,7 @@ async function connectRemoteClient() {
 
 async function main() {
   const server = new Server(
-    { name: "mcplayground-provider-stdio-bridge", version: "1.0.0" },
+    { name: "master-mold-provider-stdio-bridge", version: "1.0.0" },
     {
       capabilities: {
         tools: { listChanged: false },

@@ -422,7 +422,7 @@ On Windows, use the `npm run ...` scripts exactly as shown. Do not manually type
 Fresh clone:
 
 ```bash
-git clone https://github.com/driverd12/master-mold.git
+git clone https://github.com/driverd12/MASTER-MOLD.git
 cd master-mold
 npm run bootstrap:env
 ```
@@ -713,7 +713,7 @@ Pure core / no-pack connection example:
 ```json
 {
   "mcpServers": {
-    "mcplayground-core-only": {
+    "master-mold-core-only": {
       "command": "node",
       "args": ["/absolute/path/to/master-mold/dist/server.js"],
       "env": {

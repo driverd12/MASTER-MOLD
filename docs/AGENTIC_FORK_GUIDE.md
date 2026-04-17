@@ -14,7 +14,7 @@ Create a fork whose default posture is:
 ## Step 1: Fork The Repo
 
 ```bash
-git clone https://github.com/driverd12/master-mold.git master-mold---Agentic-Server
+git clone https://github.com/driverd12/MASTER-MOLD.git master-mold---Agentic-Server
 cd master-mold---Agentic-Server
 npm ci
 npm run build
@@ -63,7 +63,7 @@ STDIO example:
 ```json
 {
   "mcpServers": {
-    "mcplayground-agentic": {
+    "master-mold-agentic": {
       "command": "node",
       "args": ["/absolute/path/to/master-mold---Agentic-Server/dist/server.js"],
       "env": {

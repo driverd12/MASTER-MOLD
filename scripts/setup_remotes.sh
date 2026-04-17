@@ -45,8 +45,10 @@ done
 if [[ -z "$github_url" ]]; then
   if git remote | grep -qx 'origin'; then
     old_origin_url="$(git remote get-url origin)"
-    github_url="${old_origin_url//MCPlayground---Core-Template/master-mold}"
-    github_url="${github_url//MCPLAYGROUND---Core-Template/master-mold}"
+    github_url="${old_origin_url//MCPlayground---Core-Template/MASTER-MOLD}"
+    github_url="${github_url//MCPLAYGROUND---Core-Template/MASTER-MOLD}"
+    github_url="${github_url//MASTER_MOLD---Core-Template/MASTER-MOLD}"
+    github_url="${github_url//github.com\\/driverd12\\/master-mold/github.com/driverd12/MASTER-MOLD}"
   else
     github_url=""
   fi
@@ -55,8 +57,16 @@ fi
 if [[ -z "$gitea_url" ]]; then
   if git remote | grep -qx 'git-tea'; then
     old_gitea_url="$(git remote get-url git-tea)"
-    gitea_url="${old_gitea_url//SUPERPOWERS--Local-First-Agent-Orchestration---MCP-Runtime/master-mold--Local-First-Agent-Orchestration---MCP-Runtime}"
-    gitea_url="${gitea_url//superpowers--Local-First-Agent-Orchestration---MCP-Runtime/master-mold--Local-First-Agent-Orchestration---MCP-Runtime}"
+  elif git remote | grep -qx 'gitea'; then
+    old_gitea_url="$(git remote get-url gitea)"
+  else
+    old_gitea_url=""
+  fi
+
+  if [[ -n "${old_gitea_url:-}" ]]; then
+    gitea_url="${old_gitea_url//SUPERPOWERS--Local-First-Agent-Orchestration---MCP-Runtime/MASTER-MOLD}"
+    gitea_url="${gitea_url//superpowers--Local-First-Agent-Orchestration---MCP-Runtime/MASTER-MOLD}"
+    gitea_url="${gitea_url//master-mold--Local-First-Agent-Orchestration---MCP-Runtime/MASTER-MOLD}"
   else
     gitea_url=""
   fi

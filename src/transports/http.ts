@@ -1114,7 +1114,7 @@ async function maybeHandleOfficeRequest(
     sendJson(res, 200, {
       ok: true,
       status: "ok",
-      server: "mcplayground-http",
+      server: "master-mold-http",
       office_path: "/office/",
       health_path: "/health",
     });
@@ -1124,7 +1124,7 @@ async function maybeHandleOfficeRequest(
     sendJson(res, 200, {
       ok: true,
       status: "ok",
-      server: "mcplayground-http",
+      server: "master-mold-http",
     });
     return true;
   }

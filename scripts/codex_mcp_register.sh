@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVER_NAME="${1:-mcplayground}"
+SERVER_NAME="${1:-master-mold}"
 LAUNCHER="${REPO_ROOT}/scripts/codex_mcp_stdio.sh"
 
 if [[ ! -x "${LAUNCHER}" ]]; then

@@ -78,7 +78,7 @@ if [[ -z "${MCP_HTTP_BEARER_TOKEN+x}" && -f "${TOKEN_FILE}" ]]; then
   export MCP_HTTP_BEARER_TOKEN="$(cat "${TOKEN_FILE}")"
 fi
 
-mcplayground_require_node_mcp_client "${REPO_ROOT}" "provider_bridge"
+master_mold_require_node_mcp_client "${REPO_ROOT}" "provider_bridge"
 
 resolve_call_transport() {
   if [[ -n "${TRICHAT_MCP_TRANSPORT:-}" ]]; then
@@ -108,7 +108,7 @@ process.stdout.write(JSON.stringify(values));
 
 CALL_TRANSPORT="$(resolve_call_transport)"
 if [[ "${CALL_TRANSPORT}" == "stdio" ]]; then
-  mcplayground_require_dist_server "${REPO_ROOT}" "provider_bridge"
+  master_mold_require_dist_server "${REPO_ROOT}" "provider_bridge"
 fi
 TIMESTAMP="$(date +%s)"
 RAND_SUFFIX="$(node --input-type=module -e 'process.stdout.write(Math.random().toString(36).slice(2, 8));')"

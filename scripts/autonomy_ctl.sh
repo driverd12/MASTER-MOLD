@@ -27,7 +27,7 @@ if [[ -z "${MCP_HTTP_BEARER_TOKEN+x}" && -f "${TOKEN_FILE}" ]]; then
   export MCP_HTTP_BEARER_TOKEN="$(cat "${TOKEN_FILE}")"
 fi
 
-mcplayground_require_node_mcp_client "${REPO_ROOT}" "autonomy_ctl"
+master_mold_require_node_mcp_client "${REPO_ROOT}" "autonomy_ctl"
 
 HTTP_URL="${TRICHAT_MCP_URL:-http://127.0.0.1:8787/}"
 HTTP_ORIGIN="${TRICHAT_MCP_ORIGIN:-http://127.0.0.1}"
@@ -629,7 +629,7 @@ NODE
 
 TRANSPORT="$(resolve_transport)"
 if [[ "${TRANSPORT}" == "stdio" ]]; then
-  mcplayground_require_dist_server "${REPO_ROOT}" "autonomy_ctl"
+  master_mold_require_dist_server "${REPO_ROOT}" "autonomy_ctl"
 fi
 
 if [[ "${ACTION}" == "status" ]]; then

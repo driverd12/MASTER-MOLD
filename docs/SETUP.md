@@ -19,7 +19,7 @@ For Windows users: prefer the `npm run ...` commands in this guide. Do not manua
 ## 2. Clone
 
 ```bash
-git clone https://github.com/driverd12/master-mold.git
+git clone https://github.com/driverd12/MASTER-MOLD.git
 cd master-mold
 ```
 

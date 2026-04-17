@@ -147,7 +147,7 @@ function launchdLoaded() {
   if (!uid) {
     return false;
   }
-  const result = spawnSync("launchctl", ["print", `gui/${uid}/com.mcplayground.mcp.server`], {
+  const result = spawnSync("launchctl", ["print", `gui/${uid}/com.master-mold.mcp.server`], {
     stdio: "ignore",
     timeout: 5000,
   });

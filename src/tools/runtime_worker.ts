@@ -231,7 +231,7 @@ function ensureWorktreeLayout(input: {
   const root = path.join(path.dirname(repoRoot), ".mcp-runtime-worktrees", repoName);
   const sessionSlug = slugify(`${input.runtime_id}-${input.session_id}`) || input.session_id;
   const worktreePath = path.join(root, sessionSlug);
-  const branchName = `mcplayground/${input.runtime_id}/${sessionSlug}`;
+  const branchName = `master-mold/${input.runtime_id}/${sessionSlug}`;
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
   fs.rmSync(worktreePath, { recursive: true, force: true });
 

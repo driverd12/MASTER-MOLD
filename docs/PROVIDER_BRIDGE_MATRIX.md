@@ -69,7 +69,7 @@ Claude CLI and Gemini CLI default to a resilient stdio proxy on this host for be
 Codex install still uses the dedicated script:
 
 ```bash
-npm run codex:mcp:register -- mcplayground
+npm run codex:mcp:register -- master-mold
 ```
 
 ## What `provider.bridge` Actually Does

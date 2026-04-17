@@ -1215,7 +1215,7 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
         {
           ...cachedProviderBridgeSnapshot,
           clients: Array.isArray(cachedProviderBridgeSnapshot.clients) ? cachedProviderBridgeSnapshot.clients : [],
-          server_name: String(cachedProviderBridgeSnapshot.server_name ?? "mcplayground"),
+          server_name: String(cachedProviderBridgeSnapshot.server_name ?? "master-mold"),
         } as ProviderBridgePayload["snapshot"],
         liveProviderBridgeDiagnostics
       );
@@ -1225,7 +1225,7 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
         onboarding: buildProviderBridgeOnboardingSummary({
           clients: liveProviderBridgeSnapshot.clients,
           diagnostics: liveProviderBridgeDiagnostics.diagnostics,
-          server_name: String(liveProviderBridgeSnapshot.server_name ?? "mcplayground"),
+          server_name: String(liveProviderBridgeSnapshot.server_name ?? "master-mold"),
           generated_at: liveProviderBridgeDiagnostics.generated_at,
           diagnostics_stale: liveProviderBridgeDiagnostics.stale === true,
         }),

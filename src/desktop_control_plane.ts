@@ -94,7 +94,7 @@ export function getDefaultDesktopControlState(): DesktopControlStateRecord {
     allow_observe: true,
     allow_act: false,
     allow_listen: false,
-    screenshot_dir: path.join(os.tmpdir(), "mcplayground-desktop-control"),
+    screenshot_dir: path.join(os.tmpdir(), "master-mold-desktop-control"),
     action_timeout_ms: 15_000,
     listen_max_seconds: 15,
     heartbeat_interval_seconds: 300,

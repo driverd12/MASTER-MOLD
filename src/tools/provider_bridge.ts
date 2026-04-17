@@ -30,7 +30,7 @@ export const providerBridgeSchema = z
     mutation: mutationSchema.optional(),
     clients: z.array(providerBridgeClientSchema).max(20).optional(),
     transport: transportSchema.default("auto"),
-    server_name: z.string().min(1).max(120).default("mcplayground"),
+    server_name: z.string().min(1).max(120).default("master-mold"),
     output_dir: z.string().min(1).optional(),
     include_bearer_token: z.boolean().default(false),
     http_url: z.string().min(1).optional(),
@@ -277,7 +277,7 @@ function providerBridgeDiagnosticsCacheKey(input: {
     db_path: input.db_path,
     workspace_root: workspaceRoot,
   });
-  const serverName = input.server_name?.trim() || "mcplayground";
+  const serverName = input.server_name?.trim() || "master-mold";
   return {
     workspaceRoot,
     transport,
@@ -712,7 +712,7 @@ export function buildProviderBridgeOnboardingSummary(params: {
   generated_at?: string;
   diagnostics_stale?: boolean;
 }): ProviderBridgeOnboardingSummary {
-  const serverName = params.server_name?.trim() || "mcplayground";
+  const serverName = params.server_name?.trim() || "master-mold";
   const diagnosticsByClient = new Map(
     (params.diagnostics ?? []).map((entry) => [entry.client_id, entry] as const)
   );
@@ -1011,7 +1011,7 @@ export function resolveProviderBridgeSnapshot(input: {
     db_path: input.db_path,
     workspace_root: workspaceRoot,
   });
-  const serverName = input.server_name?.trim() || "mcplayground";
+  const serverName = input.server_name?.trim() || "master-mold";
   const clients = buildClientStatusesCached(workspaceRoot, transport, serverName);
   const routerBackendCandidates = buildRouterBackendCandidates(clients);
   return {
@@ -1851,7 +1851,7 @@ function runProviderDiagnostics(
             ? "Claude CLI binary is not installed."
             : "Claude CLI MCP bridge is not configured for this host.",
           notes: status.notes,
-          command: "claude mcp get mcplayground && claude auth status",
+          command: "claude mcp get master-mold && claude auth status",
           config_path: status.config_path,
         } satisfies ProviderBridgeDiagnostic;
       }
@@ -1866,7 +1866,7 @@ function runProviderDiagnostics(
         status: auth.connected ? "connected" : auth.available ? "disconnected" : "configured",
         detail: auth.detail,
         notes: status.notes,
-        command: "claude mcp get mcplayground + claude auth status",
+        command: "claude mcp get master-mold + claude auth status",
         config_path: status.config_path,
       } satisfies ProviderBridgeDiagnostic;
     }

@@ -245,7 +245,7 @@ async function invokeToolOnce(options, args) {
       ? createHttpTransport(options)
       : createStdioTransport(options);
 
-  const client = new Client({ name: "mcplayground-mcp-tool-call", version: "0.1.0" }, { capabilities: {} });
+  const client = new Client({ name: "master-mold-mcp-tool-call", version: "0.1.0" }, { capabilities: {} });
   try {
     await withTimeout(client.connect(transport), options.timeoutMs, `connect ${options.transport}:${options.tool}`);
     const response = await withTimeout(

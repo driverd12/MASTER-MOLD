@@ -13,7 +13,7 @@ This guide is a practical onboarding checklist for engineers using Cursor and Co
 ## 2) Clone and Bootstrap
 
 ```bash
-git clone https://github.com/driverd12/master-mold.git
+git clone https://github.com/driverd12/MASTER-MOLD.git
 cd master-mold
 npm run bootstrap:env
 ```

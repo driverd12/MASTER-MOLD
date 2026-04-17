@@ -64,7 +64,7 @@ Disable workflow hooks explicitly:
 ```json
 {
   "mcpServers": {
-    "mcplayground-core-only": {
+    "master-mold-core-only": {
       "command": "node",
       "args": ["/absolute/path/to/repo/dist/server.js"],
       "env": {
@@ -81,7 +81,7 @@ Disable workflow hooks explicitly:
 ```json
 {
   "mcpServers": {
-    "mcplayground-http": {
+    "master-mold-http": {
       "url": "http://127.0.0.1:8787/",
       "headers": {
         "Authorization": "Bearer <token>",

@@ -135,11 +135,11 @@ export function resolveRunnerBusSocketPath(repoRoot) {
   const digest = crypto.createHash("sha256").update(repoRoot).digest("hex").slice(0, 12);
   const cacheBase =
     process.platform === "darwin"
-      ? path.join(os.homedir(), "Library", "Caches", "mcplayground")
-      : path.join(os.homedir(), ".cache", "mcplayground");
+      ? path.join(os.homedir(), "Library", "Caches", "master-mold")
+      : path.join(os.homedir(), ".cache", "master-mold");
   const candidates = [
     path.join(cacheBase, `trichat-${digest}.sock`),
-    path.join("/tmp", `mcplayground-trichat-${digest}.sock`),
+    path.join("/tmp", `master-mold-trichat-${digest}.sock`),
   ];
   return candidates.find((entry) => Buffer.byteLength(entry) < 100) ?? candidates[candidates.length - 1];
 }

@@ -8,13 +8,13 @@ LAUNCH_DIR="${HOME}/Library/LaunchAgents"
 LOG_DIR="${REPO_ROOT}/data/imprint/logs"
 DOMAIN="gui/$(id -u)"
 
-MCP_LABEL="com.mcplayground.mcp.server"
-AUTO_LABEL="com.mcplayground.imprint.autosnapshot"
-WORKER_LABEL="com.mcplayground.imprint.inboxworker"
-KEEPALIVE_LABEL="com.mcplayground.autonomy.keepalive"
-WATCHDOG_LABEL="com.mcplayground.local-adapter.watchdog"
-OFFICE_GUI_LABEL="com.mcplayground.agent-office.gui.watch"
-MLX_LABEL="com.mcplayground.mlx.server"
+MCP_LABEL="com.master-mold.mcp.server"
+AUTO_LABEL="com.master-mold.imprint.autosnapshot"
+WORKER_LABEL="com.master-mold.imprint.inboxworker"
+KEEPALIVE_LABEL="com.master-mold.autonomy.keepalive"
+WATCHDOG_LABEL="com.master-mold.local-adapter.watchdog"
+OFFICE_GUI_LABEL="com.master-mold.agent-office.gui.watch"
+MLX_LABEL="com.master-mold.mlx.server"
 
 MCP_PLIST="${LAUNCH_DIR}/${MCP_LABEL}.plist"
 AUTO_PLIST="${LAUNCH_DIR}/${AUTO_LABEL}.plist"
@@ -26,9 +26,9 @@ MLX_PLIST="${LAUNCH_DIR}/${MLX_LABEL}.plist"
 LEGACY_BUS_SOCKET_PATH="${REPO_ROOT}/data/trichat.bus.sock"
 BUS_SOCKET_DIGEST="$(printf '%s' "${REPO_ROOT}" | shasum -a 256 | cut -c1-12)"
 if [[ "${OSTYPE:-}" == darwin* ]]; then
-  BUS_SOCKET_DEFAULT="${HOME}/Library/Caches/mcplayground/trichat-${BUS_SOCKET_DIGEST}.sock"
+  BUS_SOCKET_DEFAULT="${HOME}/Library/Caches/master-mold/trichat-${BUS_SOCKET_DIGEST}.sock"
 else
-  BUS_SOCKET_DEFAULT="${HOME}/.cache/mcplayground/trichat-${BUS_SOCKET_DIGEST}.sock"
+  BUS_SOCKET_DEFAULT="${HOME}/.cache/master-mold/trichat-${BUS_SOCKET_DIGEST}.sock"
 fi
 if [[ ${#LEGACY_BUS_SOCKET_PATH} -lt 100 ]]; then
   BUS_SOCKET_DEFAULT="${LEGACY_BUS_SOCKET_PATH}"

@@ -18,7 +18,7 @@ need_cmd python3
 need_cmd tmux
 need_cmd curl
 
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mcplayground-production-readiness-XXXXXX")"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/master-mold-production-readiness-XXXXXX")"
 LOCK_ROOT="${REPO_ROOT}/data/imprint/locks"
 LOCK_DIR="${LOCK_ROOT}/production-readiness.lock"
 LOCK_WAIT_SECONDS="${PRODUCTION_READINESS_LOCK_WAIT_SECONDS:-3}"
