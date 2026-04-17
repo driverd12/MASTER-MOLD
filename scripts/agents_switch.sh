@@ -15,6 +15,7 @@ DOMAIN="gui/$(id -u)"
 MCP_PORT="${MCP_HTTP_PORT:-${ANAMNESIS_MCP_HTTP_PORT:-8787}}"
 HTTP_URL="${TRICHAT_MCP_URL:-http://127.0.0.1:${MCP_PORT}/}"
 HTTP_ORIGIN="${TRICHAT_MCP_ORIGIN:-http://127.0.0.1}"
+MCP_HTTP_READY_TIMEOUT_SECONDS="${MCP_HTTP_READY_TIMEOUT_SECONDS:-90}"
 
 MCP_LABEL="com.master-mold.mcp.server"
 AUTO_LABEL="com.master-mold.imprint.autosnapshot"
@@ -269,7 +270,7 @@ clear_repo_http_runtime() {
 
 wait_for_mcp_http() {
   [[ -n "${MCP_HTTP_BEARER_TOKEN:-}" ]] || return 1
-  local deadline=$((SECONDS + 45))
+  local deadline=$((SECONDS + MCP_HTTP_READY_TIMEOUT_SECONDS))
   while (( SECONDS < deadline )); do
     if curl -fsS --connect-timeout 1 --max-time 4 \
       -H "Authorization: Bearer ${MCP_HTTP_BEARER_TOKEN}" \

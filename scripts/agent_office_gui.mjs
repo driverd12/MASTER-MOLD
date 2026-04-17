@@ -251,15 +251,30 @@ async function ensureHttp() {
 }
 
 async function launchableOk() {
-  const token = String(process.env.MCP_HTTP_BEARER_TOKEN || "").trim();
-  if (!token) {
-    return await healthOk();
+  const [rawHealth, listener, ready, officeReady] = await Promise.all([
+    healthOk(),
+    listenerOk(),
+    readyOk(),
+    officePageOk(),
+  ]);
+  const health = rawHealth || ready;
+  if (!String(process.env.MCP_HTTP_BEARER_TOKEN || "").trim()) {
+    return health || officeReady;
   }
-  return await readyOk();
+  return ready || officeReady || (health && listener);
 }
 
 async function detectMode({ health, listener, ready, officeReady }) {
   const runnerPid = clearRunnerPidIfStale();
+  if (officeReady) {
+    if (runnerPid && pidAlive(runnerPid)) {
+      return "runner";
+    }
+    if (launchdLoaded()) {
+      return "launchd";
+    }
+    return "service";
+  }
   if (ready) {
     if (officeReady) {
       return "service";
@@ -290,7 +305,7 @@ async function printStatus() {
   ]);
   const health = rawHealth || ready;
   const mode = await detectMode({ health, listener, ready, officeReady });
-  const launchable = String(process.env.MCP_HTTP_BEARER_TOKEN || "").trim() ? ready : health;
+  const launchable = ready || officeReady || (health && listener);
   process.stdout.write(
     `${JSON.stringify(
       {

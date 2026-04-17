@@ -163,7 +163,7 @@ case "\${MODE}" in
     [[ -n "\${NODE_BIN}" ]] || { echo "error: node not found in PATH" >&2; exit 2; }
     EXPANDED_ARGS=()
     for arg in "\$@"; do
-      EXPANDED_ARGS+=("\$(expand_arg "\${arg}")")
+      EXPANDED_ARGS+=("\$(resolve_existing_path "\$(expand_arg "\${arg}")")")
     done
     exec "\${NODE_BIN}" "\${REPO_ROOT}/\${SCRIPT_REL}" "\${EXPANDED_ARGS[@]}"
     ;;
@@ -173,7 +173,7 @@ case "\${MODE}" in
     shift
     EXPANDED_ARGS=()
     for arg in "\$@"; do
-      EXPANDED_ARGS+=("\$(expand_arg "\${arg}")")
+      EXPANDED_ARGS+=("\$(resolve_existing_path "\$(expand_arg "\${arg}")")")
     done
     exec "\${REPO_ROOT}/\${SCRIPT_REL}" "\${EXPANDED_ARGS[@]}"
     ;;
@@ -186,7 +186,7 @@ case "\${MODE}" in
     [[ -e "\${RESOLVED_PYTHON}" ]] || { echo "error: python launcher not found: \${PYTHON_PATH}" >&2; exit 2; }
     EXPANDED_ARGS=()
     for arg in "\$@"; do
-      EXPANDED_ARGS+=("\$(expand_arg "\${arg}")")
+      EXPANDED_ARGS+=("\$(resolve_existing_path "\$(expand_arg "\${arg}")")")
     done
     exec "\${RESOLVED_PYTHON}" -m "\${MODULE_NAME}" "\${EXPANDED_ARGS[@]}"
     ;;

@@ -57,6 +57,7 @@ LOCAL_ADAPTER_WATCHDOG_MAX_AGE="${LOCAL_ADAPTER_WATCHDOG_MAX_SOAK_AGE_MINUTES:-2
 LOCAL_ADAPTER_WATCHDOG_SOAK_CYCLES="${LOCAL_ADAPTER_WATCHDOG_SOAK_CYCLES:-1}"
 LOCAL_ADAPTER_WATCHDOG_SOAK_INTERVAL="${LOCAL_ADAPTER_WATCHDOG_SOAK_INTERVAL_SECONDS:-0}"
 AGENT_OFFICE_GUI_WATCH_INTERVAL_MS="${AGENT_OFFICE_GUI_WATCH_INTERVAL_MS:-10000}"
+MCP_HTTP_READY_TIMEOUT_SECONDS="${MCP_HTTP_READY_TIMEOUT_SECONDS:-90}"
 MLX_SERVER_ENABLED="${TRICHAT_MLX_SERVER_ENABLED:-0}"
 MLX_ENDPOINT="${TRICHAT_MLX_ENDPOINT:-http://127.0.0.1:8788}"
 MLX_PORT="${MLX_ENDPOINT##*:}"
@@ -118,7 +119,7 @@ reset_launch_agent() {
 
 wait_for_mcp_http() {
   local url="http://${MCP_HOST}:${MCP_PORT}/health"
-  local deadline=$((SECONDS + 30))
+  local deadline=$((SECONDS + MCP_HTTP_READY_TIMEOUT_SECONDS))
   local health_json=""
 
   while (( SECONDS < deadline )); do
@@ -200,6 +201,8 @@ cat >"${MCP_PLIST}" <<PLIST
 
     <key>EnvironmentVariables</key>
     <dict>
+      <key>MASTER_MOLD_REPO_ROOT</key>
+      <string>${REPO_ROOT}</string>
       <key>MCP_HTTP</key>
       <string>1</string>
       <key>MCP_HTTP_HOST</key>
@@ -258,6 +261,8 @@ cat >"${AUTO_PLIST}" <<PLIST
 
     <key>EnvironmentVariables</key>
     <dict>
+      <key>MASTER_MOLD_REPO_ROOT</key>
+      <string>${REPO_ROOT}</string>
       <key>PATH</key>
       <string>${PATH}</string>
     </dict>
@@ -308,6 +313,8 @@ cat >"${WORKER_PLIST}" <<PLIST
 
     <key>EnvironmentVariables</key>
     <dict>
+      <key>MASTER_MOLD_REPO_ROOT</key>
+      <string>${REPO_ROOT}</string>
       <key>PATH</key>
       <string>${PATH}</string>
       <key>PYTHONUNBUFFERED</key>
@@ -429,6 +436,8 @@ cat >"${WATCHDOG_PLIST}" <<PLIST
 
     <key>EnvironmentVariables</key>
     <dict>
+      <key>MASTER_MOLD_REPO_ROOT</key>
+      <string>${REPO_ROOT}</string>
       <key>PATH</key>
       <string>${PATH}</string>
       <key>MCP_HTTP_BEARER_TOKEN</key>
@@ -479,6 +488,8 @@ cat >"${OFFICE_GUI_PLIST}" <<PLIST
 
     <key>EnvironmentVariables</key>
     <dict>
+      <key>MASTER_MOLD_REPO_ROOT</key>
+      <string>${REPO_ROOT}</string>
       <key>PATH</key>
       <string>${PATH}</string>
       <key>MCP_HTTP_BEARER_TOKEN</key>
@@ -529,6 +540,8 @@ cat >"${AUTO_OPEN_PLIST}" <<PLIST
 
     <key>EnvironmentVariables</key>
     <dict>
+      <key>MASTER_MOLD_REPO_ROOT</key>
+      <string>${REPO_ROOT}</string>
       <key>PATH</key>
       <string>${PATH}</string>
       <key>MCP_HTTP_BEARER_TOKEN</key>
@@ -598,6 +611,8 @@ ${MLX_ADAPTER_ARGUMENTS}
 
     <key>EnvironmentVariables</key>
     <dict>
+      <key>MASTER_MOLD_REPO_ROOT</key>
+      <string>${REPO_ROOT}</string>
       <key>PATH</key>
       <string>${PATH}</string>
       <key>PYTHONUNBUFFERED</key>
