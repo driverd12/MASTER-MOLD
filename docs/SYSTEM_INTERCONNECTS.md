@@ -49,7 +49,7 @@ flowchart LR
     STDIO["STDIO transport"]
   end
 
-  subgraph Runtime["MCPlayground Core Runtime"]
+  subgraph Runtime["MASTER MOLD Runtime"]
     Registry["toolRegistry<br/>tool.search"]
     Kernel["goal.* / plan.* / task.* / agent.session.* / kernel.summary / operator.brief"]
     Office["trichat.* / office.snapshot / office gui snapshot"]

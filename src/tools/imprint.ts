@@ -255,7 +255,7 @@ export function imprintBootstrap(
   const toolNames = options.get_tool_names().slice().sort();
 
   const lines: string[] = [];
-  lines.push("MCPlayground Imprint Bootstrap");
+  lines.push("MASTER MOLD Imprint Bootstrap");
   lines.push(`Generated: ${new Date().toISOString()}`);
   lines.push(`Server: ${options.server_name}@${options.server_version}`);
   lines.push(`Repository: ${options.repo_root}`);
@@ -662,7 +662,7 @@ function runAutoSnapshotTick(
         include_recent_transcript_lines: config.include_recent_transcript_lines,
         write_file: config.write_file,
         promote_summary: config.promote_summary,
-        source_client: "superpowers",
+        source_client: "master-mold",
         source_model: "local-deterministic-v1",
         source_agent: "imprint.auto_snapshot",
       },

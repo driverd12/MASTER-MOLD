@@ -1,8 +1,8 @@
-# SUPERPOWERS
+# MASTER MOLD: The Autonomous Multi-Agent MCP Runtime
 
 <img src="./docs/assets/patient-zero-banner-v2.svg" alt="Patient Zero pixel-art banner showing Agent Office, MCP Server, and the local agent crew" width="100%" />
 
-SUPERPOWERS is a local-first MCP server runtime designed to be reused across domains.
+Like its comic-book namesake, **MASTER MOLD** isn't just a single operative—it's the durable, self-aware command center that builds, orchestrates, and unleashes your agentic workforce. Designed as a local-first Model Context Protocol (MCP) server, it provides the heavy-lifting infrastructure—state continuity, multi-agent councils, and root-capable host control—so your AI models can stop chatting and start building.
 
 The repository is intentionally split into two layers:
 
@@ -75,7 +75,7 @@ This is the operator-facing map of the current server surface.
 ```mermaid
 flowchart TD
   Clients["Codex / Cursor / IDE / HTTP Clients"] --> Transport["MCP Transports<br/>stdio / HTTP / launchd"]
-  Transport --> Kernel["SUPERPOWERS Server"]
+  Transport --> Kernel["MASTER MOLD Server"]
 
   Kernel --> Memory["Continuity + Knowledge<br/>memory.* / transcript.* / who_knows / knowledge.query / retrieval.hybrid / imprint.*"]
   Kernel --> Control["Execution Control Plane<br/>goal.* / plan.* / dispatch.autorun / goal.autorun* / playbook.*"]
@@ -149,7 +149,7 @@ flowchart LR
     STDIO["STDIO transport<br/>single-client / helper calls"]
   end
 
-  subgraph Kernel["MCPlayground MCP Server"]
+  subgraph Kernel["MASTER MOLD MCP Server"]
     Registry["toolRegistry + tool.search"]
     Control["goal.* / plan.* / task.* / agent.session.* / operator.brief / kernel.summary"]
     Fabric["office orchestration / worker.fabric / runtime.worker / model.router / provider.bridge"]
@@ -225,7 +225,7 @@ flowchart LR
     STDIO["STDIO<br/>client-launched MCP sessions"]
   end
 
-  subgraph Runtime["MCPlayground Runtime"]
+  subgraph Runtime["MASTER MOLD Runtime"]
     Registry["tool registry + capability discovery"]
     Brief["kernel.summary / operator.brief / office.snapshot"]
     Council["office council + autopilot"]
@@ -411,7 +411,7 @@ npm run bootstrap:env
 npm run start:stdio
 ```
 
-If this is your first time with MCPlayground, think of it as a local AI-agent toolbench rather than a normal app you click through manually. You bootstrap the base runtime, then your MCP-capable AI client uses the tools here to build and adapt project-specific scaffolding, status surfaces, memories, and workflows.
+If this is your first time with MASTER MOLD, think of it as a local AI-agent toolbench rather than a normal app you click through manually. You bootstrap the base runtime, then your MCP-capable AI client uses the tools here to build and adapt project-specific scaffolding, status surfaces, memories, and workflows.
 
 On macOS, do not start with `brew install npm` by itself. That often leaves your terminal on the latest Node/npm pair, which can overshoot this repo's supported range. Use `npm run bootstrap:env:install` or install `node@22` first, then rerun the bootstrap.
 
@@ -422,8 +422,8 @@ On Windows, use the `npm run ...` scripts exactly as shown. Do not manually type
 Fresh clone:
 
 ```bash
-git clone https://github.com/driverd12/SUPERPOWERS.git
-cd SUPERPOWERS
+git clone https://github.com/driverd12/master-mold.git
+cd master-mold
 npm run bootstrap:env
 ```
 
@@ -574,7 +574,7 @@ The export includes:
 On the target server:
 
 ```bash
-./bootstrap-server.sh /path/to/target /path/to/SUPERPOWERS-<timestamp>.bundle
+./bootstrap-server.sh /path/to/target /path/to/master-mold-<timestamp>.bundle
 ```
 
 ## Configuration
@@ -697,11 +697,11 @@ Fast STDIO connection example:
 ```json
 {
   "mcpServers": {
-    "superpowers": {
+    "master-mold": {
       "command": "node",
-      "args": ["/absolute/path/to/SUPERPOWERS/dist/server.js"],
+      "args": ["/absolute/path/to/master-mold/dist/server.js"],
       "env": {
-        "ANAMNESIS_HUB_DB_PATH": "/absolute/path/to/SUPERPOWERS/data/hub.sqlite"
+        "ANAMNESIS_HUB_DB_PATH": "/absolute/path/to/master-mold/data/hub.sqlite"
       }
     }
   }
@@ -715,9 +715,9 @@ Pure core / no-pack connection example:
   "mcpServers": {
     "mcplayground-core-only": {
       "command": "node",
-      "args": ["/absolute/path/to/SUPERPOWERS/dist/server.js"],
+      "args": ["/absolute/path/to/master-mold/dist/server.js"],
       "env": {
-        "ANAMNESIS_HUB_DB_PATH": "/absolute/path/to/SUPERPOWERS/data/hub.sqlite",
+        "ANAMNESIS_HUB_DB_PATH": "/absolute/path/to/master-mold/data/hub.sqlite",
         "MCP_DOMAIN_PACKS": "none"
       }
     }

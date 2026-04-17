@@ -48,7 +48,7 @@ Many clients accept a config object like this:
 ```json
 {
   "mcpServers": {
-    "superpowers": {
+    "master-mold": {
       "command": "node",
       "args": ["/absolute/path/to/repo/dist/server.js"],
       "env": {

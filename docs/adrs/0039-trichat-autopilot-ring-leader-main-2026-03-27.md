@@ -14,4 +14,4 @@ Selected strategy: GSD-based delegation with concrete commands
 Execution mode: direct_command
 Execution commands: git status || npm run build
 Verification: passed (execution checks passed)
-Rollback: revert workspace changes and replay task queue from /Users/dan.driver/Documents/Playground/Agentic Playground/SUPERPOWERS
+Rollback: revert workspace changes and replay task queue from /Users/dan.driver/Documents/Playground/Agentic Playground/master-mold

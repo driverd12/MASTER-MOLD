@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-SUPERPOWERS is a local-first MCP runtime for teams that need durable, governable workflows across multiple IDE and agent clients.
+MASTER MOLD is a local-first MCP runtime for teams that need durable, governable workflows across multiple IDE and agent clients.
 
 The architecture deliberately separates:
 

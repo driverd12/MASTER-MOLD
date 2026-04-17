@@ -1,7 +1,7 @@
 /**
  * Harbor task format adapter.
  *
- * Imports Harbor benchmark task directories into MCPlayground benchmark suite
+ * Imports Harbor benchmark task directories into MASTER MOLD benchmark suite
  * upsert payloads. Harbor tasks follow this layout:
  *
  *   tasks/<task_id>/
@@ -121,7 +121,7 @@ export function discoverHarborTasks(tasksRoot: string): HarborTask[] {
 }
 
 /**
- * Convert a set of Harbor tasks into a MCPlayground benchmark suite upsert payload.
+ * Convert a set of Harbor tasks into a MASTER MOLD benchmark suite upsert payload.
  * The returned object can be spread into a benchmark.suite_upsert call after adding
  * the required `mutation` field.
  */

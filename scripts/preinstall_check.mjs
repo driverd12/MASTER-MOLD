@@ -120,7 +120,7 @@ const platformLabel =
         : process.platform;
 
 const lines = [
-  "[preinstall] Stop: unsupported runtime for SUPERPOWERS.",
+  "[preinstall] Stop: unsupported runtime for MASTER MOLD.",
   "",
   "This repo requires:",
   `  - Node ${nodeEngine} (supported majors: ${describeMajorRange(nodeEngine)}; repo pin: ${pinnedNodeMajor}${pinnedNodeVersion ? ` / ${pinnedNodeVersion}` : ""})`,

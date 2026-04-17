@@ -790,7 +790,7 @@ test("office gui snapshot clears briefing current context when autopilot is idle
             metadata: {
               thread_id: "ring-leader-main",
               last_source_task_objective:
-                "Complete orchestration functionality and autonomous MCP control for MCPlayground tonight.",
+                "Complete orchestration functionality and autonomous MCP control for MASTER MOLD tonight.",
               last_execution_mode: "advisory",
             },
           },

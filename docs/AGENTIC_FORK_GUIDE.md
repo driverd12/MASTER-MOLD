@@ -14,8 +14,8 @@ Create a fork whose default posture is:
 ## Step 1: Fork The Repo
 
 ```bash
-git clone https://github.com/driverd12/SUPERPOWERS.git MCPlayground---Agentic-Server
-cd MCPlayground---Agentic-Server
+git clone https://github.com/driverd12/master-mold.git master-mold---Agentic-Server
+cd master-mold---Agentic-Server
 npm ci
 npm run build
 ```
@@ -65,9 +65,9 @@ STDIO example:
   "mcpServers": {
     "mcplayground-agentic": {
       "command": "node",
-      "args": ["/absolute/path/to/MCPlayground---Agentic-Server/dist/server.js"],
+      "args": ["/absolute/path/to/master-mold---Agentic-Server/dist/server.js"],
       "env": {
-        "ANAMNESIS_HUB_DB_PATH": "/absolute/path/to/MCPlayground---Agentic-Server/data/hub.sqlite"
+        "ANAMNESIS_HUB_DB_PATH": "/absolute/path/to/master-mold---Agentic-Server/data/hub.sqlite"
       }
     }
   }

@@ -772,7 +772,7 @@ async function handleFastPathRequest(
   if (pathname === "/") {
     sendJson(res, 200, {
       ok: true,
-      server: "superpowers",
+      server: "master-mold",
       transport: "http",
       office_path: "/office/",
       mcp_path: "/",
@@ -783,7 +783,7 @@ async function handleFastPathRequest(
     sendJson(res, 200, {
       ok: true,
       status: "ok",
-      server: "superpowers",
+      server: "master-mold",
       ts: new Date().toISOString(),
     });
     return true;

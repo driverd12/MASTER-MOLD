@@ -14,4 +14,4 @@ Selected strategy: Delegate to implementation-director for kernel state inspecti
 Execution mode: direct_command
 Execution commands: npm run trichat:roster || git status
 Verification: passed (execution checks passed)
-Rollback: revert workspace changes and replay task queue from /Users/dan.driver/Documents/Playground/Agentic Playground/SUPERPOWERS
+Rollback: revert workspace changes and replay task queue from /Users/dan.driver/Documents/Playground/Agentic Playground/master-mold

@@ -1,5 +1,6 @@
 {
-  "name": "superpowers",
+  "name": "master-mold",
+  "description": "Local-first MCP server runtime and multi-agent orchestration fabric.",
   "version": "1.0.0",
   "private": true,
   "type": "module",

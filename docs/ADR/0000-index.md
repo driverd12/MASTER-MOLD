@@ -1,4 +1,4 @@
-# MCPlayground ADR Index
+# MASTER MOLD ADR Index
 
 This file is the table of contents for architecture decision records (ADRs).
 

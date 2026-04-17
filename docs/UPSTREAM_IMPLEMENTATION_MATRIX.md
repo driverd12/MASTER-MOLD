@@ -81,7 +81,7 @@ Tracked gaps we may still adopt:
 | --- | --- | --- |
 | LLM-as-judge benchmark scoring | `out of scope` | Benchmarks currently score regex/duration style metrics; richer judge-backed scoring would need a bounded addition to `benchmark.ts` rather than an implicit harness rewrite |
 | Harbor task compatibility | `out of scope` | No Harbor importer/adapter exists yet; public Harbor-style benchmark suites would need an explicit translation layer into the local benchmark schema |
-| Single editable harness file (`agent.py`) | `out of scope` | MCPlayground intentionally mutates bounded config/program surfaces instead of presenting a single self-modifying harness file |
+| Single editable harness file (`agent.py`) | `out of scope` | MASTER MOLD intentionally mutates bounded config/program surfaces instead of presenting a single self-modifying harness file |
 
 ## SuperClaude Framework
 
@@ -251,5 +251,5 @@ Upstream wins we implemented:
 Intentionally out of scope:
 
 - LLM-as-judge scoring at benchmark runtime (eval layer is the better composition point)
-- Single-file `agent.py` harness pattern (MCPlayground uses multi-tool composition instead)
+- Single-file `agent.py` harness pattern (MASTER MOLD uses multi-tool composition instead)
 - `program.md`-style meta-agent directive file (covered by `autonomy.ide_ingress` and agent config roster)

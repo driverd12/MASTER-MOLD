@@ -1,10 +1,10 @@
-# SUPERPOWERS Setup
+# MASTER MOLD Setup
 
 Fastest path to run locally.
 
 ## What This Is
 
-MCPlayground is a local toolbench for AI agents. Most users do not operate the MCP server directly day to day; they start the runtime once, then connect an AI client such as Codex, Claude, Cursor, Gemini, or another MCP-capable client. The client uses the MCP server as its shared toolbox, memory layer, office/status surface, and domain-scaffolding workspace.
+MASTER MOLD is a local toolbench for AI agents. Most users do not operate the MCP server directly day to day; they start the runtime once, then connect an AI client such as Codex, Claude, Cursor, Gemini, or another MCP-capable client. The client uses the MCP server as its shared toolbox, memory layer, office/status surface, and domain-scaffolding workspace.
 
 The mental model is closer to a self-extending 3D printer than a finished static app: first bootstrap the base machine, then the AI agents use the MCP tools to "print" the remaining domain-specific scaffolding, bridges, and workflows needed for your project.
 
@@ -19,8 +19,8 @@ For Windows users: prefer the `npm run ...` commands in this guide. Do not manua
 ## 2. Clone
 
 ```bash
-git clone https://github.com/driverd12/SUPERPOWERS.git
-cd SUPERPOWERS
+git clone https://github.com/driverd12/master-mold.git
+cd master-mold
 ```
 
 ## 3. Pin the Runtime
@@ -165,7 +165,7 @@ npm run agentic:suite:status
 Point MCP client STDIO command to:
 
 ```bash
-node /absolute/path/to/SUPERPOWERS/dist/server.js
+node /absolute/path/to/master-mold/dist/server.js
 ```
 
 For full client examples, see [IDE + Agent Setup Guide](./IDE_AGENT_SETUP.md).

@@ -1121,7 +1121,7 @@ function buildClaudeCliStdioEntry(
     config,
     workspaceRoot,
     includeBearerToken,
-    "MCPlayground MCP HTTP proxy for Claude CLI"
+    "MASTER MOLD MCP HTTP proxy for Claude CLI"
   );
 }
 
@@ -1179,11 +1179,11 @@ function buildGeminiEntry(
       type: "http" as const,
       timeout: 600000,
       trust: true,
-      description: "MCPlayground MCP server",
+      description: "MASTER MOLD MCP server",
       ...buildHttpEntry(config, serverName, includeBearerToken),
     };
   }
-  return buildProviderProxyStdioEntry(config, workspaceRoot, includeBearerToken, "MCPlayground MCP HTTP proxy");
+  return buildProviderProxyStdioEntry(config, workspaceRoot, includeBearerToken, "MASTER MOLD MCP HTTP proxy");
 }
 
 function buildCopilotCliEntry(

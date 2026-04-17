@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MCPlayground Imprint Inbox Worker
+MASTER MOLD Imprint Inbox Worker
 
 Drains durable tasks from SQLite with lease-based claims and heartbeats.
 Legacy file tasks dropped into data/imprint/inbox/pending are imported into
@@ -1201,7 +1201,7 @@ def build_task_payload_for_storage(task: Dict[str, Any], raw: Dict[str, Any]) ->
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="MCPlayground local inbox worker daemon")
+    parser = argparse.ArgumentParser(description="MASTER MOLD local inbox worker daemon")
     parser.add_argument(
         "--repo-root",
         default=str(Path(__file__).resolve().parent.parent),

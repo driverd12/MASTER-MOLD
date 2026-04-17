@@ -1,6 +1,6 @@
 # Coworker Quickstart (Cursor + Codex)
 
-This guide is a practical onboarding checklist for engineers using Cursor and Codex with MCPlayground.
+This guide is a practical onboarding checklist for engineers using Cursor and Codex with MASTER MOLD.
 
 ## 1) Prerequisites
 
@@ -13,8 +13,8 @@ This guide is a practical onboarding checklist for engineers using Cursor and Co
 ## 2) Clone and Bootstrap
 
 ```bash
-git clone https://github.com/driverd12/SUPERPOWERS.git
-cd SUPERPOWERS
+git clone https://github.com/driverd12/master-mold.git
+cd master-mold
 npm run bootstrap:env
 ```
 
@@ -33,15 +33,15 @@ Use absolute paths for all MCP config values.
 
 Example placeholders:
 
-- `CORE_SERVER_JS=/absolute/path/to/SUPERPOWERS/dist/server.js`
-- `CORE_DB=/absolute/path/to/SUPERPOWERS/data/hub.sqlite`
+- `CORE_SERVER_JS=/absolute/path/to/master-mold/dist/server.js`
+- `CORE_DB=/absolute/path/to/master-mold/data/hub.sqlite`
 - `NODE_BIN` should be the absolute path to Node when your MCP client needs one. On macOS/Linux use `which node`; on Windows use `where node`, or use `node` when the client inherits your PATH reliably.
 
 ## 4) Cursor Setup
 
 In Cursor MCP settings, add one shared STDIO server.
 
-Server 1: `superpowers`
+Server 1: `master-mold`
 
 - `command`: `<NODE_BIN>`
 - `args`: `[<CORE_SERVER_JS>]`
@@ -57,7 +57,7 @@ If your Cursor build uses file-based MCP config, edit:
 Add the same shared server via CLI:
 
 ```bash
-codex mcp add superpowers \
+codex mcp add master-mold \
   --env ANAMNESIS_HUB_DB_PATH=<CORE_DB> \
   -- <NODE_BIN> <CORE_SERVER_JS>
 

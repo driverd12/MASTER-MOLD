@@ -1,6 +1,6 @@
-# MCPlayground Copilot Instructions
+# MASTER MOLD Copilot Instructions
 
-MCPlayground Core Template is a **local-first MCP server runtime** — the foundation layer for Dan Driver's local agent office. It is split into two layers:
+MASTER MOLD is a **local-first MCP server runtime** — the foundation layer for Dan Driver's local agent office. It is split into two layers:
 
 1. **Core runtime** — durable memory, transcripts, tasks, run ledgers, governance, ADRs, safety checks
 2. **Domain packs** — optional modules registering domain-specific MCP tools (`src/domain-packs/`)

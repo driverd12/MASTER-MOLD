@@ -425,11 +425,11 @@ test("run_env.mjs applies environment assignments without shell-specific syntax"
     process.execPath,
     [
       RUN_ENV_PATH,
-      "MCPLAYGROUND_SMOKE_ENV=windows-safe",
+      "MASTER_MOLD_SMOKE_ENV=windows-safe",
       "--",
       "node",
       "-e",
-      "process.stdout.write(process.env.MCPLAYGROUND_SMOKE_ENV || '')",
+      "process.stdout.write(process.env.MASTER_MOLD_SMOKE_ENV || '')",
     ],
     {
       cwd: REPO_ROOT,
