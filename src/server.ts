@@ -224,6 +224,7 @@ import { incidentOpen, incidentOpenSchema, incidentTimeline, incidentTimelineSch
 import { goldenCaseCapture, goldenCaseCaptureSchema } from "./tools/golden_case.js";
 import { queryPlan, queryPlanSchema } from "./tools/query_plan.js";
 import { migrationStatus, migrationStatusSchema } from "./tools/migration.js";
+import { timeStamp, timeStampSchema } from "./tools/time_stamp.js";
 import { runIdempotentMutation } from "./tools/mutation.js";
 import { inboxEnqueue, inboxEnqueueSchema, inboxList, inboxListSchema } from "./tools/inbox.js";
 import {
@@ -3574,6 +3575,13 @@ registerTool("query.plan", "Produce a confidence-scored query plan with evidence
 
 registerTool("migration.status", "Read applied schema migration versions and metadata.", migrationStatusSchema, () =>
   migrationStatus(storage)
+);
+
+registerTool(
+  "time.stamp",
+  "Return current UTC, local, Unix, and filename-safe date/time stamps for operator notes, logs, and artifacts.",
+  timeStampSchema,
+  (input) => timeStamp(input)
 );
 
 const requestedDomainPacks = parseEnabledDomainPackIds(
