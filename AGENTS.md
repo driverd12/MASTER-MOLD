@@ -45,6 +45,12 @@ This repository uses the local MCP server as its **primary control plane**. Alwa
 
 Do not invent a second ingress path for shell, office, or external clients.
 
+**Internal task board discipline:**
+- Start of thread: inspect `office.snapshot.task_board`, `task.summary`, and unresolved `task.list` rows before creating new work. Continue matching pending, running, or failed tasks first.
+- End of work: if anything remains unresolved, create a bounded follow-up with `task.create` or record operator feedback with `event.publish` using `event_type: "task.feedback"` and `entity_type: "task"`.
+- Every follow-up or feedback note should include source attribution (`source_client`, `source_agent`, `source_model`) and use `time.stamp` when writing handoff artifacts that need explicit host/agent/IDE provenance.
+- The Agent Office **Task Board** tab is the operator surface for short-lived actionable work and feedback. Keep long projects in goals/plans; keep this board focused on the next concrete slices.
+
 **Durable collaboration boundary:**
 - `autonomy.ide_ingress` is the durable source of truth for operator and IDE intake.
 - On macOS, when `TRICHAT_VISIBLE_CLAUDE_MIRROR_ON_INGRESS=1`, explicit Claude-targeted ingress may mirror the already-persisted objective into the visible Claude terminal for operator-visible collaboration.

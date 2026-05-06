@@ -633,6 +633,7 @@ Recent polish added:
 - animated per-agent states for desk work, supervision, chatter, break, blocked, offline, and sleep
 - a `t` hotkey to cycle dashboard themes (`night`, `sunrise`, `mono`)
 - a dedicated `intake` tmux window and `5` hotkey from the office dashboard so the war room can take objectives, not just monitor them
+- an internal Task Board tab for short-lived actionable work; it surfaces pending/running/failed tasks, carries unresolved work into new threads, and lets the operator add `task.feedback` notes without creating a second durable store
 - confidence-check surfacing in the briefing board so ring-leader confidence is explainable, not just numeric
 
 Install the single-click macOS app launcher in `/Applications`:
@@ -770,11 +771,13 @@ Core runtime tools include:
 - Memory and continuity: `memory.*` including `memory.reflection_capture` for externally grounded episodic reflections, `transcript.*`, `who_knows`, `knowledge.query`, `retrieval.hybrid`
 - Governance and safety: `policy.evaluate`, `preflight.check`, `postflight.verify`, `mutation.check`
 - Durable execution: `run.*`, `task.*`, `lock.*`
+  - Use the internal task board discipline around `task.*`: inspect unresolved tasks at thread start, and leave a bounded follow-up task or `task.feedback` note before ending work when next actions remain.
 - Permanent regression capture: `golden.case_capture` turns research, incidents, and traces into verified golden cases that can seed future benchmark/eval fixtures.
 - Agentic kernel: `goal.*` including `goal.execute`, `goal.autorun`, and `goal.autorun_daemon`, `kernel.summary`, `plan.*`, `artifact.*`, `experiment.*`, `event.*`, `agent.session.*`, `dispatch.autorun`
 - Workflow methodology: `playbook.*` including `playbook.run`, `pack.hooks.list`, `pack.plan.generate`, `pack.verify.run`
 - Decision and incident logging: `adr.create`, `decision.link`, `incident.*`
 - Runtime ops: `health.*`, `migration.status`, `time.stamp`, `imprint.*`, `imprint.inbox.*`
+  - `time.stamp` returns UTC/local/Unix stamps plus host and actor provenance (`host_id`, hostname, source client, source agent, source model, and source IDE) for operator notes, artifacts, and cross-host work handoffs.
 - Office orchestration: `trichat.*` (`roster`, `thread/message/turn`, `autopilot`, `tmux_controller`, `bus`, `adapter_telemetry`, `chaos`, `slo`)
 - Control-plane discovery and rollout: `tool.search`, `permission.profile`, `feature.flag`, `warm.cache`
 - Budget and cost visibility: `budget.ledger`

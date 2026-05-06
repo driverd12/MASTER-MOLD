@@ -820,6 +820,194 @@ button:hover,
   flex-wrap: wrap;
 }
 
+.task-board {
+  display: grid;
+  gap: 14px;
+}
+
+.task-board-hero,
+.task-board-rules,
+.task-board-column,
+.task-board-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)),
+    rgba(255,255,255,0.02);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-board-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
+  gap: 18px;
+  padding: 16px;
+  align-items: start;
+}
+
+.task-board-hero h2 {
+  margin: 8px 0 10px;
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.task-board-hero p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.task-board-hero__stats {
+  display: grid;
+  gap: 8px;
+}
+
+.task-board-rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.task-board-rules article {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(5, 8, 13, 0.24);
+}
+
+.task-board-rules strong,
+.task-board-column__head span {
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+}
+
+.task-board-rules span {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.task-board-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.task-board-column {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.task-board-column__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.task-board-column__head strong {
+  color: var(--text);
+}
+
+.task-board-column__items {
+  display: grid;
+  gap: 10px;
+}
+
+.task-board-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.task-board-card--failed {
+  border-color: rgba(217, 108, 108, 0.5);
+  background: rgba(217, 108, 108, 0.06);
+}
+
+.task-board-card--running {
+  border-color: rgba(215, 142, 88, 0.5);
+  background: rgba(215, 142, 88, 0.06);
+}
+
+.task-board-card--pending {
+  border-color: rgba(127, 201, 156, 0.42);
+  background: rgba(127, 201, 156, 0.05);
+}
+
+.task-board-card__head {
+  display: grid;
+  gap: 4px;
+}
+
+.task-board-card__head strong {
+  line-height: 1.35;
+}
+
+.task-board-card__head span,
+.task-board-card__feedback small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.task-board-card__meta,
+.task-board-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-board-card__meta span {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.task-board-card__error,
+.task-board-card__feedback {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(5, 8, 13, 0.22);
+}
+
+.task-board-card__error {
+  border-color: rgba(217, 108, 108, 0.45);
+}
+
+.task-board-card__error span,
+.task-board-card__feedback span {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.task-board-card textarea {
+  min-height: 78px;
+}
+
+.task-board-empty {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+  background: rgba(5, 8, 13, 0.18);
+}
+
 .room {
   position: relative;
   border: 1px solid var(--line);
@@ -1713,7 +1901,9 @@ body[data-patient-zero="enabled"] .tabs__button--patient-zero.is-active {
   }
 
   .workbench-hero,
-  .workbench-suggestions {
+  .workbench-suggestions,
+  .task-board-hero,
+  .task-board-columns {
     grid-template-columns: 1fr;
   }
 
@@ -1733,6 +1923,7 @@ body[data-patient-zero="enabled"] .tabs__button--patient-zero.is-active {
   .workbench-stats,
   .workbench-scheduler,
   .workbench-scheduler__footer,
+  .task-board-rules,
   .host-pair-form__row,
   .host-row__metrics {
     grid-template-columns: 1fr;

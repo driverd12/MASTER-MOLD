@@ -174,6 +174,34 @@ test("office gui snapshot reflects provider heartbeat states and self-drive summ
           recover_expired_tasks: false,
         },
       },
+      task_board: {
+        source: "office.task_board",
+        generated_at: "2026-04-01T17:00:00.000Z",
+        open_count: 3,
+        counts: { pending: 2, running: 0, failed: 1, completed: 5, cancelled: 0 },
+        rules: {
+          start_of_thread: "Inspect unresolved task-board items before creating new work.",
+          end_of_work: "Leave a follow-up task or task-board feedback note for unresolved next actions.",
+        },
+        columns: {
+          failed: [
+            {
+              task_id: "task-failed-1",
+              objective: "Repair the failed slice",
+              status: "failed",
+              priority: 90,
+              feedback_count: 1,
+              latest_feedback: { content: "Retry after checking the worker log." },
+            },
+          ],
+          running: [],
+          pending: [{ task_id: "task-1", objective: "Clarify the pending slice", status: "pending", priority: 80 }],
+        },
+        tasks: [
+          { task_id: "task-failed-1", objective: "Repair the failed slice", status: "failed", priority: 90, feedback_count: 1 },
+          { task_id: "task-1", objective: "Clarify the pending slice", status: "pending", priority: 80 },
+        ],
+      },
     },
     { theme: "dark" }
   );
@@ -194,6 +222,11 @@ test("office gui snapshot reflects provider heartbeat states and self-drive summ
   assert.equal(snapshot.workbench.quick_actions.retry_failed_tasks, true);
   assert.equal(snapshot.workbench.blockers[0].remediation.action, "retry_failed_tasks");
   assert.equal(snapshot.workbench.suggested_objectives[0].title, "Own the next queued task");
+  assert.equal(snapshot.task_board.source, "office.task_board");
+  assert.equal(snapshot.task_board.open_count, 3);
+  assert.equal(snapshot.task_board.columns.failed[0].task_id, "task-failed-1");
+  assert.equal(snapshot.task_board.columns.failed[0].latest_feedback.content, "Retry after checking the worker log.");
+  assert.ok(snapshot.task_board.rules.end_of_work.includes("follow-up"));
   assert.equal(snapshot.summary.worker_fabric.federation_sidecar.host_id, "office-host");
   assert.equal(snapshot.summary.worker_fabric.federation_sidecar.running_state, "failing");
   assert.equal(snapshot.summary.worker_fabric.federation_sidecar.outbox_depth, 3);

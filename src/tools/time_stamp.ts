@@ -1,9 +1,14 @@
+import os from "node:os";
 import { z } from "zod";
 
 export const timeStampSchema = z.object({
   timezone: z.string().min(1).max(100).optional(),
   locale: z.string().min(1).max(80).optional(),
   at: z.string().datetime({ offset: true }).optional(),
+  source_client: z.string().min(1).max(120).optional(),
+  source_agent: z.string().min(1).max(120).optional(),
+  source_model: z.string().min(1).max(160).optional(),
+  source_ide: z.string().min(1).max(120).optional(),
 });
 
 type TimeStampInput = z.infer<typeof timeStampSchema>;
@@ -71,10 +76,36 @@ function humanLocal(date: Date, timezone: string, locale: string) {
   }).format(date);
 }
 
+function readEnv(...keys: string[]) {
+  for (const key of keys) {
+    const value = process.env[key]?.trim();
+    if (value) return value;
+  }
+  return null;
+}
+
+function inferIde(input: TimeStampInput) {
+  const explicit = input.source_ide?.trim();
+  if (explicit) return explicit;
+  const client = input.source_client?.trim().toLowerCase() || readEnv("MASTER_MOLD_SOURCE_CLIENT", "TRICHAT_SOURCE_CLIENT")?.toLowerCase() || "";
+  if (client.includes("codex")) return "codex";
+  if (client.includes("claude")) return "claude";
+  if (client.includes("cursor")) return "cursor";
+  if (client.includes("copilot")) return "github-copilot";
+  if (client.includes("gemini")) return "gemini";
+  return readEnv("MASTER_MOLD_SOURCE_IDE", "TRICHAT_SOURCE_IDE");
+}
+
 export function timeStamp(input: TimeStampInput) {
   const timezone = input.timezone?.trim() || defaultTimezone();
   const locale = input.locale?.trim() || "en-US";
   const date = input.at ? new Date(input.at) : new Date();
+  const hostname = os.hostname();
+  const hostId = readEnv("MASTER_MOLD_HOST_ID", "TRICHAT_HOST_ID", "HOST_ID") || hostname;
+  const sourceClient = input.source_client?.trim() || readEnv("MASTER_MOLD_SOURCE_CLIENT", "TRICHAT_SOURCE_CLIENT");
+  const sourceAgent = input.source_agent?.trim() || readEnv("MASTER_MOLD_SOURCE_AGENT", "TRICHAT_SOURCE_AGENT");
+  const sourceModel = input.source_model?.trim() || readEnv("MASTER_MOLD_SOURCE_MODEL", "TRICHAT_SOURCE_MODEL");
+  const sourceIde = inferIde(input);
   const parts = dateParts(date, timezone, locale);
   const dateUtc = date.toISOString().slice(0, 10);
   const timeUtc = `${date.toISOString().slice(11, 19)}Z`;
@@ -106,6 +137,31 @@ export function timeStamp(input: TimeStampInput) {
       filename_utc: filenameUtc(date),
       filename_local: `${localDate}_${localTime.replace(/:/g, "-")}_${zoneSlug}`,
       human_local: humanLocal(date, timezone, locale),
+    },
+    host: {
+      host_id: hostId,
+      hostname,
+      platform: process.platform,
+      arch: process.arch,
+      user: os.userInfo().username,
+      pid: process.pid,
+      cwd: process.cwd(),
+    },
+    actor: {
+      source_client: sourceClient,
+      source_agent: sourceAgent,
+      source_model: sourceModel,
+      source_ide: sourceIde,
+    },
+    provenance: {
+      host_id: hostId,
+      hostname,
+      source_client: sourceClient,
+      source_agent: sourceAgent,
+      source_model: sourceModel,
+      source_ide: sourceIde,
+      observed_at: date.toISOString(),
+      observed_at_unix_milliseconds: date.getTime(),
     },
   };
 }

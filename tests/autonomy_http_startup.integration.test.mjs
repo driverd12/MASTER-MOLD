@@ -345,6 +345,107 @@ test("office action maintain returns immediately with 202 instead of blocking on
   }
 });
 
+test("office task board feedback records an operator note on a task", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-http-task-board-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const busPath = path.join(tempDir, "trichat.bus.sock");
+  const bearerToken = "test-autonomy-http-task-board-token";
+  const ollama = await startFakeOllamaServer({
+    models: [{ name: "llama3.2:3b" }],
+  });
+  const httpPort = await reservePort();
+  const child = spawn("node", ["dist/server.js", "--http", "--http-port", String(httpPort)], {
+    cwd: REPO_ROOT,
+    env: inheritedEnv({
+      MCP_HTTP: "1",
+      MCP_HTTP_PORT: String(httpPort),
+      MCP_HTTP_HOST: "127.0.0.1",
+      MCP_HTTP_BEARER_TOKEN: bearerToken,
+      ANAMNESIS_HUB_DB_PATH: dbPath,
+      TRICHAT_BUS_SOCKET_PATH: busPath,
+      TRICHAT_OLLAMA_URL: ollama.url,
+      TRICHAT_RING_LEADER_AUTOSTART: "0",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "0",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "0",
+    }),
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+
+  try {
+    const startupHealth = JSON.parse(await waitForHttpText(`http://127.0.0.1:${httpPort}/health`));
+    assert.equal(startupHealth.ok, true);
+
+    await execFileAsync(
+      "node",
+      [
+        "./scripts/mcp_tool_call.mjs",
+        "--tool",
+        "task.create",
+        "--args",
+        JSON.stringify({
+          mutation: {
+            idempotency_key: `task-board-feedback-create-${Date.now()}`,
+            side_effect_fingerprint: "task-board-feedback-create",
+          },
+          task_id: "task-board-feedback-1",
+          objective: "Carry unresolved Office task-board work into the next thread",
+          project_dir: REPO_ROOT,
+          source_client: "codex.desktop",
+          source_agent: "codex",
+          source_model: "gpt-5.5",
+        }),
+        "--transport",
+        "http",
+        "--url",
+        `http://127.0.0.1:${httpPort}/`,
+        "--origin",
+        "http://127.0.0.1",
+        "--cwd",
+        REPO_ROOT,
+      ],
+      {
+        env: inheritedEnv({
+          MCP_HTTP_BEARER_TOKEN: bearerToken,
+        }),
+        timeout: 15_000,
+      }
+    );
+
+    const response = await postHttpJson(`http://127.0.0.1:${httpPort}/office/api/action`, {
+      action: "task_feedback",
+      task_id: "task-board-feedback-1",
+      feedback: "Pick this up before starting a new unrelated objective.",
+      feedback_kind: "operator_note",
+    }, {
+      Authorization: `Bearer ${bearerToken}`,
+      Origin: `http://127.0.0.1:${httpPort}`,
+      "Content-Type": "application/json",
+    });
+
+    assert.equal(response.statusCode, 200);
+    const payload = JSON.parse(response.body);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.action, "task_feedback");
+    assert.equal(payload.task_id, "task-board-feedback-1");
+
+    const storage = new Storage(dbPath);
+    const feedbackEvents = storage.listRuntimeEvents({
+      entity_type: "task",
+      entity_id: "task-board-feedback-1",
+      event_type: "task.feedback",
+      limit: 5,
+    });
+    assert.equal(feedbackEvents.length, 1);
+    assert.equal(feedbackEvents[0].content, "Pick this up before starting a new unrelated objective.");
+    assert.equal(feedbackEvents[0].source_client, "office.api");
+    assert.equal(feedbackEvents[0].source_agent, "operator");
+  } finally {
+    await stopChildProcess(child);
+    await ollama.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("office intake dry run returns immediately with 202 instead of blocking on autonomy ingress", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-http-office-intake-"));
   const dbPath = path.join(tempDir, "hub.sqlite");

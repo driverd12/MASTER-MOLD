@@ -85,6 +85,15 @@ test("office.snapshot returns a storage-backed GUI payload without depending on 
     assert.ok(snapshot.roster.agents.length >= 1);
     assert.ok(snapshot.roster.active_agent_ids.includes("ring-leader"));
     assert.equal(snapshot.task_summary.counts.pending, 1);
+    assert.equal(snapshot.task_board.source, "office.task_board");
+    assert.equal(snapshot.task_board.open_count, 1);
+    assert.equal(snapshot.task_board.counts.pending, 1);
+    assert.ok(Array.isArray(snapshot.task_board.columns.pending));
+    assert.equal(snapshot.task_board.columns.pending.length, 1);
+    assert.equal(snapshot.task_board.columns.pending[0].objective, "Pending GUI snapshot task");
+    assert.equal(snapshot.task_board.columns.pending[0].source_client, null);
+    assert.ok(snapshot.task_board.rules.start_of_thread.includes("unresolved"));
+    assert.ok(snapshot.task_board.rules.end_of_work.includes("follow-up"));
     assert.ok(snapshot.agent_sessions.count >= 1);
     assert.equal(snapshot.tmux.action, "status_cached");
     assert.equal(typeof snapshot.kernel.state, "string");

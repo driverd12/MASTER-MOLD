@@ -43,6 +43,12 @@ This repository uses the local MCP server as its **primary control plane**. Alwa
 
 Do not invent a second ingress path for shell, office, or external clients.
 
+**Internal task board discipline:**
+- Start of thread: inspect `office.snapshot.task_board`, `task.summary`, and unresolved `task.list` rows before opening new scope. Continue matching pending, running, or failed tasks first.
+- End of work: if next actions remain, create a bounded follow-up with `task.create` or record task feedback with `event.publish` using `event_type: "task.feedback"` and `entity_type: "task"`.
+- Feedback should say what the next agent needs to know, not restate the whole transcript. Include `source_client`, `source_agent`, and `source_model`; use `time.stamp` for handoffs that need explicit host/agent/IDE provenance.
+- The Agent Office **Task Board** tab is for short-lived actionable work. Keep goals/plans for longer arcs.
+
 **Health checks (call these before assuming something is broken):**
 - `health.tools`, `health.storage`, `health.litellm_proxy`, `migration.status`
 - `trichat.autopilot` `{"action":"status"}`, `trichat.tmux_controller` `{"action":"status"}`

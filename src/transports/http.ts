@@ -3511,6 +3511,78 @@ async function maybeHandleOfficeRequest(
         results,
       });
       return true;
+    } else if (action === "task_feedback") {
+      const taskId = String(body.task_id || "").trim();
+      const feedback = String(body.feedback || "").trim();
+      const feedbackKind = String(body.feedback_kind || "operator_note").trim() || "operator_note";
+      if (!taskId) {
+        sendJson(res, 400, { ok: false, error: "missing_task_id" });
+        return true;
+      }
+      if (!feedback) {
+        sendJson(res, 400, { ok: false, error: "missing_feedback" });
+        return true;
+      }
+      const summary = feedback.length > 180 ? `${feedback.slice(0, 177).trimEnd()}...` : feedback;
+      const toolArgs = {
+        mutation: buildOfficeMutation(`task-feedback-${taskId}`),
+        event_type: "task.feedback",
+        entity_type: "task",
+        entity_id: taskId,
+        status: "recorded",
+        summary,
+        content: feedback,
+        details: {
+          feedback_kind: feedbackKind,
+          source_surface: "office.task_board",
+        },
+        source_client: "office.api",
+        source_agent: "operator",
+      };
+      result = await runLocalCommand(
+        process.execPath,
+        [
+          mcpToolCallScript,
+          "--tool",
+          "event.publish",
+          "--args",
+          JSON.stringify(toolArgs),
+          "--transport",
+          "stdio",
+          "--stdio-command",
+          process.execPath,
+          "--stdio-args",
+          "dist/server.js",
+          "--cwd",
+          repoRoot,
+        ],
+        {
+          cwd: repoRoot,
+          env: officeEnv(origin),
+          timeoutMs: 30000,
+        }
+      );
+      const parsed = parseJsonText(result.stdout.trim());
+      if (result.code !== 0) {
+        sendJson(res, 500, {
+          ok: false,
+          action,
+          task_id: taskId,
+          result: parsed ?? null,
+          stdout: parsed ? "" : result.stdout.trim(),
+          stderr: result.stderr.trim(),
+        });
+        return true;
+      }
+      invalidateOfficeSnapshotCaches();
+      sendJson(res, 200, {
+        ok: true,
+        action,
+        task_id: taskId,
+        feedback_kind: feedbackKind,
+        event: parsed ?? null,
+      });
+      return true;
     } else if (action === "recover_expired_tasks") {
       const toolArgs = {
         limit: Number.isFinite(Number(body.limit)) ? Number(body.limit) : 20,

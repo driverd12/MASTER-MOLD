@@ -767,6 +767,9 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
   const taskSummary = asDict(raw.task_summary);
   const taskRunning = asDict(raw.task_running);
   const taskPending = asDict(raw.task_pending);
+  const taskBoard = asDict(raw.task_board);
+  const taskBoardColumns = asDict(taskBoard.columns);
+  const taskBoardRules = asDict(taskBoard.rules);
   const agentSessions = asDict(raw.agent_sessions);
   const adapter = asDict(raw.adapter);
   const busTail = asDict(raw.bus_tail);
@@ -1643,6 +1646,22 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
         retry_failed_tasks: Boolean(workbenchQuickActions.retry_failed_tasks),
         recover_expired_tasks: Boolean(workbenchQuickActions.recover_expired_tasks),
       },
+    },
+    task_board: {
+      source: String(taskBoard.source ?? "office.task_board"),
+      generated_at: String(taskBoard.generated_at ?? ""),
+      open_count: parseAnyInt(taskBoard.open_count),
+      counts: asDict(taskBoard.counts),
+      rules: {
+        start_of_thread: String(taskBoardRules.start_of_thread ?? ""),
+        end_of_work: String(taskBoardRules.end_of_work ?? ""),
+      },
+      columns: {
+        failed: asList(taskBoardColumns.failed).map((entry) => asDict(entry)),
+        running: asList(taskBoardColumns.running).map((entry) => asDict(entry)),
+        pending: asList(taskBoardColumns.pending).map((entry) => asDict(entry)),
+      },
+      tasks: asList(taskBoard.tasks).map((entry) => asDict(entry)),
     },
     events: asList(busTail.events).slice(0, 20),
     runtime_sessions: asList(runtimeWorkers.sessions).slice(0, 20),

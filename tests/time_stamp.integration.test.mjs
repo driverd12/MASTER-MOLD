@@ -21,6 +21,10 @@ test("time.stamp returns current operator-ready date and time stamps", async () 
     const stamp = await callTool(client, "time.stamp", {
       timezone: "America/Denver",
       locale: "en-US",
+      source_client: "codex.desktop",
+      source_agent: "codex",
+      source_model: "gpt-5.5",
+      source_ide: "codex",
     });
     const after = Date.now();
 
@@ -42,6 +46,17 @@ test("time.stamp returns current operator-ready date and time stamps", async () 
     assert.match(stamp.stamps.compact_utc, /^\d{8}T\d{6}Z$/);
     assert.match(stamp.stamps.filename_utc, /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$/);
     assert.match(stamp.stamps.filename_local, /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Za-z0-9_-]+$/);
+    assert.equal(stamp.host.host_id, "test-host");
+    assert.equal(typeof stamp.host.hostname, "string");
+    assert.ok(stamp.host.hostname.length > 0);
+    assert.equal(stamp.actor.source_client, "codex.desktop");
+    assert.equal(stamp.actor.source_agent, "codex");
+    assert.equal(stamp.actor.source_model, "gpt-5.5");
+    assert.equal(stamp.actor.source_ide, "codex");
+    assert.equal(stamp.provenance.host_id, "test-host");
+    assert.equal(stamp.provenance.source_client, "codex.desktop");
+    assert.equal(stamp.provenance.source_agent, "codex");
+    assert.equal(stamp.provenance.source_ide, "codex");
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -58,6 +73,7 @@ async function openClient(dbPath) {
       ANAMNESIS_HUB_DB_PATH: dbPath,
       TRICHAT_AGENT_IDS: "",
       MCP_NOTIFIER_DRY_RUN: "1",
+      MASTER_MOLD_HOST_ID: "test-host",
     },
     stderr: "inherit",
   });

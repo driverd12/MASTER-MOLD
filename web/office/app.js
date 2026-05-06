@@ -37,6 +37,7 @@
     intakeTargetAgentIds: [],
     officeActions: {},
     hostPairDraft: defaultHostPairDraft(),
+    taskFeedbackDrafts: {},
   };
 
   var els = {
@@ -44,6 +45,7 @@
     statusStrip: document.querySelector("#status-strip"),
     officeView: document.querySelector("#office-view"),
     workbenchView: document.querySelector("#workbench-view"),
+    tasksView: document.querySelector("#tasks-view"),
     briefingView: document.querySelector("#briefing-view"),
     workersView: document.querySelector("#workers-view"),
     hostsView: document.querySelector("#hosts-view"),
@@ -410,6 +412,8 @@
   function renderActiveTabPanel() {
     if (state.activeTab === "workbench") {
       renderWorkbenchView();
+    } else if (state.activeTab === "tasks") {
+      renderTasksView();
     } else if (state.activeTab === "briefing") {
       renderBriefingView();
     } else if (state.activeTab === "workers") {
@@ -441,6 +445,11 @@
   function isPatientZeroNoteFocused() {
     var active = document.activeElement;
     return !!(active && active.matches && active.matches("[data-patient-zero-note]"));
+  }
+
+  function isTaskFeedbackFocused() {
+    var active = document.activeElement;
+    return !!(active && active.matches && active.matches("[data-task-feedback-input]"));
   }
 
   function compactIntakeText(value, limit) {
@@ -1663,6 +1672,177 @@
     });
   }
 
+  function taskBoardList(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function taskBoardStatusTone(status) {
+    var normalized = String(status || "").toLowerCase();
+    if (normalized === "failed") return "failed";
+    if (normalized === "running") return "running";
+    if (normalized === "pending") return "pending";
+    return "neutral";
+  }
+
+  function taskBoardMeta(entry) {
+    var parts = [
+      String(entry.status || "task"),
+      "p" + String(entry.priority || 0),
+      entry.updated_at ? "updated " + relativeTime(entry.updated_at) + " ago" : "",
+      entry.source_agent || entry.source_client || "",
+      entry.worker_id ? "worker " + entry.worker_id : "",
+    ];
+    return parts.filter(Boolean);
+  }
+
+  function taskBoardCardHtml(entry) {
+    var taskId = String(entry.task_id || "");
+    var tone = taskBoardStatusTone(entry.status);
+    var feedback = entry.latest_feedback || {};
+    var draft = state.taskFeedbackDrafts[taskId] || "";
+    var errorHtml = entry.last_error
+      ? '<div class="task-board-card__error"><strong>Last error</strong><span>' + escapeHtml(entry.last_error) + "</span></div>"
+      : "";
+    var feedbackHtml = feedback && (feedback.content || feedback.summary)
+      ? '<div class="task-board-card__feedback"><strong>Latest feedback</strong><span>' +
+        escapeHtml(feedback.content || feedback.summary || "") +
+        '</span><small>' +
+        escapeHtml((feedback.source_agent || feedback.source_client || "operator") + " · " + relativeTime(feedback.created_at) + " ago") +
+        "</small></div>"
+      : '<div class="task-board-card__feedback task-board-card__feedback--empty"><strong>No feedback yet</strong><span>Add a note if the next thread needs context or operator direction.</span></div>';
+    var retryHtml = tone === "failed"
+      ? '<button type="button" class="button" data-task-board-retry>Retry</button>'
+      : "";
+    return (
+      '<article class="task-board-card task-board-card--' + escapeHtml(tone) + '" data-task-board-card data-task-id="' + escapeHtml(taskId) + '">' +
+      '<div class="task-board-card__head">' +
+      '<strong>' + escapeHtml(entry.objective || taskId || "Task") + '</strong>' +
+      '<span>' + escapeHtml(taskId || "untracked") + '</span>' +
+      "</div>" +
+      '<div class="task-board-card__meta">' +
+      taskBoardMeta(entry).map(function (part) {
+        return "<span>" + escapeHtml(part) + "</span>";
+      }).join("") +
+      "</div>" +
+      errorHtml +
+      feedbackHtml +
+      '<textarea data-task-feedback-input rows="3" placeholder="Add operator feedback or handoff context for this task.">' + escapeHtml(draft) + "</textarea>" +
+      '<div class="task-board-card__actions">' +
+      '<button type="button" class="button button--primary" data-task-feedback-submit>Save feedback</button>' +
+      retryHtml +
+      "</div>" +
+      "</article>"
+    );
+  }
+
+  function taskBoardColumnHtml(key, title, tasks, emptyText) {
+    var entries = taskBoardList(tasks);
+    return (
+      '<section class="task-board-column task-board-column--' + escapeHtml(key) + '">' +
+      '<div class="task-board-column__head"><span>' + escapeHtml(title) + '</span><strong>' + String(entries.length) + "</strong></div>" +
+      '<div class="task-board-column__items">' +
+      (entries.length
+        ? entries.map(taskBoardCardHtml).join("")
+        : '<article class="task-board-empty">' + escapeHtml(emptyText) + "</article>") +
+      "</div>" +
+      "</section>"
+    );
+  }
+
+  function renderTasksView() {
+    if (!els.tasksView) {
+      return;
+    }
+    if (!state.snapshot) {
+      els.tasksView.innerHTML = "";
+      return;
+    }
+    if (state.activeTab === "tasks" && isTaskFeedbackFocused()) {
+      return;
+    }
+    var board = state.snapshot.task_board || {};
+    var counts = board.counts || {};
+    var columns = board.columns || {};
+    var rules = board.rules || {};
+    var openCount = Number(board.open_count || 0);
+    els.tasksView.innerHTML =
+      '<div class="task-board">' +
+      '<section class="task-board-hero">' +
+      '<div><div class="section-title">Internal Task Board</div><h2>' +
+      (openCount > 0
+        ? escapeHtml(String(openCount) + " unresolved task" + (openCount === 1 ? "" : "s"))
+        : "No unresolved tasks") +
+      '</h2><p>This view is for short-lived actionable work: carry unresolved tasks into new threads, and leave feedback before ending work.</p></div>' +
+      '<div class="task-board-hero__stats">' +
+      '<div class="metric"><span>Pending</span><strong>' + String(counts.pending || 0) + '</strong></div>' +
+      '<div class="metric"><span>Running</span><strong>' + String(counts.running || 0) + '</strong></div>' +
+      '<div class="metric"><span>Failed</span><strong>' + String(counts.failed || 0) + '</strong></div>' +
+      '<div class="metric"><span>Feedback</span><strong>' + String(taskBoardList(board.tasks).reduce(function (sum, entry) { return sum + Number(entry.feedback_count || 0); }, 0)) + '</strong></div>' +
+      "</div>" +
+      "</section>" +
+      '<section class="task-board-rules">' +
+      '<article><strong>Start of thread</strong><span>' + escapeHtml(rules.start_of_thread || "Inspect unresolved tasks before creating new work.") + "</span></article>" +
+      '<article><strong>End of work</strong><span>' + escapeHtml(rules.end_of_work || "Leave a follow-up task or feedback note for unresolved next actions.") + "</span></article>" +
+      "</section>" +
+      '<div class="task-board-columns">' +
+      taskBoardColumnHtml("failed", "Failed", columns.failed, "No failed tasks need action.") +
+      taskBoardColumnHtml("running", "Running", columns.running, "No task is currently running.") +
+      taskBoardColumnHtml("pending", "Pending", columns.pending, "No pending tasks are waiting for ownership.") +
+      "</div>" +
+      "</div>";
+
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-feedback-input]")).forEach(function (input) {
+      input.addEventListener("input", function () {
+        var card = input.closest("[data-task-board-card]");
+        var taskId = card ? String(card.getAttribute("data-task-id") || "") : "";
+        if (taskId) {
+          state.taskFeedbackDrafts[taskId] = String(input.value || "");
+        }
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-feedback-submit]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var card = button.closest("[data-task-board-card]");
+        var taskId = card ? String(card.getAttribute("data-task-id") || "") : "";
+        var input = card ? card.querySelector("[data-task-feedback-input]") : null;
+        var feedback = input ? String(input.value || "").trim() : "";
+        if (!taskId || !feedback) {
+          setResultText("Task feedback requires a task and a note.");
+          return;
+        }
+        button.disabled = true;
+        postAction("task_feedback", {
+          task_id: taskId,
+          feedback: feedback,
+          feedback_kind: "operator_note",
+        }).then(function () {
+          delete state.taskFeedbackDrafts[taskId];
+          return fetchSnapshot({ forceLive: true, explicitForceLive: true });
+        }).catch(function (error) {
+          setResultText(String(error));
+        }).finally(function () {
+          button.disabled = false;
+        });
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-retry]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var card = button.closest("[data-task-board-card]");
+        var taskId = card ? String(card.getAttribute("data-task-id") || "") : "";
+        if (!taskId) {
+          return;
+        }
+        triggerWorkbenchAction("retry_failed_tasks", {
+          task_ids: [taskId],
+          force: true,
+          reason: "Operator requested retry from Office Task Board.",
+        }).catch(function (error) {
+          setResultText(String(error));
+        });
+      });
+    });
+  }
+
   function renderWorkersView() {
     if (!state.snapshot) {
       els.workersView.innerHTML = "";
@@ -2508,6 +2688,7 @@
     renderStatusStrip();
     renderOfficeView();
     renderWorkbenchView();
+    renderTasksView();
     renderBriefingView();
     renderWorkersView();
     renderHostsView();
@@ -2876,7 +3057,9 @@
       }
       setResultText(JSON.stringify(result, null, 2));
       rememberOfficeActionResult(action, result);
-      waitForActionToSettle(action, 1000);
+      if (action !== "task_feedback") {
+        waitForActionToSettle(action, 1000);
+      }
       return result;
     });
   }

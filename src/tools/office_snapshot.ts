@@ -307,6 +307,110 @@ function compactWorkbenchText(value: unknown, limit = 180) {
   return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
+function taskBoardCount(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
+}
+
+function latestTaskFeedback(events: RuntimeEventRecord[]) {
+  const latest = events[events.length - 1] ?? null;
+  if (!latest) {
+    return null;
+  }
+  return {
+    event_id: latest.event_id,
+    created_at: latest.created_at,
+    summary: latest.summary,
+    content: latest.content,
+    source_client: latest.source_client,
+    source_agent: latest.source_agent,
+    source_model: latest.source_model,
+  };
+}
+
+function buildTaskBoardCards(tasks: TaskRecord[], feedbackByTaskId: Map<string, RuntimeEventRecord[]>) {
+  return tasks.map((task) => {
+    const feedbackEvents = feedbackByTaskId.get(task.task_id) ?? [];
+    return {
+      task_id: task.task_id,
+      status: task.status,
+      priority: task.priority,
+      objective: task.objective,
+      project_dir: task.project_dir,
+      created_at: task.created_at,
+      updated_at: task.updated_at,
+      available_at: task.available_at,
+      started_at: task.started_at,
+      finished_at: task.finished_at,
+      source: task.source,
+      source_client: task.source_client,
+      source_agent: task.source_agent,
+      source_model: task.source_model,
+      tags: task.tags,
+      attempt_count: task.attempt_count,
+      max_attempts: task.max_attempts,
+      worker_id: task.last_worker_id,
+      lease_owner_id: task.lease?.owner_id ?? null,
+      lease_expires_at: task.lease?.lease_expires_at ?? null,
+      last_error: task.last_error,
+      feedback_count: feedbackEvents.length,
+      latest_feedback_at: feedbackEvents[feedbackEvents.length - 1]?.created_at ?? null,
+      latest_feedback: latestTaskFeedback(feedbackEvents),
+    };
+  });
+}
+
+function buildTaskBoardSnapshot(params: {
+  storage: Storage;
+  taskSummaryPayload: TaskSummaryPayload;
+  taskRunning: TaskListPayload;
+  taskPending: TaskListPayload;
+  taskFailed: TaskListPayload;
+}) {
+  const feedbackByTaskId = new Map<string, RuntimeEventRecord[]>();
+  for (const event of params.storage.listRuntimeEvents({
+    entity_type: "task",
+    event_type: "task.feedback",
+    limit: 500,
+  })) {
+    const taskId = String(event.entity_id ?? "").trim();
+    if (!taskId) {
+      continue;
+    }
+    const entries = feedbackByTaskId.get(taskId) ?? [];
+    entries.push(event);
+    feedbackByTaskId.set(taskId, entries);
+  }
+
+  const counts = {
+    pending: taskBoardCount(params.taskSummaryPayload.counts?.pending),
+    running: taskBoardCount(params.taskSummaryPayload.counts?.running),
+    failed: taskBoardCount(params.taskSummaryPayload.counts?.failed),
+    completed: taskBoardCount(params.taskSummaryPayload.counts?.completed),
+    cancelled: taskBoardCount(params.taskSummaryPayload.counts?.cancelled),
+  };
+  const openCount = counts.pending + counts.running + counts.failed;
+  const running = buildTaskBoardCards(params.taskRunning.tasks ?? [], feedbackByTaskId);
+  const pending = buildTaskBoardCards(params.taskPending.tasks ?? [], feedbackByTaskId);
+  const failed = buildTaskBoardCards(params.taskFailed.tasks ?? [], feedbackByTaskId);
+  return {
+    source: "office.task_board",
+    generated_at: new Date().toISOString(),
+    open_count: openCount,
+    counts,
+    rules: {
+      start_of_thread: "Inspect unresolved task-board items before creating new work; continue matching pending, running, or failed tasks first.",
+      end_of_work: "Leave a follow-up task or task-board feedback note for any unresolved next action before ending the thread.",
+    },
+    columns: {
+      failed,
+      running,
+      pending,
+    },
+    tasks: [...failed, ...running, ...pending],
+  };
+}
+
 function normalizeWorkbenchMode(value: unknown) {
   const normalized = String(value ?? "").trim();
   return normalized || "";
@@ -1595,6 +1699,13 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     patientZero,
     privilegedAccess,
   });
+  const taskBoard = buildTaskBoardSnapshot({
+    storage,
+    taskSummaryPayload,
+    taskRunning,
+    taskPending,
+    taskFailed,
+  });
   return {
     generated_at: new Date().toISOString(),
     thread_id: threadId,
@@ -1605,6 +1716,8 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     task_summary: taskSummaryPayload,
     task_running: taskRunning,
     task_pending: taskPending,
+    task_failed: taskFailed,
+    task_board: taskBoard,
     agent_sessions: agentSessions,
     adapter,
     bus_tail: busTail,
@@ -1710,6 +1823,13 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
         patientZero: livePatientZero,
         privilegedAccess: livePrivilegedAccess,
       });
+      const liveTaskBoard = buildTaskBoardSnapshot({
+        storage,
+        taskSummaryPayload: asRecord(cachedPayload.task_summary) as TaskSummaryPayload,
+        taskRunning: asRecord(cachedPayload.task_running) as TaskListPayload,
+        taskPending: asRecord(cachedPayload.task_pending) as TaskListPayload,
+        taskFailed: asRecord(cachedPayload.task_failed) as TaskListPayload,
+      });
       return {
         ...cachedPayload,
         roster: liveRoster,
@@ -1728,6 +1848,7 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
         model_infrastructure: asRecord(cachedKernel.model_infrastructure),
         federation: liveFederation,
         workbench: liveWorkbench,
+        task_board: liveTaskBoard,
         router_suppression_decisions: liveRouterSuppressionDecisions,
         cache: {
           hit: true,
