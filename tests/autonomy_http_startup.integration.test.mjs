@@ -446,6 +446,110 @@ test("office task board feedback records an operator note on a task", async () =
   }
 });
 
+test("office task board actions create, claim, complete, and close tasks", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-http-task-board-actions-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const busPath = path.join(tempDir, "trichat.bus.sock");
+  const bearerToken = "test-autonomy-http-task-board-actions-token";
+  const ollama = await startFakeOllamaServer({
+    models: [{ name: "llama3.2:3b" }],
+  });
+  const httpPort = await reservePort();
+  const actionUrl = `http://127.0.0.1:${httpPort}/office/api/action`;
+  const headers = {
+    Authorization: `Bearer ${bearerToken}`,
+    Origin: `http://127.0.0.1:${httpPort}`,
+    "Content-Type": "application/json",
+  };
+  const child = spawn("node", ["dist/server.js", "--http", "--http-port", String(httpPort)], {
+    cwd: REPO_ROOT,
+    env: inheritedEnv({
+      MCP_HTTP: "1",
+      MCP_HTTP_PORT: String(httpPort),
+      MCP_HTTP_HOST: "127.0.0.1",
+      MCP_HTTP_BEARER_TOKEN: bearerToken,
+      ANAMNESIS_HUB_DB_PATH: dbPath,
+      TRICHAT_BUS_SOCKET_PATH: busPath,
+      TRICHAT_OLLAMA_URL: ollama.url,
+      TRICHAT_RING_LEADER_AUTOSTART: "0",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "0",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "0",
+    }),
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+
+  try {
+    const startupHealth = JSON.parse(await waitForHttpText(`http://127.0.0.1:${httpPort}/health`));
+    assert.equal(startupHealth.ok, true);
+
+    const createResponse = await postHttpJson(actionUrl, {
+      action: "task_create",
+      objective: "Verify the daily task board action controls",
+      priority: 77,
+      lane: "local",
+      note: "Created from the Office task board action test.",
+    }, headers);
+    assert.equal(createResponse.statusCode, 200);
+    const createPayload = JSON.parse(createResponse.body);
+    assert.equal(createPayload.ok, true);
+    assert.equal(createPayload.action, "task_create");
+    const createdTaskId = createPayload.task?.task?.task_id ?? createPayload.task?.task_id;
+    assert.ok(createdTaskId);
+
+    const storageAfterCreate = new Storage(dbPath);
+    const created = storageAfterCreate.getTaskById(createdTaskId);
+    assert.equal(created.objective, "Verify the daily task board action controls");
+    assert.equal(created.priority, 77);
+    assert.equal(created.source_client, "office.api");
+    assert.ok(created.tags.includes("office-task-board"));
+    assert.ok(created.tags.includes("local-agent-ready"));
+
+    const claimResponse = await postHttpJson(actionUrl, {
+      action: "task_claim",
+      task_id: createdTaskId,
+      worker_id: "office-operator",
+      lease_seconds: 900,
+    }, headers);
+    assert.equal(claimResponse.statusCode, 200);
+    const claimPayload = JSON.parse(claimResponse.body);
+    assert.equal(claimPayload.ok, true);
+    assert.equal(claimPayload.claim.claimed, true);
+
+    const completeResponse = await postHttpJson(actionUrl, {
+      action: "task_complete",
+      task_id: createdTaskId,
+      worker_id: "office-operator",
+      summary: "Completed through the Office task board action controls.",
+    }, headers);
+    assert.equal(completeResponse.statusCode, 200);
+    const completePayload = JSON.parse(completeResponse.body);
+    assert.equal(completePayload.ok, true);
+    assert.equal(completePayload.completed.task.status, "completed");
+
+    const closeCreateResponse = await postHttpJson(actionUrl, {
+      action: "task_create",
+      objective: "Close this obsolete board item",
+      priority: 12,
+      lane: "auto",
+    }, headers);
+    const closeCreatePayload = JSON.parse(closeCreateResponse.body);
+    const closeTaskId = closeCreatePayload.task?.task?.task_id ?? closeCreatePayload.task?.task_id;
+    const closeResponse = await postHttpJson(actionUrl, {
+      action: "task_cancel",
+      task_id: closeTaskId,
+      reason: "Obsolete after operator review.",
+    }, headers);
+    assert.equal(closeResponse.statusCode, 200);
+    const closePayload = JSON.parse(closeResponse.body);
+    assert.equal(closePayload.ok, true);
+    assert.equal(closePayload.cancelled.task.status, "cancelled");
+  } finally {
+    await stopChildProcess(child);
+    await ollama.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("office intake dry run returns immediately with 202 instead of blocking on autonomy ingress", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-autonomy-http-office-intake-"));
   const dbPath = path.join(tempDir, "hub.sqlite");

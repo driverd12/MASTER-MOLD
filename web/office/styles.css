@@ -172,9 +172,21 @@ button:hover,
   border-color: var(--accent);
 }
 
+button:disabled,
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
+}
+
 .button--primary {
   background: linear-gradient(180deg, rgba(215, 142, 88, 0.2), rgba(215, 142, 88, 0.08));
   border-color: rgba(215, 142, 88, 0.55);
+}
+
+.button--quiet {
+  background: rgba(255,255,255,0.015);
+  color: var(--muted);
 }
 
 .status-strip {
@@ -826,6 +838,7 @@ button:hover,
 }
 
 .task-board-hero,
+.task-board-create,
 .task-board-rules,
 .task-board-column,
 .task-board-card {
@@ -860,12 +873,85 @@ button:hover,
 
 .task-board-hero__stats {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 8px;
+}
+
+.task-board-create {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
+  gap: 14px;
+  padding: 14px;
+  align-items: start;
+}
+
+.task-board-create h3 {
+  margin: 8px 0 8px;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.task-board-create p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.task-board-create__form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.task-board-create__row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.55fr) minmax(160px, 1fr);
+  gap: 10px;
+}
+
+.task-board-create label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.task-board-create label span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.task-board-create input,
+.task-board-create select,
+.task-board-create textarea,
+.task-board-card textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(5, 8, 13, 0.5);
+  color: var(--text);
+  padding: 10px;
+  line-height: 1.4;
+}
+
+.task-board-create textarea,
+.task-board-card textarea {
+  resize: vertical;
+}
+
+.task-board-create input:focus,
+.task-board-create select:focus,
+.task-board-create textarea:focus,
+.task-board-card textarea:focus {
+  outline: 2px solid rgba(109, 181, 174, 0.48);
+  outline-offset: 2px;
+  border-color: rgba(109, 181, 174, 0.72);
 }
 
 .task-board-rules {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   padding: 12px;
 }
@@ -894,7 +980,7 @@ button:hover,
 
 .task-board-columns {
   display: grid;
-  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  grid-template-columns: repeat(3, minmax(240px, 1fr));
   gap: 12px;
   align-items: start;
 }
@@ -925,6 +1011,7 @@ button:hover,
   display: grid;
   gap: 10px;
   padding: 12px;
+  overflow: hidden;
 }
 
 .task-board-card--failed {
@@ -949,6 +1036,7 @@ button:hover,
 
 .task-board-card__head strong {
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .task-board-card__head span,
@@ -962,6 +1050,11 @@ button:hover,
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.task-board-card__actions .button {
+  min-width: max-content;
 }
 
 .task-board-card__meta span {
@@ -993,6 +1086,7 @@ button:hover,
 .task-board-card__feedback span {
   color: var(--muted);
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .task-board-card textarea {
@@ -1903,6 +1997,8 @@ body[data-patient-zero="enabled"] .tabs__button--patient-zero.is-active {
   .workbench-hero,
   .workbench-suggestions,
   .task-board-hero,
+  .task-board-create,
+  .task-board-rules,
   .task-board-columns {
     grid-template-columns: 1fr;
   }
@@ -1924,8 +2020,13 @@ body[data-patient-zero="enabled"] .tabs__button--patient-zero.is-active {
   .workbench-scheduler,
   .workbench-scheduler__footer,
   .task-board-rules,
+  .task-board-create__row,
   .host-pair-form__row,
   .host-row__metrics {
     grid-template-columns: 1fr;
+  }
+
+  .task-board-card__actions .button {
+    flex: 1 1 140px;
   }
 }

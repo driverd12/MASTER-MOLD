@@ -4110,6 +4110,21 @@ async function main() {
         };
       },
       officeHostFabric: (input) => workerFabric(storage, input as z.infer<typeof workerFabricSchema>),
+      officeTaskAction: ({ action, args: taskActionArgs }) => {
+        if (action === "task_create") {
+          return taskCreate(storage, taskActionArgs as z.infer<typeof taskCreateSchema>);
+        }
+        if (action === "task_claim") {
+          return taskClaim(storage, taskActionArgs as z.infer<typeof taskClaimSchema>);
+        }
+        if (action === "task_complete") {
+          return taskComplete(storage, taskActionArgs as z.infer<typeof taskCompleteSchema>);
+        }
+        if (action === "task_cancel") {
+          return taskCancel(storage, taskActionArgs as z.infer<typeof taskCancelSchema>);
+        }
+        throw new Error(`unsupported_office_task_action:${action}`);
+      },
       federationIngest: ({ payload, networkGate }) =>
         ingestFederationPayload(storage, payload, networkGate as unknown as Record<string, unknown>),
       trustedRemoteHosts: () => storage.getWorkerFabricState()?.hosts ?? [],

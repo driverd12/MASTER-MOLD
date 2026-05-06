@@ -27,6 +27,7 @@ export type HttpOptions = {
     | { generated_at?: string | null; diagnostics?: unknown[]; stale?: boolean }
     | Promise<{ generated_at?: string | null; diagnostics?: unknown[]; stale?: boolean }>;
   officeHostFabric?: (input: Record<string, unknown>) => unknown | Promise<unknown>;
+  officeTaskAction?: (input: { action: string; tool: string; args: Record<string, unknown> }) => unknown | Promise<unknown>;
   federationIngest?: (input: { payload: Record<string, unknown>; networkGate: NetworkGateResult }) => unknown | Promise<unknown>;
   trustedRemoteHosts?: () => unknown[] | Promise<unknown[]>;
 };
@@ -2464,6 +2465,59 @@ function officeEnv(origin: string) {
   };
 }
 
+async function runOfficeTaskTool(
+  options: HttpOptions,
+  origin: string,
+  action: string,
+  tool: string,
+  args: Record<string, unknown>
+) {
+  if (options.officeTaskAction) {
+    try {
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        parsed: await Promise.resolve(options.officeTaskAction({ action, tool, args })),
+      };
+    } catch (error) {
+      return {
+        code: 1,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error),
+        parsed: null,
+      };
+    }
+  }
+  const result = await runLocalCommand(
+    process.execPath,
+    [
+      mcpToolCallScript,
+      "--tool",
+      tool,
+      "--args",
+      JSON.stringify(args),
+      "--transport",
+      "stdio",
+      "--stdio-command",
+      process.execPath,
+      "--stdio-args",
+      "dist/server.js",
+      "--cwd",
+      repoRoot,
+    ],
+    {
+      cwd: repoRoot,
+      env: officeEnv(origin),
+      timeoutMs: 30000,
+    }
+  );
+  return {
+    ...result,
+    parsed: parseJsonText(result.stdout.trim()),
+  };
+}
+
 function officeSnapshotEnv(origin: string) {
   return {
     ...process.env,
@@ -3445,6 +3499,185 @@ async function maybeHandleOfficeRequest(
           timeoutMs: 30000,
         }
       );
+    } else if (action === "task_create") {
+      const objective = String(body.objective || "").trim();
+      const priority = Math.max(0, Math.min(100, Number(body.priority ?? 70)));
+      const lane = String(body.lane || "auto").trim().toLowerCase();
+      const note = String(body.note || "").trim();
+      if (!objective) {
+        sendJson(res, 400, { ok: false, error: "missing_objective" });
+        return true;
+      }
+      const laneTags =
+        lane === "provider"
+          ? ["needs-provider-llm", "complex-work"]
+          : lane === "local"
+            ? ["local-agent-ready", "minor-bounded-work"]
+            : ["auto-route"];
+      const officeOperatorAgentId = "office-operator";
+      const providerAgentIds = ["codex", "claude", "gemini", "cursor"];
+      const localAgentIds = [
+        "implementation-director",
+        "research-director",
+        "verification-director",
+        "local-imprint",
+        "gemma-local",
+      ];
+      const autoAgentIds = ["ring-leader", ...localAgentIds, ...providerAgentIds];
+      const routing =
+        lane === "provider"
+          ? {
+              preferred_agent_ids: providerAgentIds,
+              allowed_agent_ids: [officeOperatorAgentId, "ring-leader", ...providerAgentIds],
+            }
+          : lane === "local"
+            ? {
+                preferred_agent_ids: localAgentIds,
+                allowed_agent_ids: [officeOperatorAgentId, "ring-leader", ...localAgentIds],
+              }
+            : { preferred_agent_ids: autoAgentIds, allowed_agent_ids: [officeOperatorAgentId, ...autoAgentIds] };
+      const toolArgs = {
+        mutation: buildOfficeMutation("task-create"),
+        objective,
+        project_dir: repoRoot,
+        priority: Number.isFinite(priority) ? priority : 70,
+        tags: ["office-task-board", ...laneTags],
+        ...(routing ? { routing } : {}),
+        metadata: {
+          source_surface: "office.task_board",
+          routing_lane: lane || "auto",
+          operator_note: note || null,
+          daily_board: true,
+        },
+        source_client: "office.api",
+        source_agent: "operator",
+      };
+      const taskResult = await runOfficeTaskTool(options, origin, action, "task.create", toolArgs);
+      if (taskResult.code !== 0) {
+        sendJson(res, 500, {
+          ok: false,
+          action,
+          result: taskResult.parsed ?? null,
+          stdout: taskResult.parsed ? "" : taskResult.stdout.trim(),
+          stderr: taskResult.stderr.trim(),
+        });
+        return true;
+      }
+      invalidateOfficeSnapshotCaches();
+      sendJson(res, 200, {
+        ok: true,
+        action,
+        task: taskResult.parsed ?? null,
+      });
+      return true;
+    } else if (action === "task_claim") {
+      const taskId = String(body.task_id || "").trim();
+      const workerId = String(body.worker_id || "office-operator").trim() || "office-operator";
+      const leaseSeconds = Math.max(15, Math.min(86400, Number(body.lease_seconds ?? 1800)));
+      if (!taskId) {
+        sendJson(res, 400, { ok: false, error: "missing_task_id" });
+        return true;
+      }
+      const toolArgs = {
+        mutation: buildOfficeMutation(`task-claim-${taskId}`),
+        task_id: taskId,
+        worker_id: workerId,
+        lease_seconds: Number.isFinite(leaseSeconds) ? leaseSeconds : 1800,
+      };
+      const taskResult = await runOfficeTaskTool(options, origin, action, "task.claim", toolArgs);
+      if (taskResult.code !== 0) {
+        sendJson(res, 500, {
+          ok: false,
+          action,
+          task_id: taskId,
+          result: taskResult.parsed ?? null,
+          stdout: taskResult.parsed ? "" : taskResult.stdout.trim(),
+          stderr: taskResult.stderr.trim(),
+        });
+        return true;
+      }
+      invalidateOfficeSnapshotCaches();
+      sendJson(res, 200, {
+        ok: true,
+        action,
+        task_id: taskId,
+        claim: taskResult.parsed ?? null,
+      });
+      return true;
+    } else if (action === "task_complete") {
+      const taskId = String(body.task_id || "").trim();
+      const workerId = String(body.worker_id || "").trim();
+      const summary = String(body.summary || "Completed from Office Task Board.").trim();
+      if (!taskId) {
+        sendJson(res, 400, { ok: false, error: "missing_task_id" });
+        return true;
+      }
+      if (!workerId) {
+        sendJson(res, 400, { ok: false, error: "missing_worker_id" });
+        return true;
+      }
+      const toolArgs = {
+        mutation: buildOfficeMutation(`task-complete-${taskId}`),
+        task_id: taskId,
+        worker_id: workerId,
+        summary,
+        result: {
+          source_surface: "office.task_board",
+          completed_by: "operator",
+        },
+      };
+      const taskResult = await runOfficeTaskTool(options, origin, action, "task.complete", toolArgs);
+      if (taskResult.code !== 0) {
+        sendJson(res, 500, {
+          ok: false,
+          action,
+          task_id: taskId,
+          result: taskResult.parsed ?? null,
+          stdout: taskResult.parsed ? "" : taskResult.stdout.trim(),
+          stderr: taskResult.stderr.trim(),
+        });
+        return true;
+      }
+      invalidateOfficeSnapshotCaches();
+      sendJson(res, 200, {
+        ok: true,
+        action,
+        task_id: taskId,
+        completed: taskResult.parsed ?? null,
+      });
+      return true;
+    } else if (action === "task_cancel") {
+      const taskId = String(body.task_id || "").trim();
+      const reason = String(body.reason || "Closed from Office Task Board.").trim();
+      if (!taskId) {
+        sendJson(res, 400, { ok: false, error: "missing_task_id" });
+        return true;
+      }
+      const toolArgs = {
+        mutation: buildOfficeMutation(`task-cancel-${taskId}`),
+        task_id: taskId,
+        reason,
+      };
+      const taskResult = await runOfficeTaskTool(options, origin, action, "task.cancel", toolArgs);
+      if (taskResult.code !== 0) {
+        sendJson(res, 500, {
+          ok: false,
+          action,
+          task_id: taskId,
+          result: taskResult.parsed ?? null,
+          stdout: taskResult.parsed ? "" : taskResult.stdout.trim(),
+          stderr: taskResult.stderr.trim(),
+        });
+        return true;
+      }
+      invalidateOfficeSnapshotCaches();
+      sendJson(res, 200, {
+        ok: true,
+        action,
+        task_id: taskId,
+        cancelled: taskResult.parsed ?? null,
+      });
+      return true;
     } else if (action === "retry_failed_tasks") {
       const taskIds = Array.isArray(body.task_ids)
         ? body.task_ids.map((entry: unknown) => String(entry ?? "").trim()).filter(Boolean)

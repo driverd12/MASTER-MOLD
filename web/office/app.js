@@ -38,6 +38,12 @@
     officeActions: {},
     hostPairDraft: defaultHostPairDraft(),
     taskFeedbackDrafts: {},
+    taskBoardDraft: {
+      objective: "",
+      priority: "70",
+      lane: "auto",
+      note: "",
+    },
   };
 
   var els = {
@@ -447,9 +453,36 @@
     return !!(active && active.matches && active.matches("[data-patient-zero-note]"));
   }
 
-  function isTaskFeedbackFocused() {
+  function isTaskBoardInputFocused() {
     var active = document.activeElement;
-    return !!(active && active.matches && active.matches("[data-task-feedback-input]"));
+    return !!(active && active.matches && active.matches("[data-task-feedback-input], [data-task-board-input]"));
+  }
+
+  function blurTaskBoardInput() {
+    var active = document.activeElement;
+    if (active && active.matches && active.matches("[data-task-feedback-input], [data-task-board-input]") && active.blur) {
+      active.blur();
+    }
+  }
+
+  function refreshTaskBoardAfterAction() {
+    var pendingSnapshot = state.snapshotRequest;
+    var forceRefresh = function () {
+      return fetchSnapshot({ forceLive: true, explicitForceLive: true }).then(function (payload) {
+        window.setTimeout(function () {
+          fetchSnapshot({ forceLive: true, explicitForceLive: true }).catch(function (error) {
+            setResultText("Task Board refresh degraded: " + String(error));
+          });
+        }, 1200);
+        return payload;
+      });
+    };
+    if (pendingSnapshot) {
+      return Promise.resolve(pendingSnapshot).catch(function () {
+        return null;
+      }).then(forceRefresh);
+    }
+    return forceRefresh();
   }
 
   function compactIntakeText(value, limit) {
@@ -1695,6 +1728,27 @@
     return parts.filter(Boolean);
   }
 
+  function taskBoardActionHtml(entry, tone) {
+    var taskId = String(entry.task_id || "");
+    if (!taskId) {
+      return "";
+    }
+    var status = String(entry.status || "").toLowerCase();
+    var retryHtml = tone === "failed"
+      ? '<button type="button" class="button" data-task-board-retry>Retry</button>'
+      : "";
+    var claimHtml = status === "pending"
+      ? '<button type="button" class="button" data-task-board-claim>Take task</button>'
+      : "";
+    var completeHtml = status === "running" && entry.worker_id
+      ? '<button type="button" class="button button--primary" data-task-board-complete>Mark done</button>'
+      : "";
+    var closeHtml = status === "pending" || status === "failed"
+      ? '<button type="button" class="button button--quiet" data-task-board-close>Close</button>'
+      : "";
+    return completeHtml + claimHtml + retryHtml + closeHtml;
+  }
+
   function taskBoardCardHtml(entry) {
     var taskId = String(entry.task_id || "");
     var tone = taskBoardStatusTone(entry.status);
@@ -1710,11 +1764,8 @@
         escapeHtml((feedback.source_agent || feedback.source_client || "operator") + " · " + relativeTime(feedback.created_at) + " ago") +
         "</small></div>"
       : '<div class="task-board-card__feedback task-board-card__feedback--empty"><strong>No feedback yet</strong><span>Add a note if the next thread needs context or operator direction.</span></div>';
-    var retryHtml = tone === "failed"
-      ? '<button type="button" class="button" data-task-board-retry>Retry</button>'
-      : "";
     return (
-      '<article class="task-board-card task-board-card--' + escapeHtml(tone) + '" data-task-board-card data-task-id="' + escapeHtml(taskId) + '">' +
+      '<article class="task-board-card task-board-card--' + escapeHtml(tone) + '" data-task-board-card data-task-id="' + escapeHtml(taskId) + '" data-worker-id="' + escapeHtml(entry.worker_id || "") + '">' +
       '<div class="task-board-card__head">' +
       '<strong>' + escapeHtml(entry.objective || taskId || "Task") + '</strong>' +
       '<span>' + escapeHtml(taskId || "untracked") + '</span>' +
@@ -1729,7 +1780,7 @@
       '<textarea data-task-feedback-input rows="3" placeholder="Add operator feedback or handoff context for this task.">' + escapeHtml(draft) + "</textarea>" +
       '<div class="task-board-card__actions">' +
       '<button type="button" class="button button--primary" data-task-feedback-submit>Save feedback</button>' +
-      retryHtml +
+      taskBoardActionHtml(entry, tone) +
       "</div>" +
       "</article>"
     );
@@ -1749,6 +1800,32 @@
     );
   }
 
+  function taskBoardCreateHtml() {
+    var draft = state.taskBoardDraft || {};
+    return (
+      '<section class="task-board-create" aria-label="Add internal task">' +
+      '<div class="task-board-create__copy">' +
+      '<div class="section-title">Capture Work</div>' +
+      '<h3>Add a bounded task without derailing the current thread.</h3>' +
+      '<p>Use this for concrete next slices. Complex work should wait for Codex, Claude, Gemini, or Cursor; small low-risk chores can go to local agents or subagents.</p>' +
+      "</div>" +
+      '<form class="task-board-create__form" data-task-board-create-form>' +
+      '<textarea data-task-board-input data-task-board-create-objective rows="4" placeholder="Task objective, definition of done, evidence required.">' + escapeHtml(draft.objective || "") + "</textarea>" +
+      '<div class="task-board-create__row">' +
+      '<label><span>Priority</span><input data-task-board-input data-task-board-create-priority type="number" min="0" max="100" step="1" value="' + escapeHtml(draft.priority || "70") + '" /></label>' +
+      '<label><span>Routing</span><select data-task-board-input data-task-board-create-lane>' +
+      '<option value="auto"' + ((draft.lane || "auto") === "auto" ? " selected" : "") + ">auto</option>" +
+      '<option value="provider"' + (draft.lane === "provider" ? " selected" : "") + ">provider LLM</option>" +
+      '<option value="local"' + (draft.lane === "local" ? " selected" : "") + ">local/subagent</option>" +
+      "</select></label>" +
+      "</div>" +
+      '<input data-task-board-input data-task-board-create-note type="text" placeholder="Optional operator note or source context" value="' + escapeHtml(draft.note || "") + '" />' +
+      '<button type="submit" class="button button--primary">Add task</button>' +
+      "</form>" +
+      "</section>"
+    );
+  }
+
   function renderTasksView() {
     if (!els.tasksView) {
       return;
@@ -1757,7 +1834,7 @@
       els.tasksView.innerHTML = "";
       return;
     }
-    if (state.activeTab === "tasks" && isTaskFeedbackFocused()) {
+    if (state.activeTab === "tasks" && isTaskBoardInputFocused()) {
       return;
     }
     var board = state.snapshot.task_board || {};
@@ -1780,9 +1857,12 @@
       '<div class="metric"><span>Feedback</span><strong>' + String(taskBoardList(board.tasks).reduce(function (sum, entry) { return sum + Number(entry.feedback_count || 0); }, 0)) + '</strong></div>' +
       "</div>" +
       "</section>" +
+      taskBoardCreateHtml() +
       '<section class="task-board-rules">' +
       '<article><strong>Start of thread</strong><span>' + escapeHtml(rules.start_of_thread || "Inspect unresolved tasks before creating new work.") + "</span></article>" +
+      '<article><strong>Mid-work arrivals</strong><span>Capture or comment on new work, then continue the active task unless the operator marks it urgent or it blocks the current objective.</span></article>' +
       '<article><strong>End of work</strong><span>' + escapeHtml(rules.end_of_work || "Leave a follow-up task or feedback note for unresolved next actions.") + "</span></article>" +
+      '<article><strong>Routing rule</strong><span>Complex work waits for provider LLM lanes; minor bounded chores can be handed to local agents or subagents.</span></article>' +
       "</section>" +
       '<div class="task-board-columns">' +
       taskBoardColumnHtml("failed", "Failed", columns.failed, "No failed tasks need action.") +
@@ -1790,6 +1870,56 @@
       taskBoardColumnHtml("pending", "Pending", columns.pending, "No pending tasks are waiting for ownership.") +
       "</div>" +
       "</div>";
+
+    var createForm = els.tasksView.querySelector("[data-task-board-create-form]");
+    if (createForm) {
+      var objectiveInput = createForm.querySelector("[data-task-board-create-objective]");
+      var priorityInput = createForm.querySelector("[data-task-board-create-priority]");
+      var laneInput = createForm.querySelector("[data-task-board-create-lane]");
+      var noteInput = createForm.querySelector("[data-task-board-create-note]");
+      var rememberCreateDraft = function () {
+        state.taskBoardDraft = {
+          objective: objectiveInput ? String(objectiveInput.value || "") : "",
+          priority: priorityInput ? String(priorityInput.value || "") : "70",
+          lane: laneInput ? String(laneInput.value || "auto") : "auto",
+          note: noteInput ? String(noteInput.value || "") : "",
+        };
+      };
+      Array.prototype.slice.call(createForm.querySelectorAll("[data-task-board-input]")).forEach(function (input) {
+        input.addEventListener("input", rememberCreateDraft);
+        input.addEventListener("change", rememberCreateDraft);
+      });
+      createForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        rememberCreateDraft();
+        var draft = state.taskBoardDraft || {};
+        var objective = String(draft.objective || "").trim();
+        var priority = Math.max(0, Math.min(100, Number(draft.priority || 70)));
+        var lane = String(draft.lane || "auto");
+        var note = String(draft.note || "").trim();
+        if (!objective) {
+          setResultText("Task objective required.");
+          return;
+        }
+        var submit = createForm.querySelector('button[type="submit"]');
+        if (submit) submit.disabled = true;
+        postAction("task_create", {
+          objective: objective,
+          priority: Number.isFinite(priority) ? priority : 70,
+          lane: lane,
+          note: note,
+        }).then(function () {
+          blurTaskBoardInput();
+          state.taskBoardDraft = { objective: "", priority: "70", lane: "auto", note: "" };
+          renderTasksView();
+          return refreshTaskBoardAfterAction();
+        }).catch(function (error) {
+          setResultText(String(error));
+        }).finally(function () {
+          if (submit) submit.disabled = false;
+        });
+      });
+    }
 
     Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-feedback-input]")).forEach(function (input) {
       input.addEventListener("input", function () {
@@ -1816,8 +1946,10 @@
           feedback: feedback,
           feedback_kind: "operator_note",
         }).then(function () {
+          blurTaskBoardInput();
           delete state.taskFeedbackDrafts[taskId];
-          return fetchSnapshot({ forceLive: true, explicitForceLive: true });
+          renderTasksView();
+          return refreshTaskBoardAfterAction();
         }).catch(function (error) {
           setResultText(String(error));
         }).finally(function () {
@@ -1838,6 +1970,63 @@
           reason: "Operator requested retry from Office Task Board.",
         }).catch(function (error) {
           setResultText(String(error));
+        });
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-claim]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var card = button.closest("[data-task-board-card]");
+        var taskId = card ? String(card.getAttribute("data-task-id") || "") : "";
+        if (!taskId) return;
+        button.disabled = true;
+        postAction("task_claim", {
+          task_id: taskId,
+          worker_id: "office-operator",
+          lease_seconds: 1800,
+        }).then(function () {
+          return refreshTaskBoardAfterAction();
+        }).catch(function (error) {
+          setResultText(String(error));
+        }).finally(function () {
+          button.disabled = false;
+        });
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-complete]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var card = button.closest("[data-task-board-card]");
+        var taskId = card ? String(card.getAttribute("data-task-id") || "") : "";
+        var workerId = card ? String(card.getAttribute("data-worker-id") || "") : "";
+        if (!taskId) return;
+        button.disabled = true;
+        postAction("task_complete", {
+          task_id: taskId,
+          worker_id: workerId,
+          summary: "Completed from Office Task Board after operator review.",
+        }).then(function () {
+          return refreshTaskBoardAfterAction();
+        }).catch(function (error) {
+          setResultText(String(error));
+        }).finally(function () {
+          button.disabled = false;
+        });
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-close]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var card = button.closest("[data-task-board-card]");
+        var taskId = card ? String(card.getAttribute("data-task-id") || "") : "";
+        if (!taskId) return;
+        button.disabled = true;
+        postAction("task_cancel", {
+          task_id: taskId,
+          reason: "Closed from Office Task Board after operator review.",
+        }).then(function () {
+          return refreshTaskBoardAfterAction();
+        }).catch(function (error) {
+          setResultText(String(error));
+        }).finally(function () {
+          button.disabled = false;
         });
       });
     });
@@ -3057,7 +3246,7 @@
       }
       setResultText(JSON.stringify(result, null, 2));
       rememberOfficeActionResult(action, result);
-      if (action !== "task_feedback") {
+      if (!["task_feedback", "task_create", "task_claim", "task_complete", "task_cancel"].includes(action)) {
         waitForActionToSettle(action, 1000);
       }
       return result;
