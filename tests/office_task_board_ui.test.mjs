@@ -24,3 +24,22 @@ test("Agent Office task board CSS supports responsive horizontal Kanban lanes", 
   assert.match(stylesCss, /minmax\(260px,\s*1fr\)/);
   assert.match(stylesCss, /\.task-agent-sprite/);
 });
+
+test("Agent Office task board exposes lane-level Kanban controls", () => {
+  assert.match(appJs, /TASK_BOARD_LANE_STORAGE_KEY/);
+  assert.match(appJs, /taskBoardLaneConfig/);
+  assert.match(appJs, /data-task-board-lane-drag/);
+  assert.match(appJs, /data-task-board-lane-handle/);
+  assert.match(appJs, /taskBoardHandleLaneDrop/);
+  assert.match(appJs, /data-task-board-lane-title/);
+  assert.match(appJs, /data-task-board-add-lane/);
+  assert.match(appJs, /data-task-board-quick-add/);
+});
+
+test("Agent Office task board styles lane bars and compact add controls", () => {
+  assert.match(stylesCss, /\.task-board-column__accent/);
+  assert.match(stylesCss, /\.task-board-column__title-input/);
+  assert.match(stylesCss, /\.task-board-column__quick-add/);
+  assert.match(stylesCss, /\.task-board-lane-handle/);
+  assert.match(stylesCss, /\.task-board-column\.is-lane-dragging/);
+});

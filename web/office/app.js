@@ -41,6 +41,11 @@
     taskBoardUnlocked: {},
     taskBoardAssignees: {},
     taskBoardDragging: null,
+    taskBoardLaneDragging: null,
+    taskBoardLaneConfigCache: null,
+    taskBoardTaskLaneAssignments: null,
+    taskBoardQuickAddLane: "",
+    taskBoardQuickAddDrafts: {},
     taskBoardDraft: {
       objective: "",
       priority: "70",
@@ -77,6 +82,8 @@
 
   var MASTER_MOLD_MODE_LABEL = "MASTER-MOLD MODE";
   var MASTER_MOLD_MODE_HERO_ASSET = "/office/master-mold-mode-banner.svg?v=20260420d";
+  var TASK_BOARD_LANE_STORAGE_KEY = "master_mold_task_board_lanes_v1";
+  var TASK_BOARD_TASK_LANE_STORAGE_KEY = "master_mold_task_board_task_lanes_v1";
 
   function setBootState(value) {
     if (document.body) {
@@ -103,6 +110,27 @@
       return window.CSS.escape(String(value || ""));
     }
     return String(value || "").replace(/["\\]/g, "\\$&");
+  }
+
+  function readLocalJson(key, fallback) {
+    try {
+      if (!window.localStorage) return fallback;
+      var raw = window.localStorage.getItem(key);
+      if (!raw) return fallback;
+      var parsed = JSON.parse(raw);
+      return parsed == null ? fallback : parsed;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function writeLocalJson(key, value) {
+    try {
+      if (!window.localStorage) return;
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+      // Local board customization should never break the live Office surface.
+    }
   }
 
   function operatorFacingText(value) {
@@ -1802,6 +1830,79 @@
     });
   }
 
+  function taskBoardDefaultLanes() {
+    return [
+      { key: "pending", status: "pending", title: "Pending", accent: "#7fc99c", locked: true },
+      { key: "running", status: "running", title: "Doing", accent: "#d78e58", locked: true },
+      { key: "failed", status: "failed", title: "Blocked", accent: "#d96c6c", locked: true },
+      { key: "completed", status: "completed", title: "Done", accent: "#6db5ae", locked: true },
+    ];
+  }
+
+  function normalizeTaskBoardLane(raw, fallback) {
+    var lane = raw && typeof raw === "object" ? raw : {};
+    var key = String(lane.key || fallback.key || "").trim();
+    if (!key) return null;
+    var status = String(lane.status || fallback.status || (key.indexOf("custom-") === 0 ? "custom" : key)).trim();
+    return {
+      key: key,
+      status: status,
+      title: String(lane.title || fallback.title || key).trim() || key,
+      accent: String(lane.accent || fallback.accent || "#6db5ae").trim() || "#6db5ae",
+      locked: Boolean(fallback.locked || lane.locked),
+    };
+  }
+
+  function taskBoardLaneConfig() {
+    if (Array.isArray(state.taskBoardLaneConfigCache)) {
+      return state.taskBoardLaneConfigCache;
+    }
+    var defaults = taskBoardDefaultLanes();
+    var defaultsByKey = {};
+    defaults.forEach(function (lane) {
+      defaultsByKey[lane.key] = lane;
+    });
+    var saved = readLocalJson(TASK_BOARD_LANE_STORAGE_KEY, []);
+    var lanes = [];
+    if (Array.isArray(saved)) {
+      saved.forEach(function (entry) {
+        var key = entry && entry.key ? String(entry.key) : "";
+        var normalized = normalizeTaskBoardLane(entry, defaultsByKey[key] || {});
+        if (normalized && !lanes.some(function (lane) { return lane.key === normalized.key; })) {
+          lanes.push(normalized);
+        }
+      });
+    }
+    defaults.forEach(function (lane) {
+      if (!lanes.some(function (entry) { return entry.key === lane.key; })) {
+        lanes.push(lane);
+      }
+    });
+    state.taskBoardLaneConfigCache = lanes;
+    return lanes;
+  }
+
+  function saveTaskBoardLaneConfig(lanes) {
+    state.taskBoardLaneConfigCache = lanes.map(function (lane) {
+      return normalizeTaskBoardLane(lane, lane) || lane;
+    }).filter(Boolean);
+    writeLocalJson(TASK_BOARD_LANE_STORAGE_KEY, state.taskBoardLaneConfigCache);
+  }
+
+  function taskBoardTaskLaneAssignments() {
+    if (state.taskBoardTaskLaneAssignments && typeof state.taskBoardTaskLaneAssignments === "object") {
+      return state.taskBoardTaskLaneAssignments;
+    }
+    var saved = readLocalJson(TASK_BOARD_TASK_LANE_STORAGE_KEY, {});
+    state.taskBoardTaskLaneAssignments = saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+    return state.taskBoardTaskLaneAssignments;
+  }
+
+  function saveTaskBoardTaskLaneAssignments(assignments) {
+    state.taskBoardTaskLaneAssignments = assignments && typeof assignments === "object" ? assignments : {};
+    writeLocalJson(TASK_BOARD_TASK_LANE_STORAGE_KEY, state.taskBoardTaskLaneAssignments);
+  }
+
   function taskBoardList(value) {
     return Array.isArray(value) ? value : [];
   }
@@ -1895,13 +1996,85 @@
     );
   }
 
-  function taskBoardColumnHtml(key, title, tasks, emptyText, countOverride) {
-    var entries = taskBoardList(tasks);
-    var count = countOverride == null ? entries.length : countOverride;
+  function taskBoardAllTasks(board) {
+    var byId = {};
+    taskBoardList(board.tasks).forEach(function (entry) {
+      var taskId = String(entry && entry.task_id || "");
+      if (taskId) byId[taskId] = entry;
+    });
+    var columns = board.columns || {};
+    ["pending", "running", "failed", "completed"].forEach(function (status) {
+      taskBoardList(columns[status]).forEach(function (entry) {
+        var taskId = String(entry && entry.task_id || "");
+        if (taskId && !byId[taskId]) byId[taskId] = entry;
+      });
+    });
+    return Object.keys(byId).map(function (taskId) { return byId[taskId]; });
+  }
+
+  function taskBoardLaneEntries(lane, board) {
+    var assignments = taskBoardTaskLaneAssignments();
+    if (lane.status === "custom") {
+      return taskBoardAllTasks(board).filter(function (entry) {
+        return assignments[String(entry.task_id || "")] === lane.key;
+      });
+    }
+    var entries = taskBoardList((board.columns || {})[lane.status]);
+    return entries.filter(function (entry) {
+      var taskId = String(entry.task_id || "");
+      var assignedLane = assignments[taskId];
+      return !assignedLane || !taskBoardLaneConfig().some(function (config) {
+        return config.key === assignedLane && config.status === "custom";
+      });
+    });
+  }
+
+  function taskBoardLaneCount(lane, board) {
+    var counts = board.counts || {};
+    if (lane.status === "completed") return Number(counts.completed || 0);
+    return taskBoardLaneEntries(lane, board).length;
+  }
+
+  function taskBoardLaneEmptyText(lane, board) {
+    if (lane.status === "pending") return "Drop tasks here or use + to create one.";
+    if (lane.status === "running") return "Drop pending tasks here to start them.";
+    if (lane.status === "failed") return "Drop blocked work here only after a real failure.";
+    if (lane.status === "completed") {
+      return Number((board.counts || {}).completed || 0)
+        ? "Completed tasks exist, but none are in the current sample window."
+        : "No completed cards yet.";
+    }
+    return "Drop cards here or rename this lane for a specific purpose.";
+  }
+
+  function taskBoardQuickAddHtml(lane) {
+    if (state.taskBoardQuickAddLane !== lane.key) {
+      return "";
+    }
+    var draft = state.taskBoardQuickAddDrafts[lane.key] || "";
     return (
-      '<section class="task-board-column task-board-column--' + escapeHtml(key) + '" data-task-board-column data-task-board-status="' + escapeHtml(key) + '">' +
-      '<div class="task-board-column__head"><span>' + escapeHtml(title) + '</span><strong>' + String(count || 0) + "</strong></div>" +
-      '<div class="task-board-column__items" data-task-board-dropzone data-task-board-status="' + escapeHtml(key) + '">' +
+      '<form class="task-board-column__quick-add" data-task-board-quick-add-form data-task-board-lane="' + escapeHtml(lane.key) + '">' +
+      '<input data-task-board-quick-add-input data-task-board-input type="text" placeholder="New task for ' + escapeHtml(lane.title) + '" value="' + escapeHtml(draft) + '" />' +
+      '<button type="submit" class="button button--primary">Add</button>' +
+      "</form>"
+    );
+  }
+
+  function taskBoardColumnHtml(lane, board) {
+    var entries = taskBoardLaneEntries(lane, board);
+    var count = taskBoardLaneCount(lane, board);
+    var title = lane.title || lane.key;
+    var emptyText = taskBoardLaneEmptyText(lane, board);
+    return (
+      '<section class="task-board-column task-board-column--' + escapeHtml(lane.status) + '" style="--lane-accent: ' + escapeHtml(lane.accent) + '" data-task-board-column data-task-board-lane-drag draggable="true" data-task-board-lane="' + escapeHtml(lane.key) + '" data-task-board-status="' + escapeHtml(lane.status) + '">' +
+      '<div class="task-board-column__accent" aria-hidden="true"></div>' +
+      '<div class="task-board-column__head">' +
+      '<button type="button" class="task-board-lane-handle" data-task-board-lane-handle title="Move lane">::</button>' +
+      '<input class="task-board-column__title-input" data-task-board-lane-title data-task-board-lane="' + escapeHtml(lane.key) + '" value="' + escapeHtml(title) + '" aria-label="Lane title" />' +
+      '<button type="button" class="task-board-column__plus" data-task-board-quick-add data-task-board-lane="' + escapeHtml(lane.key) + '" title="Add task">+</button>' +
+      '<strong>' + String(count || 0) + "</strong></div>" +
+      '<div class="task-board-column__items" data-task-board-dropzone data-task-board-status="' + escapeHtml(lane.status) + '" data-task-board-lane="' + escapeHtml(lane.key) + '">' +
+      taskBoardQuickAddHtml(lane) +
       (entries.length
         ? entries.map(taskBoardCardHtml).join("")
         : '<article class="task-board-empty">' + escapeHtml(emptyText) + "</article>") +
@@ -1943,10 +2116,28 @@
     return String(state.taskBoardAssignees[taskId] || "codex").trim() || "codex";
   }
 
-  function taskBoardMoveTask(taskId, targetStatus, card) {
+  function taskBoardMoveTask(taskId, targetStatus, card, targetLaneKey) {
     var currentStatus = String(card ? card.getAttribute("data-task-status") || "" : "").toLowerCase();
     var normalizedTarget = String(targetStatus || "").toLowerCase();
-    if (!taskId || !normalizedTarget || currentStatus === normalizedTarget) {
+    var laneKey = String(targetLaneKey || "").trim();
+    var targetLane = taskBoardLaneConfig().find(function (lane) { return lane.key === laneKey; }) || null;
+    var assignments = taskBoardTaskLaneAssignments();
+    if (!taskId || !normalizedTarget) {
+      return Promise.resolve();
+    }
+    if (targetLane && targetLane.status === "custom") {
+      assignments[taskId] = targetLane.key;
+      saveTaskBoardTaskLaneAssignments(assignments);
+      renderTasksView();
+      setResultText("Task grouped under " + targetLane.title + ". Backend status is still " + (currentStatus || "unchanged") + ".");
+      return Promise.resolve();
+    }
+    if (assignments[taskId]) {
+      delete assignments[taskId];
+      saveTaskBoardTaskLaneAssignments(assignments);
+    }
+    if (currentStatus === normalizedTarget) {
+      renderTasksView();
       return Promise.resolve();
     }
     if (normalizedTarget === "running" && currentStatus === "pending") {
@@ -1987,17 +2178,81 @@
 
   function taskBoardHandleDrop(event) {
     event.preventDefault();
+    if (event.stopPropagation) event.stopPropagation();
     var zone = event.currentTarget || event.target;
     if (zone && zone.classList) zone.classList.remove("is-drag-over");
     var targetStatus = zone ? String(zone.getAttribute("data-task-board-status") || "") : "";
+    var targetLane = zone ? String(zone.getAttribute("data-task-board-lane") || "") : "";
     var taskId = state.taskBoardDragging || "";
     if (!taskId && event.dataTransfer) {
       taskId = String(event.dataTransfer.getData("text/plain") || "");
     }
     var card = taskId && els.tasksView ? els.tasksView.querySelector('[data-task-board-card][data-task-id="' + escapeCss(taskId) + '"]') : null;
-    return taskBoardMoveTask(taskId, targetStatus, card).catch(function (error) {
+    return taskBoardMoveTask(taskId, targetStatus, card, targetLane).catch(function (error) {
       setResultText(String(error));
     });
+  }
+
+  function taskBoardAddLane() {
+    var lanes = taskBoardLaneConfig().slice();
+    var key = "custom-" + Date.now().toString(36);
+    lanes.push({
+      key: key,
+      status: "custom",
+      title: "New lane",
+      accent: "#8da0d6",
+      locked: false,
+    });
+    saveTaskBoardLaneConfig(lanes);
+    renderTasksView();
+  }
+
+  function taskBoardUpdateLaneTitle(laneKey, title) {
+    var lanes = taskBoardLaneConfig().map(function (lane) {
+      if (lane.key !== laneKey) return lane;
+      return Object.assign({}, lane, { title: String(title || "").trim() || lane.title });
+    });
+    saveTaskBoardLaneConfig(lanes);
+  }
+
+  function taskBoardMoveLane(sourceKey, targetKey) {
+    if (!sourceKey || !targetKey || sourceKey === targetKey) return;
+    var lanes = taskBoardLaneConfig().slice();
+    var sourceIndex = lanes.findIndex(function (lane) { return lane.key === sourceKey; });
+    var targetIndex = lanes.findIndex(function (lane) { return lane.key === targetKey; });
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    var moved = lanes.splice(sourceIndex, 1)[0];
+    lanes.splice(targetIndex, 0, moved);
+    saveTaskBoardLaneConfig(lanes);
+    renderTasksView();
+  }
+
+  function taskBoardHandleLaneDrop(event) {
+    event.preventDefault();
+    var target = event.currentTarget || event.target;
+    if (target && target.classList) target.classList.remove("is-lane-drag-over");
+    var targetKey = target ? String(target.getAttribute("data-task-board-lane") || "") : "";
+    var sourceKey = state.taskBoardLaneDragging || "";
+    if (!sourceKey && event.dataTransfer) {
+      sourceKey = String(event.dataTransfer.getData("application/x-master-mold-lane") || "");
+    }
+    taskBoardMoveLane(sourceKey, targetKey);
+  }
+
+  function taskBoardCreatedTaskId(result) {
+    var task = result && result.task ? result.task : null;
+    if (task && task.task && task.task.task_id) return String(task.task.task_id);
+    if (task && task.task_id) return String(task.task_id);
+    if (task && task.result && task.result.task && task.result.task.task_id) return String(task.result.task.task_id);
+    return "";
+  }
+
+  function taskBoardRoutingForLane(lane) {
+    if (!lane) return "auto";
+    if (lane.status === "custom") return "auto";
+    if (lane.status === "pending") return "auto";
+    if (lane.status === "running") return "provider";
+    return "auto";
   }
 
   function renderTasksView() {
@@ -2013,9 +2268,13 @@
     }
     var board = state.snapshot.task_board || {};
     var counts = board.counts || {};
-    var columns = board.columns || {};
     var rules = board.rules || {};
     var openCount = Number(board.open_count || 0);
+    var lanes = taskBoardLaneConfig();
+    var laneByStatus = {};
+    lanes.forEach(function (lane) {
+      if (!laneByStatus[lane.status]) laneByStatus[lane.status] = lane;
+    });
     els.tasksView.innerHTML =
       '<div class="task-board">' +
       '<section class="task-board-hero">' +
@@ -2025,10 +2284,12 @@
         : "No unresolved tasks") +
       '</h2><p>Drag cards between live lanes, assign a visible agent owner, and unlock notes only when you need to add operator feedback.</p></div>' +
       '<div class="task-board-hero__stats">' +
-      '<div class="metric"><span>Pending</span><strong>' + String(counts.pending || 0) + '</strong></div>' +
-      '<div class="metric"><span>Doing</span><strong>' + String(counts.running || 0) + '</strong></div>' +
-      '<div class="metric"><span>Blocked</span><strong>' + String(counts.failed || 0) + '</strong></div>' +
-      '<div class="metric"><span>Done</span><strong>' + String(counts.completed || 0) + '</strong></div>' +
+      '<div class="metric"><span>' + escapeHtml((laneByStatus.pending || {}).title || "Pending") + '</span><strong>' + String(counts.pending || 0) + '</strong></div>' +
+      '<div class="metric"><span>' + escapeHtml((laneByStatus.running || {}).title || "Doing") + '</span><strong>' + String(counts.running || 0) + '</strong></div>' +
+      '<div class="metric"><span>' + escapeHtml((laneByStatus.failed || {}).title || "Blocked") + '</span><strong>' + String(counts.failed || 0) + '</strong></div>' +
+      '<div class="metric"><span>' + escapeHtml((laneByStatus.completed || {}).title || "Done") + '</span><strong>' + String(counts.completed || 0) + '</strong></div>' +
+      '<button type="button" class="button task-board-hero__plus" data-task-board-quick-add data-task-board-lane="pending" title="Add task">+</button>' +
+      '<button type="button" class="button button--quiet task-board-hero__add-lane" data-task-board-add-lane title="Add lane">+ lane</button>' +
       "</div>" +
       "</section>" +
       taskBoardCreateHtml() +
@@ -2039,10 +2300,7 @@
       '<article><strong>Routing rule</strong><span>Complex work waits for provider LLM lanes; minor bounded chores can be handed to local agents or subagents.</span></article>' +
       "</div></details>" +
       '<div class="task-board-columns">' +
-      taskBoardColumnHtml("pending", "Pending", columns.pending, "No pending tasks are waiting for ownership.") +
-      taskBoardColumnHtml("running", "Doing", columns.running, "No task is currently running.") +
-      taskBoardColumnHtml("failed", "Blocked", columns.failed, "No failed tasks need action.") +
-      taskBoardColumnHtml("completed", "Done", columns.completed, counts.completed ? "Completed tasks exist, but none are in the current sample window." : "No completed cards yet.", counts.completed || 0) +
+      lanes.map(function (lane) { return taskBoardColumnHtml(lane, board); }).join("") +
       "</div>" +
       "</div>";
 
@@ -2095,6 +2353,103 @@
         });
       });
     }
+
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-add-lane]")).forEach(function (button) {
+      button.addEventListener("click", taskBoardAddLane);
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-quick-add]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var laneKey = String(button.getAttribute("data-task-board-lane") || "pending");
+        state.taskBoardQuickAddLane = state.taskBoardQuickAddLane === laneKey ? "" : laneKey;
+        renderTasksView();
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-lane-title]")).forEach(function (input) {
+      input.addEventListener("input", function () {
+        taskBoardUpdateLaneTitle(String(input.getAttribute("data-task-board-lane") || ""), input.value);
+      });
+      input.addEventListener("change", function () {
+        taskBoardUpdateLaneTitle(String(input.getAttribute("data-task-board-lane") || ""), input.value);
+        renderTasksView();
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-quick-add-input]")).forEach(function (input) {
+      input.addEventListener("input", function () {
+        var form = input.closest("[data-task-board-quick-add-form]");
+        var laneKey = form ? String(form.getAttribute("data-task-board-lane") || "") : "";
+        if (laneKey) state.taskBoardQuickAddDrafts[laneKey] = String(input.value || "");
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-quick-add-form]")).forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var laneKey = String(form.getAttribute("data-task-board-lane") || "");
+        var lane = taskBoardLaneConfig().find(function (entry) { return entry.key === laneKey; }) || null;
+        var input = form.querySelector("[data-task-board-quick-add-input]");
+        var objective = input ? String(input.value || "").trim() : "";
+        if (!objective) {
+          setResultText("Task objective required.");
+          return;
+        }
+        var submit = form.querySelector('button[type="submit"]');
+        if (submit) submit.disabled = true;
+        postAction("task_create", {
+          objective: objective,
+          priority: 70,
+          lane: taskBoardRoutingForLane(lane),
+          note: lane ? "Created from Office Task Board lane: " + lane.title : "Created from Office Task Board quick add.",
+        }).then(function (result) {
+          var taskId = taskBoardCreatedTaskId(result);
+          if (taskId && lane && lane.status === "custom") {
+            var assignments = taskBoardTaskLaneAssignments();
+            assignments[taskId] = lane.key;
+            saveTaskBoardTaskLaneAssignments(assignments);
+          }
+          delete state.taskBoardQuickAddDrafts[laneKey];
+          state.taskBoardQuickAddLane = "";
+          renderTasksView();
+          return refreshTaskBoardAfterAction();
+        }).catch(function (error) {
+          setResultText(String(error));
+        }).finally(function () {
+          if (submit) submit.disabled = false;
+        });
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-lane-drag]")).forEach(function (laneEl) {
+      laneEl.addEventListener("dragstart", function (event) {
+        if (event.target && event.target.closest && event.target.closest("[data-task-board-card]")) {
+          return;
+        }
+        if (!event.target || !event.target.closest || !event.target.closest("[data-task-board-lane-handle]")) {
+          event.preventDefault();
+          return;
+        }
+        var laneKey = String(laneEl.getAttribute("data-task-board-lane") || "");
+        state.taskBoardLaneDragging = laneKey;
+        laneEl.classList.add("is-lane-dragging");
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("application/x-master-mold-lane", laneKey);
+        }
+      });
+      laneEl.addEventListener("dragover", function (event) {
+        if (!state.taskBoardLaneDragging) return;
+        event.preventDefault();
+        laneEl.classList.add("is-lane-drag-over");
+      });
+      laneEl.addEventListener("dragleave", function () {
+        laneEl.classList.remove("is-lane-drag-over");
+      });
+      laneEl.addEventListener("drop", taskBoardHandleLaneDrop);
+      laneEl.addEventListener("dragend", function () {
+        state.taskBoardLaneDragging = null;
+        laneEl.classList.remove("is-lane-dragging");
+        Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-lane-drag]")).forEach(function (entry) {
+          entry.classList.remove("is-lane-drag-over");
+        });
+      });
+    });
 
     Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-assignee]")).forEach(function (select) {
       select.addEventListener("change", function () {
