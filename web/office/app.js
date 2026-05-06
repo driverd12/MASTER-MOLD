@@ -38,6 +38,9 @@
     officeActions: {},
     hostPairDraft: defaultHostPairDraft(),
     taskFeedbackDrafts: {},
+    taskBoardUnlocked: {},
+    taskBoardAssignees: {},
+    taskBoardDragging: null,
     taskBoardDraft: {
       objective: "",
       priority: "70",
@@ -93,6 +96,13 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function escapeCss(value) {
+    if (window.CSS && typeof window.CSS.escape === "function") {
+      return window.CSS.escape(String(value || ""));
+    }
+    return String(value || "").replace(/["\\]/g, "\\$&");
   }
 
   function operatorFacingText(value) {
@@ -544,6 +554,93 @@
     return preferredIds
       .filter(function (agentId) { return !!byId[agentId]; })
       .map(function (agentId) { return byId[agentId]; });
+  }
+
+  function taskBoardAgentOptions() {
+    var byId = {};
+    var preferredIds = ["codex", "claude", "cursor", "gemini", "gemma-local", "github-copilot", "local-imprint"];
+    getBridgeIntakeAgents().forEach(function (entry) {
+      if (!entry || !entry.agent_id) return;
+      byId[entry.agent_id] = {
+        agent_id: entry.agent_id,
+        display_name: entry.display_name || entry.agent_id,
+        role_lane: entry.role_lane || entry.agent_id,
+      };
+    });
+    getSnapshotAgents().forEach(function (entry) {
+      var agent = entry && entry.agent ? entry.agent : {};
+      var agentId = String(agent.agent_id || "").trim();
+      if (!agentId || byId[agentId]) return;
+      if (preferredIds.indexOf(agentId) === -1 && !/codex|claude|cursor|gemini|gemma|copilot|imprint/i.test(agentId)) return;
+      byId[agentId] = {
+        agent_id: agentId,
+        display_name: agent.display_name || agentId,
+        role_lane: agent.role || agent.role_lane || agent.provider || agentId,
+      };
+    });
+    return preferredIds
+      .filter(function (agentId) { return !!byId[agentId]; })
+      .map(function (agentId) { return byId[agentId]; });
+  }
+
+  function normalizeTaskAgentId(value) {
+    var text = String(value || "").trim().toLowerCase();
+    if (!text) return "";
+    if (/github|copilot/.test(text)) return "github-copilot";
+    if (/gemma/.test(text)) return "gemma-local";
+    if (/gemini/.test(text)) return "gemini";
+    if (/claude/.test(text)) return "claude";
+    if (/cursor/.test(text)) return "cursor";
+    if (/office-operator|operator/.test(text)) return "";
+    if (/codex/.test(text)) return "codex";
+    if (/imprint/.test(text)) return "local-imprint";
+    if (/ring-leader|orchestrator/.test(text)) return "codex";
+    return text.replace(/^agent:/, "").split(/[:/@]/)[0];
+  }
+
+  function taskBoardAgentForEntry(entry) {
+    var selected = state.taskBoardAssignees[String(entry && entry.task_id || "")] || "";
+    var status = String(entry && entry.status || "").toLowerCase();
+    var owner = entry.worker_id || entry.lease_owner_id || "";
+    var candidate = selected || owner || (status === "pending" ? "" : entry.source_agent || entry.source_client || "");
+    var agentId = normalizeTaskAgentId(candidate);
+    return agentId ? findAgent(agentId) : null;
+  }
+
+  function taskBoardAgentBadgeHtml(entry) {
+    var agentEntry = taskBoardAgentForEntry(entry);
+    var rawOwner = entry.worker_id || entry.lease_owner_id || entry.source_agent || "";
+    if (!agentEntry || !agentEntry.agent) {
+      return (
+        '<div class="task-board-card__agent task-board-card__agent--empty">' +
+        '<span class="task-agent-sprite" aria-hidden="true"></span>' +
+        '<div><strong>Unassigned</strong><span>' + escapeHtml(rawOwner ? "worker " + rawOwner : "waiting for owner") + "</span></div>" +
+        "</div>"
+      );
+    }
+    return (
+      '<div class="task-board-card__agent">' +
+      '<span class="task-agent-sprite">' + spriteSvg(agentEntry) + "</span>" +
+      '<div><strong>' + escapeHtml(agentEntry.agent.display_name || agentEntry.agent.agent_id || "Agent") + "</strong><span>" +
+      escapeHtml(agentRoleLine(agentEntry)) +
+      "</span></div>" +
+      "</div>"
+    );
+  }
+
+  function taskBoardAssigneeSelectHtml(entry) {
+    var taskId = String(entry.task_id || "");
+    var options = taskBoardAgentOptions();
+    var selected = state.taskBoardAssignees[taskId] || normalizeTaskAgentId(entry.worker_id || entry.lease_owner_id || entry.source_agent || "codex") || "codex";
+    return (
+      '<label class="task-board-card__assignee"><span>Assign</span><select data-task-board-assignee data-task-id="' + escapeHtml(taskId) + '">' +
+      options.map(function (agent) {
+        return '<option value="' + escapeHtml(agent.agent_id) + '"' + (agent.agent_id === selected ? " selected" : "") + ">" +
+          escapeHtml(agent.display_name + " · " + agent.role_lane) +
+          "</option>";
+      }).join("") +
+      "</select></label>"
+    );
   }
 
   function readIntakeDraft() {
@@ -1714,6 +1811,7 @@
     if (normalized === "failed") return "failed";
     if (normalized === "running") return "running";
     if (normalized === "pending") return "pending";
+    if (normalized === "completed") return "completed";
     return "neutral";
   }
 
@@ -1735,18 +1833,21 @@
     }
     var status = String(entry.status || "").toLowerCase();
     var retryHtml = tone === "failed"
-      ? '<button type="button" class="button" data-task-board-retry>Retry</button>'
+      ? '<button type="button" class="button" data-task-board-retry>Move to pending</button>'
       : "";
     var claimHtml = status === "pending"
-      ? '<button type="button" class="button" data-task-board-claim>Take task</button>'
+      ? '<button type="button" class="button button--primary" data-task-board-claim>Start task</button>'
       : "";
     var completeHtml = status === "running" && entry.worker_id
-      ? '<button type="button" class="button button--primary" data-task-board-complete>Mark done</button>'
+      ? '<button type="button" class="button button--primary" data-task-board-complete>Move done</button>'
       : "";
     var closeHtml = status === "pending" || status === "failed"
       ? '<button type="button" class="button button--quiet" data-task-board-close>Close</button>'
       : "";
-    return completeHtml + claimHtml + retryHtml + closeHtml;
+    var unlockHtml = status !== "completed"
+      ? '<button type="button" class="button button--quiet" data-task-board-unlock>' + (state.taskBoardUnlocked[taskId] ? "Lock notes" : "Unlock notes") + "</button>"
+      : "";
+    return unlockHtml + completeHtml + claimHtml + retryHtml + closeHtml;
   }
 
   function taskBoardCardHtml(entry) {
@@ -1754,6 +1855,8 @@
     var tone = taskBoardStatusTone(entry.status);
     var feedback = entry.latest_feedback || {};
     var draft = state.taskFeedbackDrafts[taskId] || "";
+    var status = String(entry.status || "").toLowerCase();
+    var unlocked = !!state.taskBoardUnlocked[taskId];
     var errorHtml = entry.last_error
       ? '<div class="task-board-card__error"><strong>Last error</strong><span>' + escapeHtml(entry.last_error) + "</span></div>"
       : "";
@@ -1764,12 +1867,18 @@
         escapeHtml((feedback.source_agent || feedback.source_client || "operator") + " · " + relativeTime(feedback.created_at) + " ago") +
         "</small></div>"
       : '<div class="task-board-card__feedback task-board-card__feedback--empty"><strong>No feedback yet</strong><span>Add a note if the next thread needs context or operator direction.</span></div>';
+    var editorHtml = unlocked
+      ? '<div class="task-board-card__editor"><textarea data-task-feedback-input rows="3" placeholder="Add operator feedback or handoff context for this task.">' + escapeHtml(draft) + "</textarea>" +
+        '<button type="button" class="button button--primary" data-task-feedback-submit>Save feedback</button></div>'
+      : "";
+    var assigneeHtml = status === "pending" ? taskBoardAssigneeSelectHtml(entry) : "";
     return (
-      '<article class="task-board-card task-board-card--' + escapeHtml(tone) + '" data-task-board-card data-task-id="' + escapeHtml(taskId) + '" data-worker-id="' + escapeHtml(entry.worker_id || "") + '">' +
+      '<article class="task-board-card task-board-card--' + escapeHtml(tone) + '" data-task-board-card data-task-board-drag draggable="true" data-task-id="' + escapeHtml(taskId) + '" data-task-status="' + escapeHtml(status) + '" data-worker-id="' + escapeHtml(entry.worker_id || "") + '">' +
       '<div class="task-board-card__head">' +
       '<strong>' + escapeHtml(entry.objective || taskId || "Task") + '</strong>' +
       '<span>' + escapeHtml(taskId || "untracked") + '</span>' +
       "</div>" +
+      taskBoardAgentBadgeHtml(entry) +
       '<div class="task-board-card__meta">' +
       taskBoardMeta(entry).map(function (part) {
         return "<span>" + escapeHtml(part) + "</span>";
@@ -1777,21 +1886,22 @@
       "</div>" +
       errorHtml +
       feedbackHtml +
-      '<textarea data-task-feedback-input rows="3" placeholder="Add operator feedback or handoff context for this task.">' + escapeHtml(draft) + "</textarea>" +
+      assigneeHtml +
+      editorHtml +
       '<div class="task-board-card__actions">' +
-      '<button type="button" class="button button--primary" data-task-feedback-submit>Save feedback</button>' +
       taskBoardActionHtml(entry, tone) +
       "</div>" +
       "</article>"
     );
   }
 
-  function taskBoardColumnHtml(key, title, tasks, emptyText) {
+  function taskBoardColumnHtml(key, title, tasks, emptyText, countOverride) {
     var entries = taskBoardList(tasks);
+    var count = countOverride == null ? entries.length : countOverride;
     return (
-      '<section class="task-board-column task-board-column--' + escapeHtml(key) + '">' +
-      '<div class="task-board-column__head"><span>' + escapeHtml(title) + '</span><strong>' + String(entries.length) + "</strong></div>" +
-      '<div class="task-board-column__items">' +
+      '<section class="task-board-column task-board-column--' + escapeHtml(key) + '" data-task-board-column data-task-board-status="' + escapeHtml(key) + '">' +
+      '<div class="task-board-column__head"><span>' + escapeHtml(title) + '</span><strong>' + String(count || 0) + "</strong></div>" +
+      '<div class="task-board-column__items" data-task-board-dropzone data-task-board-status="' + escapeHtml(key) + '">' +
       (entries.length
         ? entries.map(taskBoardCardHtml).join("")
         : '<article class="task-board-empty">' + escapeHtml(emptyText) + "</article>") +
@@ -1803,7 +1913,9 @@
   function taskBoardCreateHtml() {
     var draft = state.taskBoardDraft || {};
     return (
-      '<section class="task-board-create" aria-label="Add internal task">' +
+      '<details class="task-board-create" aria-label="Add internal task">' +
+      '<summary><span>New card</span><strong>Add bounded task</strong></summary>' +
+      '<div class="task-board-create__body">' +
       '<div class="task-board-create__copy">' +
       '<div class="section-title">Capture Work</div>' +
       '<h3>Add a bounded task without derailing the current thread.</h3>' +
@@ -1822,8 +1934,70 @@
       '<input data-task-board-input data-task-board-create-note type="text" placeholder="Optional operator note or source context" value="' + escapeHtml(draft.note || "") + '" />' +
       '<button type="submit" class="button button--primary">Add task</button>' +
       "</form>" +
-      "</section>"
+      "</div>" +
+      "</details>"
     );
+  }
+
+  function taskBoardSelectedWorkerId(taskId) {
+    return String(state.taskBoardAssignees[taskId] || "codex").trim() || "codex";
+  }
+
+  function taskBoardMoveTask(taskId, targetStatus, card) {
+    var currentStatus = String(card ? card.getAttribute("data-task-status") || "" : "").toLowerCase();
+    var normalizedTarget = String(targetStatus || "").toLowerCase();
+    if (!taskId || !normalizedTarget || currentStatus === normalizedTarget) {
+      return Promise.resolve();
+    }
+    if (normalizedTarget === "running" && currentStatus === "pending") {
+      return postAction("task_claim", {
+        task_id: taskId,
+        worker_id: taskBoardSelectedWorkerId(taskId),
+        lease_seconds: 1800,
+      }).then(function () {
+        return refreshTaskBoardAfterAction();
+      });
+    }
+    if (normalizedTarget === "pending" && currentStatus === "failed") {
+      return triggerWorkbenchAction("retry_failed_tasks", {
+        task_ids: [taskId],
+        force: true,
+        reason: "Operator moved task from blocked to pending in Office Task Board.",
+      }).then(function () {
+        return refreshTaskBoardAfterAction();
+      });
+    }
+    if (normalizedTarget === "completed" && currentStatus === "running") {
+      var workerId = card ? String(card.getAttribute("data-worker-id") || "").trim() : "";
+      if (!workerId) {
+        setResultText("Task cannot move to Done until it has a worker id.");
+        return Promise.resolve();
+      }
+      return postAction("task_complete", {
+        task_id: taskId,
+        worker_id: workerId,
+        summary: "Completed from Office Task Board after operator moved card to Done.",
+      }).then(function () {
+        return refreshTaskBoardAfterAction();
+      });
+    }
+    setResultText("That move is not backed by a safe task action yet.");
+    return Promise.resolve();
+  }
+
+  function taskBoardHandleDrop(event) {
+    event.preventDefault();
+    var zone = event.currentTarget || event.target;
+    if (zone && zone.classList) zone.classList.remove("is-drag-over");
+    var targetStatus = zone ? String(zone.getAttribute("data-task-board-status") || "") : "";
+    var taskId = state.taskBoardDragging || "";
+    if (!taskId && event.dataTransfer) {
+      taskId = String(event.dataTransfer.getData("text/plain") || "");
+    }
+    var card = taskId && els.tasksView ? els.tasksView.querySelector('[data-task-board-card][data-task-id="' + escapeCss(taskId) + '"]') : null;
+    return taskBoardMoveTask(taskId, targetStatus, card).catch(function (error) {
+      setResultText(String(error));
+    });
   }
 
   function renderTasksView() {
@@ -1849,25 +2023,26 @@
       (openCount > 0
         ? escapeHtml(String(openCount) + " unresolved task" + (openCount === 1 ? "" : "s"))
         : "No unresolved tasks") +
-      '</h2><p>This view is for short-lived actionable work: carry unresolved tasks into new threads, and leave feedback before ending work.</p></div>' +
+      '</h2><p>Drag cards between live lanes, assign a visible agent owner, and unlock notes only when you need to add operator feedback.</p></div>' +
       '<div class="task-board-hero__stats">' +
       '<div class="metric"><span>Pending</span><strong>' + String(counts.pending || 0) + '</strong></div>' +
-      '<div class="metric"><span>Running</span><strong>' + String(counts.running || 0) + '</strong></div>' +
-      '<div class="metric"><span>Failed</span><strong>' + String(counts.failed || 0) + '</strong></div>' +
-      '<div class="metric"><span>Feedback</span><strong>' + String(taskBoardList(board.tasks).reduce(function (sum, entry) { return sum + Number(entry.feedback_count || 0); }, 0)) + '</strong></div>' +
+      '<div class="metric"><span>Doing</span><strong>' + String(counts.running || 0) + '</strong></div>' +
+      '<div class="metric"><span>Blocked</span><strong>' + String(counts.failed || 0) + '</strong></div>' +
+      '<div class="metric"><span>Done</span><strong>' + String(counts.completed || 0) + '</strong></div>' +
       "</div>" +
       "</section>" +
       taskBoardCreateHtml() +
-      '<section class="task-board-rules">' +
+      '<details class="task-board-rules"><summary><span>Board rules</span><strong>How agents should use it</strong></summary><div class="task-board-rules__grid">' +
       '<article><strong>Start of thread</strong><span>' + escapeHtml(rules.start_of_thread || "Inspect unresolved tasks before creating new work.") + "</span></article>" +
       '<article><strong>Mid-work arrivals</strong><span>Capture or comment on new work, then continue the active task unless the operator marks it urgent or it blocks the current objective.</span></article>' +
       '<article><strong>End of work</strong><span>' + escapeHtml(rules.end_of_work || "Leave a follow-up task or feedback note for unresolved next actions.") + "</span></article>" +
       '<article><strong>Routing rule</strong><span>Complex work waits for provider LLM lanes; minor bounded chores can be handed to local agents or subagents.</span></article>' +
-      "</section>" +
+      "</div></details>" +
       '<div class="task-board-columns">' +
-      taskBoardColumnHtml("failed", "Failed", columns.failed, "No failed tasks need action.") +
-      taskBoardColumnHtml("running", "Running", columns.running, "No task is currently running.") +
       taskBoardColumnHtml("pending", "Pending", columns.pending, "No pending tasks are waiting for ownership.") +
+      taskBoardColumnHtml("running", "Doing", columns.running, "No task is currently running.") +
+      taskBoardColumnHtml("failed", "Blocked", columns.failed, "No failed tasks need action.") +
+      taskBoardColumnHtml("completed", "Done", columns.completed, counts.completed ? "Completed tasks exist, but none are in the current sample window." : "No completed cards yet.", counts.completed || 0) +
       "</div>" +
       "</div>";
 
@@ -1921,6 +2096,58 @@
       });
     }
 
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-assignee]")).forEach(function (select) {
+      select.addEventListener("change", function () {
+        var taskId = String(select.getAttribute("data-task-id") || "");
+        if (taskId) {
+          state.taskBoardAssignees[taskId] = String(select.value || "codex");
+          renderTasksView();
+        }
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-unlock]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var card = button.closest("[data-task-board-card]");
+        var taskId = card ? String(card.getAttribute("data-task-id") || "") : "";
+        if (!taskId) return;
+        state.taskBoardUnlocked[taskId] = !state.taskBoardUnlocked[taskId];
+        renderTasksView();
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-drag]")).forEach(function (card) {
+      card.addEventListener("dragstart", function (event) {
+        if (event.target && event.target.closest && event.target.closest("textarea, input, select, button")) {
+          event.preventDefault();
+          return;
+        }
+        var taskId = String(card.getAttribute("data-task-id") || "");
+        state.taskBoardDragging = taskId;
+        card.classList.add("is-dragging");
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", taskId);
+        }
+      });
+      card.addEventListener("dragend", function () {
+        state.taskBoardDragging = null;
+        card.classList.remove("is-dragging");
+        Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-dropzone]")).forEach(function (zone) {
+          zone.classList.remove("is-drag-over");
+        });
+      });
+    });
+    Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-board-dropzone]")).forEach(function (zone) {
+      zone.addEventListener("dragover", function (event) {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        zone.classList.add("is-drag-over");
+      });
+      zone.addEventListener("dragleave", function () {
+        zone.classList.remove("is-drag-over");
+      });
+      zone.addEventListener("drop", taskBoardHandleDrop);
+    });
+
     Array.prototype.slice.call(els.tasksView.querySelectorAll("[data-task-feedback-input]")).forEach(function (input) {
       input.addEventListener("input", function () {
         var card = input.closest("[data-task-board-card]");
@@ -1948,6 +2175,7 @@
         }).then(function () {
           blurTaskBoardInput();
           delete state.taskFeedbackDrafts[taskId];
+          state.taskBoardUnlocked[taskId] = false;
           renderTasksView();
           return refreshTaskBoardAfterAction();
         }).catch(function (error) {
@@ -1968,6 +2196,8 @@
           task_ids: [taskId],
           force: true,
           reason: "Operator requested retry from Office Task Board.",
+        }).then(function () {
+          return refreshTaskBoardAfterAction();
         }).catch(function (error) {
           setResultText(String(error));
         });
@@ -1981,7 +2211,7 @@
         button.disabled = true;
         postAction("task_claim", {
           task_id: taskId,
-          worker_id: "office-operator",
+          worker_id: taskBoardSelectedWorkerId(taskId),
           lease_seconds: 1800,
         }).then(function () {
           return refreshTaskBoardAfterAction();

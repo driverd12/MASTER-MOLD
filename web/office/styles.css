@@ -1102,6 +1102,171 @@ button:disabled,
   background: rgba(5, 8, 13, 0.18);
 }
 
+.task-board-create,
+.task-board-rules {
+  display: block;
+  padding: 0;
+}
+
+.task-board-create summary,
+.task-board-rules summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.task-board-create summary::-webkit-details-marker,
+.task-board-rules summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-board-create summary span,
+.task-board-rules summary span {
+  color: var(--accent-2);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.task-board-create summary strong,
+.task-board-rules summary strong {
+  color: var(--text);
+}
+
+.task-board-create__body {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
+  gap: 14px;
+  padding: 0 14px 14px;
+  align-items: start;
+}
+
+.task-board-rules__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.task-board-columns {
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(260px, 1fr);
+  align-items: stretch;
+  overflow-x: auto;
+  padding: 2px 2px 12px;
+  scroll-snap-type: x proximity;
+}
+
+.task-board-column {
+  min-height: 520px;
+  align-content: start;
+  scroll-snap-align: start;
+}
+
+.task-board-column__items {
+  min-height: 430px;
+  align-content: start;
+  border-radius: 12px;
+}
+
+.task-board-column__items.is-drag-over {
+  outline: 2px dashed rgba(109, 181, 174, 0.64);
+  outline-offset: 4px;
+  background: rgba(109, 181, 174, 0.08);
+}
+
+.task-board-card {
+  cursor: grab;
+}
+
+.task-board-card.is-dragging {
+  opacity: 0.62;
+  cursor: grabbing;
+}
+
+.task-board-card--completed {
+  border-color: rgba(127, 201, 156, 0.44);
+  background: rgba(127, 201, 156, 0.04);
+}
+
+.task-board-card__agent {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  background: rgba(5, 8, 13, 0.18);
+}
+
+.task-board-card__agent strong,
+.task-board-card__agent span {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-board-card__agent span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.task-board-card__agent--empty {
+  opacity: 0.82;
+}
+
+.task-agent-sprite {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 9px;
+  background: rgba(0,0,0,0.24);
+  overflow: hidden;
+}
+
+.task-agent-sprite svg {
+  width: 36px;
+  height: 36px;
+  image-rendering: pixelated;
+}
+
+.task-board-card__assignee,
+.task-board-card__editor {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.task-board-card__assignee span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.task-board-card__assignee select {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(5, 8, 13, 0.5);
+  color: var(--text);
+  padding: 9px 10px;
+}
+
+.task-board-card__editor .button {
+  justify-self: start;
+}
+
 .room {
   position: relative;
   border: 1px solid var(--line);
@@ -1998,8 +2163,7 @@ body[data-patient-zero="enabled"] .tabs__button--patient-zero.is-active {
   .workbench-suggestions,
   .task-board-hero,
   .task-board-create,
-  .task-board-rules,
-  .task-board-columns {
+  .task-board-rules {
     grid-template-columns: 1fr;
   }
 
@@ -2020,10 +2184,16 @@ body[data-patient-zero="enabled"] .tabs__button--patient-zero.is-active {
   .workbench-scheduler,
   .workbench-scheduler__footer,
   .task-board-rules,
+  .task-board-rules__grid,
+  .task-board-create__body,
   .task-board-create__row,
   .host-pair-form__row,
   .host-row__metrics {
     grid-template-columns: 1fr;
+  }
+
+  .task-board-columns {
+    grid-auto-columns: minmax(260px, 86vw);
   }
 
   .task-board-card__actions .button {

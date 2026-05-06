@@ -196,10 +196,20 @@ test("office gui snapshot reflects provider heartbeat states and self-drive summ
           ],
           running: [],
           pending: [{ task_id: "task-1", objective: "Clarify the pending slice", status: "pending", priority: 80 }],
+          completed: [
+            {
+              task_id: "task-done-1",
+              objective: "Verified the completed slice",
+              status: "completed",
+              priority: 50,
+              worker_id: "codex",
+            },
+          ],
         },
         tasks: [
           { task_id: "task-failed-1", objective: "Repair the failed slice", status: "failed", priority: 90, feedback_count: 1 },
           { task_id: "task-1", objective: "Clarify the pending slice", status: "pending", priority: 80 },
+          { task_id: "task-done-1", objective: "Verified the completed slice", status: "completed", priority: 50, worker_id: "codex" },
         ],
       },
     },
@@ -226,6 +236,8 @@ test("office gui snapshot reflects provider heartbeat states and self-drive summ
   assert.equal(snapshot.task_board.open_count, 3);
   assert.equal(snapshot.task_board.columns.failed[0].task_id, "task-failed-1");
   assert.equal(snapshot.task_board.columns.failed[0].latest_feedback.content, "Retry after checking the worker log.");
+  assert.equal(snapshot.task_board.columns.completed[0].task_id, "task-done-1");
+  assert.equal(snapshot.task_board.tasks.some((entry) => entry.task_id === "task-done-1"), true);
   assert.ok(snapshot.task_board.rules.end_of_work.includes("follow-up"));
   assert.equal(snapshot.summary.worker_fabric.federation_sidecar.host_id, "office-host");
   assert.equal(snapshot.summary.worker_fabric.federation_sidecar.running_state, "failing");

@@ -366,6 +366,7 @@ function buildTaskBoardSnapshot(params: {
   taskRunning: TaskListPayload;
   taskPending: TaskListPayload;
   taskFailed: TaskListPayload;
+  taskCompleted: TaskListPayload;
 }) {
   const feedbackByTaskId = new Map<string, RuntimeEventRecord[]>();
   for (const event of params.storage.listRuntimeEvents({
@@ -393,6 +394,7 @@ function buildTaskBoardSnapshot(params: {
   const running = buildTaskBoardCards(params.taskRunning.tasks ?? [], feedbackByTaskId);
   const pending = buildTaskBoardCards(params.taskPending.tasks ?? [], feedbackByTaskId);
   const failed = buildTaskBoardCards(params.taskFailed.tasks ?? [], feedbackByTaskId);
+  const completed = buildTaskBoardCards(params.taskCompleted.tasks ?? [], feedbackByTaskId);
   return {
     source: "office.task_board",
     generated_at: new Date().toISOString(),
@@ -403,11 +405,12 @@ function buildTaskBoardSnapshot(params: {
       end_of_work: "Leave a follow-up task or task-board feedback note for any unresolved next action before ending the thread.",
     },
     columns: {
-      failed,
-      running,
       pending,
+      running,
+      failed,
+      completed,
     },
-    tasks: [...failed, ...running, ...pending],
+    tasks: [...pending, ...running, ...failed, ...completed],
   };
 }
 
@@ -1427,6 +1430,11 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
   const taskFailed = safe<TaskListPayload>("task_failed", () => ({ status_filter: "failed", count: 0, tasks: [] as TaskRecord[] }), () =>
     taskList(storage, { status: "failed", limit: input.task_limit })
   );
+  const taskCompleted = safe<TaskListPayload>(
+    "task_completed",
+    () => ({ status_filter: "completed", count: 0, tasks: [] as TaskRecord[] }),
+    () => taskList(storage, { status: "completed", limit: Math.max(4, Math.min(24, input.task_limit)) })
+  );
   const agentSessions = safe<AgentSessionListPayload>("agent_sessions", () => ({
     status_filter: null,
     agent_id_filter: null,
@@ -1705,6 +1713,7 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     taskRunning,
     taskPending,
     taskFailed,
+    taskCompleted,
   });
   return {
     generated_at: new Date().toISOString(),
@@ -1717,6 +1726,7 @@ export function computeOfficeSnapshot(storage: Storage, input: z.infer<typeof of
     task_running: taskRunning,
     task_pending: taskPending,
     task_failed: taskFailed,
+    task_completed: taskCompleted,
     task_board: taskBoard,
     agent_sessions: agentSessions,
     adapter,
@@ -1829,6 +1839,7 @@ export function officeSnapshot(storage: Storage, input: z.infer<typeof officeSna
         taskRunning: asRecord(cachedPayload.task_running) as TaskListPayload,
         taskPending: asRecord(cachedPayload.task_pending) as TaskListPayload,
         taskFailed: asRecord(cachedPayload.task_failed) as TaskListPayload,
+        taskCompleted: asRecord(cachedPayload.task_completed) as TaskListPayload,
       });
       return {
         ...cachedPayload,

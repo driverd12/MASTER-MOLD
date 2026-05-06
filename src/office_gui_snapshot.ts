@@ -1660,6 +1660,7 @@ export function buildOfficeGuiSnapshot(raw: Record<string, unknown>, input: { th
         failed: asList(taskBoardColumns.failed).map((entry) => asDict(entry)),
         running: asList(taskBoardColumns.running).map((entry) => asDict(entry)),
         pending: asList(taskBoardColumns.pending).map((entry) => asDict(entry)),
+        completed: asList(taskBoardColumns.completed).map((entry) => asDict(entry)),
       },
       tasks: asList(taskBoard.tasks).map((entry) => asDict(entry)),
     },
