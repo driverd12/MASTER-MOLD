@@ -469,7 +469,7 @@ These gaps should be said plainly:
 - Not every provider or bridge is equally reliable, and `configured` does not mean `authenticated`, `connected`, or `runtime-ready`.
 - Not every automation or autonomy surface is production-perfect yet.
 - Live office rally under load is improved, but it is not fully solved.
-- `MASTER-MOLD MODE` full authority is gated by macOS-owned permissions and root-helper readiness; an enabled posture does not bypass OS blockers.
+- `MASTER-MOLD MODE` full authority is gated by a successful macOS authority audit plus root-helper readiness; if the audit is unavailable, the system must stay blocked instead of inferring consent from recent desktop activity.
 - MLX, adapter, and broader local-model lanes exist in the repo, but host-specific reality still has to be verified before claiming a given lane is live.
 
 ## 15. Why This Still Matters Despite the Gaps
@@ -515,6 +515,7 @@ Use this README as the guided operator story. Use the docs below for source deta
 - [Quick Setup](./docs/SETUP.md)
 - [System Interconnects](./docs/SYSTEM_INTERCONNECTS.md)
 - [IDE + Agent Setup Guide](./docs/IDE_AGENT_SETUP.md)
+- [Antigravity IDE Integration Guide](./docs/ANTIGRAVITY_IDE_INTEGRATION.md)
 - [Claude CLI + Codex Symbiosis](./docs/CLAUDE_CODEX_SYMBIOSIS.md)
 - [Cursor Local-First Mode](./docs/CURSOR_LOCAL_FIRST_MODE.md)
 - [Provider Bridge Matrix](./docs/PROVIDER_BRIDGE_MATRIX.md)

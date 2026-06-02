@@ -88,4 +88,5 @@ When updating this repo through desktop control:
 - Treat visible Terminal output as transient until it is copied into `/tmp/...`, clipboard, an artifact, or a run/task result.
 - Summarize meaningful desktop-control actions in the active run ledger or task result.
 - If desktop control is unavailable, stale, or blocked by macOS permissions, report the blocker instead of pretending the action happened.
+- Recent screenshots, clipboard reads, or desktop actions do not prove macOS consent by themselves; if the authority audit is unavailable, Patient Zero full-control claims must remain blocked.
 - Do not bypass credential prompts or OS consent dialogs. Let the operator complete them, then continue from observed state.

@@ -6,4 +6,5 @@ cd "${REPO_ROOT}"
 
 eval "$("${REPO_ROOT}/scripts/export_dotenv_env.sh" "${REPO_ROOT}")"
 
+export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
 exec node dist/server.js

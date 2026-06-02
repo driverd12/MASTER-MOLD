@@ -433,7 +433,14 @@ test("office.snapshot does not show stale privileged blocker when live Patient Z
     MCP_PRIVILEGED_EXEC_DRY_RUN: "1",
     MCP_PRIVILEGED_EXEC_TEST_ACCOUNT_EXISTS: "1",
     MCP_PRIVILEGED_EXEC_TEST_SECRET: "integration-secret",
-    MCP_PATIENT_ZERO_AUTHORITY_AUDIT_JSON: "{not-json",
+    MCP_PATIENT_ZERO_AUTHORITY_AUDIT_JSON: JSON.stringify({
+      source: "macos_authority_audit",
+      generated_at: new Date().toISOString(),
+      platform: "darwin",
+      ready_for_patient_zero_full_authority: true,
+      blockers: [],
+      checks: {},
+    }),
   });
 
   try {
@@ -509,7 +516,7 @@ test("office.snapshot does not show stale privileged blocker when live Patient Z
   }
 });
 
-test("office.snapshot direct reads keep full Patient Zero authority when live proofs satisfy audit fallback", async () => {
+test("office.snapshot direct reads fail closed when the macOS authority audit is unavailable", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-office-snapshot-patient-zero-direct-"));
   const dbPath = path.join(tempDir, "hub.sqlite");
   let mutationCounter = 0;
@@ -565,9 +572,10 @@ test("office.snapshot direct reads keep full Patient Zero authority when live pr
     });
 
     assert.equal(snapshot.cache.hit, false);
-    assert.equal(snapshot.setup_diagnostics.patient_zero.full_control_authority, true);
-    assert.equal(snapshot.setup_diagnostics.patient_zero.macos_authority_ready, true);
-    assert.equal(snapshot.workbench.blockers.some((entry) => entry.kind === "patient_zero_authority"), false);
+    assert.equal(snapshot.setup_diagnostics.patient_zero.full_control_authority, false);
+    assert.equal(snapshot.setup_diagnostics.patient_zero.macos_authority_ready, false);
+    assert.ok(snapshot.setup_diagnostics.patient_zero.authority_blockers.includes("macos_authority_audit_unavailable"));
+    assert.equal(snapshot.workbench.blockers.some((entry) => entry.kind === "patient_zero_authority"), true);
   } finally {
     await client.close().catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
