@@ -299,6 +299,10 @@ test("runtime.worker session brief includes reasoning policy and grounded reflec
     assert.match(sessionBrief, /Current lane: verification owned by verification-director/i);
     assert.match(sessionBrief, /Expected evidence: .*runtime-brief-proof\.txt/i);
     assert.match(sessionBrief, /Memory budget: evidence<=12 questions<=8 failures<=3 citations<=6; transcript replay blocked/i);
+    assert.match(sessionBrief, /Context budget guard/);
+    assert.match(sessionBrief, /target<40% checkpoint=40-50% offload=50-60% handoff=60-70% hard_stop=80%/i);
+    assert.match(sessionBrief, /Call context_budget\.status/i);
+    assert.match(sessionBrief, /Call context_budget\.checkpoint before loading more raw context/i);
     assert.match(sessionBrief, /Refresh triggers: .*reasoning_policy_audit needs_review/i);
     assert.match(sessionBrief, /Unresolved questions: .*renders working memory/i);
     assert.match(sessionBrief, /Known failure memory:reflection-brief-1/i);
@@ -312,6 +316,7 @@ test("runtime.worker session brief includes reasoning policy and grounded reflec
     assert.match(sessionBrief, /Include plan_quality_gate with constraints_covered, rollback_noted, evidence_requirements_mapped and keep planned_steps<=8/i);
 
     const completedTask = await waitFor(async () => {
+      await callTool(client, "runtime.worker", { action: "status", limit: 20 });
       const completed = await callTool(client, "task.list", { status: "completed", limit: 20 });
       return completed.tasks.find((entry) => entry.task_id === task.task.task_id) ?? null;
     }, 30000);

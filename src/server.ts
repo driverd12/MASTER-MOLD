@@ -225,6 +225,12 @@ import { goldenCaseCapture, goldenCaseCaptureSchema } from "./tools/golden_case.
 import { queryPlan, queryPlanSchema } from "./tools/query_plan.js";
 import { migrationStatus, migrationStatusSchema } from "./tools/migration.js";
 import { timeStamp, timeStampSchema } from "./tools/time_stamp.js";
+import {
+  contextBudgetCheckpoint,
+  contextBudgetCheckpointSchema,
+  contextBudgetStatus,
+  contextBudgetStatusSchema,
+} from "./tools/context_budget.js";
 import { runIdempotentMutation } from "./tools/mutation.js";
 import { inboxEnqueue, inboxEnqueueSchema, inboxList, inboxListSchema } from "./tools/inbox.js";
 import {
@@ -3582,6 +3588,20 @@ registerTool(
   "Return current UTC, local, Unix, and filename-safe date/time stamps for operator notes, logs, and artifacts.",
   timeStampSchema,
   (input) => timeStamp(input)
+);
+
+registerTool(
+  "context_budget.status",
+  "Measure reported context-window usage and return checkpoint, offload, handoff, or hard-stop guidance.",
+  contextBudgetStatusSchema,
+  (input) => contextBudgetStatus(input)
+);
+
+registerTool(
+  "context_budget.checkpoint",
+  "Capture a durable context-budget checkpoint memory and squish linked transcript state when offload is required.",
+  contextBudgetCheckpointSchema,
+  (input) => contextBudgetCheckpoint(storage, input)
 );
 
 const requestedDomainPacks = parseEnabledDomainPackIds(

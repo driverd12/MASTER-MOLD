@@ -777,9 +777,10 @@ Core runtime tools include:
 - Agentic kernel: `goal.*` including `goal.execute`, `goal.autorun`, and `goal.autorun_daemon`, `kernel.summary`, `plan.*`, `artifact.*`, `experiment.*`, `event.*`, `agent.session.*`, `dispatch.autorun`
 - Workflow methodology: `playbook.*` including `playbook.run`, `pack.hooks.list`, `pack.plan.generate`, `pack.verify.run`
 - Decision and incident logging: `adr.create`, `decision.link`, `incident.*`
-- Runtime ops: `health.*`, `migration.status`, `time.stamp`, `imprint.*`, `imprint.inbox.*`
+- Runtime ops: `health.*`, `migration.status`, `time.stamp`, `context_budget.*`, `imprint.*`, `imprint.inbox.*`
   - `time.stamp` returns UTC/local/Unix stamps plus host and actor provenance (`host_id`, hostname, source client, source agent, source model, and source IDE) for operator notes, artifacts, and cross-host work handoffs.
   - Agents should use `time.stamp` at significant run starts, checkpoints, handoffs, resume points, and completions. See [Context Budget and Time Discipline](./docs/CONTEXT_BUDGET_AND_TIME_DISCIPLINE.md).
+  - `context_budget.status` reports the target/checkpoint/offload/handoff/hard-stop band from reported context usage; `context_budget.checkpoint` writes a durable memory checkpoint and squishes linked transcript lines when offload is required.
 - Office orchestration: `trichat.*` (`roster`, `thread/message/turn`, `autopilot`, `tmux_controller`, `bus`, `adapter_telemetry`, `chaos`, `slo`)
 - Control-plane discovery and rollout: `tool.search`, `permission.profile`, `feature.flag`, `warm.cache`
 - Budget and cost visibility: `budget.ledger`

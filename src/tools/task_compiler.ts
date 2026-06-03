@@ -6,6 +6,7 @@ import { retrievalHybrid } from "./knowledge.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
 import { deriveOrgProgramSignals, getEffectiveOrgProgram } from "./org_program.js";
 import { matchDomainSpecialists } from "./specialist_catalog.js";
+import { defaultContextBudgetContract } from "./context_budget.js";
 import {
   resolveSwarmProfile,
   summarizeMemoryPreflight,
@@ -106,6 +107,7 @@ type CompileWorkingMemory = {
     text_preview_char_limit: number;
     transcript_replay_allowed: boolean;
   };
+  context_budget: ReturnType<typeof defaultContextBudgetContract>;
   refresh_triggers: string[];
   generated_at: string;
 };
@@ -659,6 +661,7 @@ function buildCompileWorkingMemory(input: {
       text_preview_char_limit: 360,
       transcript_replay_allowed: false,
     },
+    context_budget: defaultContextBudgetContract(),
     refresh_triggers: uniqueStrings([
       "task fails or verifier marks reasoning_policy_audit needs_review",
       "new grounded reflection is captured for this objective",
@@ -685,6 +688,7 @@ function describeWorkingMemory(workingMemory: CompileWorkingMemory) {
     `- expected_evidence_count: ${workingMemory.expected_evidence.length}`,
     `- known_failure_count: ${workingMemory.known_failures.length}`,
     `- memory_budget: evidence<=${workingMemory.memory_budget.expected_evidence_limit} questions<=${workingMemory.memory_budget.unresolved_question_limit} failures<=${workingMemory.memory_budget.known_failure_limit} citations<=${workingMemory.memory_budget.citation_limit}`,
+    `- Context budget: target<40% checkpoint=40-50% offload=50-60% handoff=60-70% hard_stop=80%; status=${workingMemory.context_budget.status_tool}; checkpoint=${workingMemory.context_budget.checkpoint_tool}`,
   ];
   if (workingMemory.refresh_triggers.length > 0) {
     lines.push("- refresh_triggers:");

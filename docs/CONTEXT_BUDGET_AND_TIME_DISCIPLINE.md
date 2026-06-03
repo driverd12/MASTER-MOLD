@@ -36,6 +36,8 @@ Each checkpoint should capture:
 
 Use these surfaces intentionally:
 
+- `context_budget.status` to turn reported context usage into a target/checkpoint/offload/handoff/hard-stop decision.
+- `context_budget.checkpoint` to write a durable checkpoint memory, emit a runtime event, and squish linked transcript lines when offload is required.
 - `memory.append` for distilled reusable lessons and compact handoff notes.
 - `transcript.squish` when raw transcript lines need to become durable memory before they crowd the prompt.
 - `artifact.record` for reports, logs, proofs, and longer evidence packets.

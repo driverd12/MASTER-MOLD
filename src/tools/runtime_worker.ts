@@ -10,6 +10,7 @@ import {
   type RuntimeWorkerSessionStatus,
   Storage,
 } from "../storage.js";
+import { defaultContextBudgetContract } from "./context_budget.js";
 import { mutationSchema, runIdempotentMutation } from "./mutation.js";
 
 const controlPlaneRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -347,6 +348,15 @@ function describeWorkingMemory(taskMetadata: Record<string, unknown>) {
       `Memory budget: evidence<=${compactMemoryBudgetValue(memoryBudget.expected_evidence_limit)} questions<=${compactMemoryBudgetValue(memoryBudget.unresolved_question_limit)} failures<=${compactMemoryBudgetValue(memoryBudget.known_failure_limit)} citations<=${compactMemoryBudgetValue(memoryBudget.citation_limit)}; transcript replay ${memoryBudget.transcript_replay_allowed === true ? "allowed" : "blocked"}.`
     );
   }
+  const contextBudget = readNullableRecord(workingMemory.context_budget) ?? defaultContextBudgetContract();
+  const thresholds = readNullableRecord(contextBudget.thresholds) ?? defaultContextBudgetContract().thresholds;
+  const statusTool = readString(contextBudget.status_tool) ?? "context_budget.status";
+  const checkpointTool = readString(contextBudget.checkpoint_tool) ?? "context_budget.checkpoint";
+  lines.push(
+    `Context budget guard: target<${compactMemoryBudgetValue(thresholds.target_percent)}% checkpoint=${compactMemoryBudgetValue(thresholds.checkpoint_percent)}-${compactMemoryBudgetValue(thresholds.offload_percent)}% offload=${compactMemoryBudgetValue(thresholds.offload_percent)}-${compactMemoryBudgetValue(thresholds.handoff_percent)}% handoff=${compactMemoryBudgetValue(thresholds.handoff_percent)}-70% hard_stop=${compactMemoryBudgetValue(thresholds.hard_stop_percent)}%.`
+  );
+  lines.push(`Call ${statusTool} before loading large files, logs, transcripts, screenshots, or generated artifacts.`);
+  lines.push(`Call ${checkpointTool} before loading more raw context when used>=40% or whenever block_expansion is true.`);
   const refreshTriggers = readStringArray(workingMemory.refresh_triggers).slice(0, 4);
   if (refreshTriggers.length > 0) {
     lines.push(`Refresh triggers: ${refreshTriggers.map((entry) => compactBriefText(entry, 140)).join(" | ")}`);
