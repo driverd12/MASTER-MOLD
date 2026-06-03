@@ -33,6 +33,14 @@ npm run production:doctor      # Full production readiness check
     - Local Ollama/MLX is the default first-pass lane; escalate to hosted bridges only when explicit or when local evidence is insufficient.
 4.  **Execute**: Use GSD-style work packets via `task.compile` or `autonomy.command`.
 
+## Time and Context Budget Discipline
+
+- Use `time.stamp` at the start of significant work, at 30-minute checkpoints, before owner/client/model handoffs, before and after risky or long-running operations, and at completion.
+- Treat the active context window as short-term working memory, not as the durable record. Do not use 1M+ token windows as the default operating mode.
+- Keep routine agent work under 40% of the effective context window when possible; checkpoint at 40-50%, force durable offload at 50-60%, hand off or compact by 60-70%, and treat 80% as a hard stop unless the operator approves a source-corpus exception.
+- Write compact, source-backed notes through MCP surfaces before context gets crowded: `memory.append`, `transcript.squish`, `artifact.record`, `decision.link`, `adr.create`, `imprint.snapshot`, run ledgers, and task records.
+- See `docs/CONTEXT_BUDGET_AND_TIME_DISCIPLINE.md` for the full policy and recovery note format.
+
 ## Desktop-Control Fallback
 
 MASTER MOLD can operate the local macOS desktop through `desktop.control`, `desktop.observe`, `desktop.act`, and `desktop.listen`.
@@ -54,6 +62,8 @@ Use this lane when the normal shell is stale, pointed at a missing path, or when
 4.  **Locking**: Use `lock.acquire` for shared mutable entities.
 5.  **Persistence**: Record summaries and decisions with `memory.append`, `decision.link`, and `adr.create`.
 6.  **Verification**: Use `preflight.check` and `postflight.verify` around risky changes.
+7.  **Time**: Attach `time.stamp` provenance to significant run starts, checkpoints, handoffs, and completions.
+8.  **Context budget**: Offload compact notes before the working frame reaches 60% of its effective window; do not rely on forced compaction for continuity.
 
 ## Architecture Map
 

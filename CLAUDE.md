@@ -49,6 +49,13 @@ Do not invent a second ingress path for shell, office, or external clients.
 - Feedback should say what the next agent needs to know, not restate the whole transcript. Include `source_client`, `source_agent`, and `source_model`; use `time.stamp` for handoffs that need explicit host/agent/IDE provenance.
 - The Agent Office **Task Board** tab is for short-lived actionable work. Keep goals/plans for longer arcs.
 
+**Time and context budget discipline:**
+- Use `time.stamp` at the start of significant work, at 30-minute checkpoints, before owner/client/model handoffs, before and after risky or long-running operations, and at completion.
+- Treat the active context window as short-term working memory, not as the durable record. Do not use 1M+ token windows as the default operating mode.
+- Keep routine agent work under 40% of the effective context window when possible; checkpoint at 40-50%, force durable offload at 50-60%, hand off or compact by 60-70%, and treat 80% as a hard stop unless the operator approves a source-corpus exception.
+- Write compact, source-backed notes through MCP surfaces before context gets crowded: `memory.append`, `transcript.squish`, `artifact.record`, `decision.link`, `adr.create`, `imprint.snapshot`, run ledgers, and task records.
+- See `docs/CONTEXT_BUDGET_AND_TIME_DISCIPLINE.md` for the full policy and recovery note format.
+
 **Health checks (call these before assuming something is broken):**
 - `health.tools`, `health.storage`, `health.litellm_proxy`, `migration.status`
 - `trichat.autopilot` `{"action":"status"}`, `trichat.tmux_controller` `{"action":"status"}`
@@ -134,6 +141,8 @@ Do not self-start speculative work from the visible terminal alone. Self-start o
 4.  **Locking**: Use `lock.acquire` for shared mutable entities.
 5.  **Persistence**: Record summaries and decisions with `memory.append`, `decision.link`, and `adr.create`.
 6.  **Verification**: Use `preflight.check` and `postflight.verify` around risky changes.
+7.  **Time**: Attach `time.stamp` provenance to significant run starts, checkpoints, handoffs, and completions.
+8.  **Context budget**: Offload compact notes before the working frame reaches 60% of its effective window; do not rely on forced compaction for continuity.
 
 ---
 

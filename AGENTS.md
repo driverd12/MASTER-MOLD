@@ -51,6 +51,13 @@ Do not invent a second ingress path for shell, office, or external clients.
 - Every follow-up or feedback note should include source attribution (`source_client`, `source_agent`, `source_model`) and use `time.stamp` when writing handoff artifacts that need explicit host/agent/IDE provenance.
 - The Agent Office **Task Board** tab is the operator surface for short-lived actionable work and feedback. Keep long projects in goals/plans; keep this board focused on the next concrete slices.
 
+**Time and context budget discipline:**
+- Use `time.stamp` at the start of significant work, at 30-minute checkpoints, before owner/client/model handoffs, before and after risky or long-running operations, and at completion.
+- Treat the active context window as short-term working memory, not as the durable record. Do not use 1M+ token windows as the default operating mode.
+- Keep routine agent work under 40% of the effective context window when possible; checkpoint at 40-50%, force durable offload at 50-60%, hand off or compact by 60-70%, and treat 80% as a hard stop unless the operator approves a source-corpus exception.
+- Write compact, source-backed notes through MCP surfaces before context gets crowded: `memory.append`, `transcript.squish`, `artifact.record`, `decision.link`, `adr.create`, `imprint.snapshot`, run ledgers, and task records.
+- See `docs/CONTEXT_BUDGET_AND_TIME_DISCIPLINE.md` for the full policy and recovery note format.
+
 **Durable collaboration boundary:**
 - `autonomy.ide_ingress` is the durable source of truth for operator and IDE intake.
 - On macOS, when `TRICHAT_VISIBLE_CLAUDE_MIRROR_ON_INGRESS=1`, explicit Claude-targeted ingress may mirror the already-persisted objective into the visible Claude terminal for operator-visible collaboration.
@@ -129,6 +136,8 @@ All agents operating against this MCP server should follow this execution baseli
 4. **Locking**: Use `lock.acquire` for shared mutable entities
 5. **Persistence**: Record summaries and decisions with `memory.append`, `decision.link`, and `adr.create`
 6. **Verification**: Use `preflight.check` and `postflight.verify` around risky changes
+7. **Time**: Attach `time.stamp` provenance to significant run starts, checkpoints, handoffs, and completions
+8. **Context budget**: Offload compact notes before the working frame reaches 60% of its effective window; do not rely on forced compaction for continuity
 
 ---
 

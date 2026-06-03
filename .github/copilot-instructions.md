@@ -48,6 +48,13 @@ Do not invent a second ingress path for shell, office, or external clients.
 
 `autonomy.ide_ingress`, MCP artifacts, and SQLite-backed state are the durable source of truth. Visible terminals or IDE chat panes are collaboration surfaces only.
 
+**Time and context budget discipline:**
+- Use `time.stamp` at the start of significant work, at 30-minute checkpoints, before owner/client/model handoffs, before and after risky or long-running operations, and at completion.
+- Treat the active context window as short-term working memory, not as the durable record. Do not use 1M+ token windows as the default operating mode.
+- Keep routine agent work under 40% of the effective context window when possible; checkpoint at 40-50%, force durable offload at 50-60%, hand off or compact by 60-70%, and treat 80% as a hard stop unless the operator approves a source-corpus exception.
+- Write compact, source-backed notes through MCP surfaces before context gets crowded: `memory.append`, `transcript.squish`, `artifact.record`, `decision.link`, `adr.create`, `imprint.snapshot`, run ledgers, and task records.
+- See `docs/CONTEXT_BUDGET_AND_TIME_DISCIPLINE.md` for the full policy and recovery note format.
+
 **Health checks (call these before assuming something is broken):**
 - `health.tools`, `health.storage`, `migration.status`
 - `trichat.autopilot` `{"action":"status"}`, `trichat.tmux_controller` `{"action":"status"}`

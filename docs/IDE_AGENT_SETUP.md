@@ -116,6 +116,8 @@ Use this starter instruction set for local agents:
 4. Use `lock.acquire` for shared mutable entities.
 5. Persist summaries and decisions (`memory.append`, `decision.link`, `adr.create`).
 6. Run `preflight.check` and `postflight.verify` around risky changes.
+7. Attach `time.stamp` provenance to significant run starts, checkpoints, handoffs, and completions.
+8. Keep active context bounded: checkpoint at 40-50% of the effective window, offload before 60%, hand off or compact by 70%, and avoid routine 1M+ token windows. See [Context Budget and Time Discipline](./CONTEXT_BUDGET_AND_TIME_DISCIPLINE.md).
 
 ## Desktop-Control Fallback
 
