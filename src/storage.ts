@@ -30,6 +30,11 @@ import {
 } from "./privileged_access_plane.js";
 
 const SQLITE_HEADER = Buffer.from("SQLite format 3\u0000", "utf8");
+const DEFAULT_MUTATION_RESULT_JSON_MAX_BYTES = 64 * 1024;
+const MIN_MUTATION_RESULT_JSON_MAX_BYTES = 256;
+const MAX_MUTATION_RESULT_JSON_MAX_BYTES = 16 * 1024 * 1024;
+export const DEFAULT_MUTATION_JOURNAL_RETENTION_SECONDS = 2 * 24 * 60 * 60;
+export const DEFAULT_MUTATION_JOURNAL_PRUNE_LIMIT = 50000;
 
 type StorageGuardOptions = {
   backup_dir: string;
@@ -869,6 +874,15 @@ export type MutationMeta = {
 export type MutationStartResult = {
   replayed: boolean;
   result?: unknown;
+};
+
+export type MutationJournalPruneResult = {
+  dry_run: boolean;
+  deleted_count: number;
+  candidate_count: number;
+  cutoff_iso: string;
+  older_than_seconds: number;
+  limit: number;
 };
 
 export type RunEventRecord = {
@@ -10366,7 +10380,7 @@ export class Storage {
          SET status = 'done', result_json = ?, error_text = NULL, updated_at = ?
          WHERE idempotency_key = ?`
       )
-      .run(stableStringify(result), now, idempotencyKey);
+      .run(serializeMutationResultForJournal(result), now, idempotencyKey);
   }
 
   failMutation(idempotencyKey: string, errorText: string): void {
@@ -10378,6 +10392,69 @@ export class Storage {
          WHERE idempotency_key = ?`
       )
       .run(errorText, now, idempotencyKey);
+  }
+
+  pruneMutationJournal(params?: {
+    older_than_seconds?: number;
+    limit?: number;
+    dry_run?: boolean;
+    now?: string | Date;
+  }): MutationJournalPruneResult {
+    const olderThanSeconds = parseBoundedInt(
+      params?.older_than_seconds,
+      DEFAULT_MUTATION_JOURNAL_RETENTION_SECONDS,
+      60,
+      365 * 24 * 60 * 60
+    );
+    const limit = parseBoundedInt(params?.limit, DEFAULT_MUTATION_JOURNAL_PRUNE_LIMIT, 1, 500000);
+    const nowMs =
+      params?.now instanceof Date
+        ? params.now.getTime()
+        : typeof params?.now === "string"
+          ? Date.parse(params.now)
+          : Date.now();
+    const safeNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+    const cutoffIso = new Date(safeNowMs - olderThanSeconds * 1000).toISOString();
+    const candidateRow = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM (
+           SELECT idempotency_key
+           FROM mutation_journal
+           WHERE updated_at < ?
+             AND status IN ('done', 'failed')
+           ORDER BY updated_at ASC
+           LIMIT ?
+         )`
+      )
+      .get(cutoffIso, limit) as Record<string, unknown> | undefined;
+    const candidateCount = Number(candidateRow?.count ?? 0);
+    let deletedCount = 0;
+    if (params?.dry_run !== true && candidateCount > 0) {
+      const result = this.db
+        .prepare(
+          `DELETE FROM mutation_journal
+           WHERE idempotency_key IN (
+             SELECT idempotency_key
+             FROM mutation_journal
+             WHERE updated_at < ?
+               AND status IN ('done', 'failed')
+             ORDER BY updated_at ASC
+             LIMIT ?
+           )`
+        )
+        .run(cutoffIso, limit);
+      deletedCount = Number(result.changes ?? 0);
+    }
+
+    return {
+      dry_run: params?.dry_run === true,
+      deleted_count: deletedCount,
+      candidate_count: candidateCount,
+      cutoff_iso: cutoffIso,
+      older_than_seconds: olderThanSeconds,
+      limit,
+    };
   }
 
   getMutationStatus(idempotencyKey: string): {
@@ -13066,6 +13143,7 @@ export class Storage {
     this.ensureIndex("idx_memories_last_accessed", "memories", "last_accessed_at DESC");
     this.ensureIndex("idx_memories_keywords", "memories", "keywords");
     this.ensureIndex("idx_adrs_status", "adrs", "status");
+    this.ensureIndex("idx_mutation_journal_status_updated", "mutation_journal", "status, updated_at ASC");
     this.ensureIndex("idx_run_events_run", "run_events", "run_id, created_at ASC");
     this.ensureIndex("idx_incident_events_incident", "incident_events", "incident_id, created_at ASC");
   }
@@ -17632,8 +17710,34 @@ function hashPayload(value: unknown): string {
   return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 
+function mutationResultJsonMaxBytes(): number {
+  return parseBoundedInt(
+    process.env.ANAMNESIS_HUB_MUTATION_RESULT_JSON_MAX_BYTES,
+    DEFAULT_MUTATION_RESULT_JSON_MAX_BYTES,
+    MIN_MUTATION_RESULT_JSON_MAX_BYTES,
+    MAX_MUTATION_RESULT_JSON_MAX_BYTES
+  );
+}
+
+function serializeMutationResultForJournal(result: unknown): string {
+  const resultJson = stableStringify(result);
+  const maxBytes = mutationResultJsonMaxBytes();
+  const resultBytes = Buffer.byteLength(resultJson, "utf8");
+  if (resultBytes <= maxBytes) {
+    return resultJson;
+  }
+
+  return stableStringify({
+    mutation_result_omitted: true,
+    original_result_json_bytes: resultBytes,
+    original_result_sha256: crypto.createHash("sha256").update(resultJson).digest("hex"),
+    reason: "result_json_exceeds_max_bytes",
+    stored_result_json_max_bytes: maxBytes,
+  });
+}
+
 function stableStringify(value: unknown): string {
-  return JSON.stringify(sortObject(value));
+  return JSON.stringify(sortObject(value)) ?? "null";
 }
 
 function sortObject(value: unknown): unknown {

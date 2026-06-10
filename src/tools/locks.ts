@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Storage } from "../storage.js";
-import { mutationSchema, runIdempotentMutation } from "./mutation.js";
+import { mutationSchema } from "./mutation.js";
 
 export const lockAcquireSchema = z.object({
   mutation: mutationSchema,
@@ -19,32 +19,18 @@ export const lockReleaseSchema = z.object({
 
 export async function acquireLock(storage: Storage, input: z.infer<typeof lockAcquireSchema>) {
   const leaseSeconds = input.lease_seconds ?? 300;
-  return runIdempotentMutation({
-    storage,
-    tool_name: "lock.acquire",
-    mutation: input.mutation,
-    payload: input,
-    execute: () =>
-      storage.acquireLock({
-        lock_key: input.lock_key,
-        owner_id: input.owner_id,
-        lease_seconds: leaseSeconds,
-        metadata: input.metadata,
-      }),
+  return storage.acquireLock({
+    lock_key: input.lock_key,
+    owner_id: input.owner_id,
+    lease_seconds: leaseSeconds,
+    metadata: input.metadata,
   });
 }
 
 export async function releaseLock(storage: Storage, input: z.infer<typeof lockReleaseSchema>) {
-  return runIdempotentMutation({
-    storage,
-    tool_name: "lock.release",
-    mutation: input.mutation,
-    payload: input,
-    execute: () =>
-      storage.releaseLock({
-        lock_key: input.lock_key,
-        owner_id: input.owner_id,
-        force: input.force,
-      }),
+  return storage.releaseLock({
+    lock_key: input.lock_key,
+    owner_id: input.owner_id,
+    force: input.force,
   });
 }

@@ -7,7 +7,7 @@ import {
   type WorkerFabricStateRecord,
 } from "../storage.js";
 import { planClusterTopologyBackends } from "./cluster_topology.js";
-import { mutationSchema, runIdempotentMutation } from "./mutation.js";
+import { mutationSchema } from "./mutation.js";
 import { computeHostHealthScore, resolveEffectiveWorkerFabric, resolveLocalBridgeResourceGate } from "./worker_fabric.js";
 
 const recordSchema = z.record(z.unknown());
@@ -861,133 +861,125 @@ export async function modelRouter(storage: Storage, input: z.infer<typeof modelR
     });
   }
 
-  return runIdempotentMutation({
-    storage,
-    tool_name: "model.router",
-    mutation: input.mutation!,
-    payload: input,
-    execute: () => {
-      const existing = loadModelRouterState(storage);
-      if (input.action === "configure") {
-        return {
-          state: storage.setModelRouterState({
-            enabled: input.enabled ?? existing.enabled,
-            strategy: input.strategy ?? existing.strategy,
-            default_backend_id: input.default_backend_id ?? existing.default_backend_id,
-            backends: existing.backends,
-          }),
-        };
-      }
+  const existing = loadModelRouterState(storage);
+  if (input.action === "configure") {
+    return {
+      state: storage.setModelRouterState({
+        enabled: input.enabled ?? existing.enabled,
+        strategy: input.strategy ?? existing.strategy,
+        default_backend_id: input.default_backend_id ?? existing.default_backend_id,
+        backends: existing.backends,
+      }),
+    };
+  }
 
-      if (input.action === "select_local_backend") {
-        const backendId = input.backend_id!.trim();
-        const selectedBackend = existing.backends.find((backend) => backend.backend_id === backendId) ?? null;
-        if (!selectedBackend || !isSelectableLocalBackend(selectedBackend)) {
-          throw new Error(`backend_id must reference an enabled local backend: ${backendId}`);
-        }
-        const nextState = storage.setModelRouterState({
-          enabled: existing.enabled,
-          strategy: existing.strategy,
-          default_backend_id: selectedBackend.backend_id,
-          backends: existing.backends,
-        });
-        return {
-          ok: true,
-          ...buildLocalBackendStatus(nextState),
-        };
-      }
+  if (input.action === "select_local_backend") {
+    const backendId = input.backend_id!.trim();
+    const selectedBackend = existing.backends.find((backend) => backend.backend_id === backendId) ?? null;
+    if (!selectedBackend || !isSelectableLocalBackend(selectedBackend)) {
+      throw new Error(`backend_id must reference an enabled local backend: ${backendId}`);
+    }
+    const nextState = storage.setModelRouterState({
+      enabled: existing.enabled,
+      strategy: existing.strategy,
+      default_backend_id: selectedBackend.backend_id,
+      backends: existing.backends,
+    });
+    return {
+      ok: true,
+      ...buildLocalBackendStatus(nextState),
+    };
+  }
 
-      if (input.action === "upsert_backend") {
-        const backend = normalizeBackend({
-          backend_id: input.backend!.backend_id,
-          enabled: input.backend!.enabled !== false,
-          provider: input.backend!.provider,
-          model_id: input.backend!.model_id,
-          endpoint: input.backend!.endpoint?.trim() || null,
-          host_id: input.backend!.host_id?.trim() || null,
-          locality: inferBackendLocality({
-            locality: input.backend!.locality ?? null,
-            host_id: input.backend!.host_id?.trim() || null,
-            endpoint: input.backend!.endpoint?.trim() || null,
-          }),
-          context_window: input.backend!.context_window ?? 8192,
-          throughput_tps: input.backend!.throughput_tps ?? null,
-          latency_ms_p50: input.backend!.latency_ms_p50 ?? null,
-          success_rate: input.backend!.success_rate ?? null,
-          win_rate: input.backend!.win_rate ?? null,
-          cost_per_1k_input: input.backend!.cost_per_1k_input ?? null,
-          max_output_tokens: input.backend!.max_output_tokens ?? null,
-          tags: input.backend!.tags ?? [],
-          capabilities: input.backend!.capabilities ?? {},
-          metadata: input.backend!.metadata ?? {},
-          heartbeat_at: input.backend!.heartbeat_at?.trim() || null,
-          updated_at: new Date().toISOString(),
-        });
-        const nextBackends = existing.backends.filter((entry) => entry.backend_id !== backend.backend_id).concat([backend]);
-        return {
-          state: storage.setModelRouterState({
-            enabled: existing.enabled,
-            strategy: existing.strategy,
-            default_backend_id: existing.default_backend_id ?? backend.backend_id,
-            backends: nextBackends,
-          }),
-        };
-      }
+  if (input.action === "upsert_backend") {
+    const backend = normalizeBackend({
+      backend_id: input.backend!.backend_id,
+      enabled: input.backend!.enabled !== false,
+      provider: input.backend!.provider,
+      model_id: input.backend!.model_id,
+      endpoint: input.backend!.endpoint?.trim() || null,
+      host_id: input.backend!.host_id?.trim() || null,
+      locality: inferBackendLocality({
+        locality: input.backend!.locality ?? null,
+        host_id: input.backend!.host_id?.trim() || null,
+        endpoint: input.backend!.endpoint?.trim() || null,
+      }),
+      context_window: input.backend!.context_window ?? 8192,
+      throughput_tps: input.backend!.throughput_tps ?? null,
+      latency_ms_p50: input.backend!.latency_ms_p50 ?? null,
+      success_rate: input.backend!.success_rate ?? null,
+      win_rate: input.backend!.win_rate ?? null,
+      cost_per_1k_input: input.backend!.cost_per_1k_input ?? null,
+      max_output_tokens: input.backend!.max_output_tokens ?? null,
+      tags: input.backend!.tags ?? [],
+      capabilities: input.backend!.capabilities ?? {},
+      metadata: input.backend!.metadata ?? {},
+      heartbeat_at: input.backend!.heartbeat_at?.trim() || null,
+      updated_at: new Date().toISOString(),
+    });
+    const nextBackends = existing.backends.filter((entry) => entry.backend_id !== backend.backend_id).concat([backend]);
+    return {
+      state: storage.setModelRouterState({
+        enabled: existing.enabled,
+        strategy: existing.strategy,
+        default_backend_id: existing.default_backend_id ?? backend.backend_id,
+        backends: nextBackends,
+      }),
+    };
+  }
 
-      if (input.action === "heartbeat") {
-        const backendId = input.backend_id!.trim();
-        const nextBackends = existing.backends.map((backend) =>
-          backend.backend_id !== backendId
-            ? backend
-            : normalizeBackend({
-                ...backend,
-                model_id: input.backend?.model_id?.trim() || backend.model_id,
-                endpoint: input.backend?.endpoint?.trim() || backend.endpoint,
-                host_id: input.backend?.host_id?.trim() || backend.host_id,
-                locality: inferBackendLocality({
-                  locality: input.backend?.locality ?? backend.locality,
-                  host_id: input.backend?.host_id?.trim() || backend.host_id,
-                  endpoint: input.backend?.endpoint?.trim() || backend.endpoint,
-                }),
-                context_window: input.backend?.context_window ?? backend.context_window,
-                throughput_tps: input.backend?.throughput_tps ?? backend.throughput_tps,
-                latency_ms_p50: input.backend?.latency_ms_p50 ?? backend.latency_ms_p50,
-                success_rate: input.backend?.success_rate ?? backend.success_rate,
-                win_rate: input.backend?.win_rate ?? backend.win_rate,
-                cost_per_1k_input: input.backend?.cost_per_1k_input ?? backend.cost_per_1k_input,
-                max_output_tokens: input.backend?.max_output_tokens ?? backend.max_output_tokens,
-                tags: input.tags ? [...new Set([...backend.tags, ...input.tags.map((tag) => tag.trim()).filter(Boolean)])] : backend.tags,
-                capabilities: input.capabilities && isRecord(input.capabilities)
-                  ? { ...backend.capabilities, ...input.capabilities }
-                  : backend.capabilities,
-                metadata:
-                  input.backend?.metadata && isRecord(input.backend.metadata)
-                    ? { ...backend.metadata, ...input.backend.metadata }
-                    : backend.metadata,
-                heartbeat_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              })
-        );
-        return {
-          state: storage.setModelRouterState({
-            enabled: existing.enabled,
-            strategy: existing.strategy,
-            default_backend_id: existing.default_backend_id,
-            backends: nextBackends,
-          }),
-        };
-      }
+  if (input.action === "heartbeat") {
+    const backendId = input.backend_id!.trim();
+    const nextBackends = existing.backends.map((backend) =>
+      backend.backend_id !== backendId
+        ? backend
+        : normalizeBackend({
+            ...backend,
+            model_id: input.backend?.model_id?.trim() || backend.model_id,
+            endpoint: input.backend?.endpoint?.trim() || backend.endpoint,
+            host_id: input.backend?.host_id?.trim() || backend.host_id,
+            locality: inferBackendLocality({
+              locality: input.backend?.locality ?? backend.locality,
+              host_id: input.backend?.host_id?.trim() || backend.host_id,
+              endpoint: input.backend?.endpoint?.trim() || backend.endpoint,
+            }),
+            context_window: input.backend?.context_window ?? backend.context_window,
+            throughput_tps: input.backend?.throughput_tps ?? backend.throughput_tps,
+            latency_ms_p50: input.backend?.latency_ms_p50 ?? backend.latency_ms_p50,
+            success_rate: input.backend?.success_rate ?? backend.success_rate,
+            win_rate: input.backend?.win_rate ?? backend.win_rate,
+            cost_per_1k_input: input.backend?.cost_per_1k_input ?? backend.cost_per_1k_input,
+            max_output_tokens: input.backend?.max_output_tokens ?? backend.max_output_tokens,
+            tags: input.tags ? [...new Set([...backend.tags, ...input.tags.map((tag) => tag.trim()).filter(Boolean)])] : backend.tags,
+            capabilities: input.capabilities && isRecord(input.capabilities)
+              ? { ...backend.capabilities, ...input.capabilities }
+              : backend.capabilities,
+            metadata:
+              input.backend?.metadata && isRecord(input.backend.metadata)
+                ? { ...backend.metadata, ...input.backend.metadata }
+                : backend.metadata,
+            heartbeat_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+    );
+    return {
+      state: storage.setModelRouterState({
+        enabled: existing.enabled,
+        strategy: existing.strategy,
+        default_backend_id: existing.default_backend_id,
+        backends: nextBackends,
+      }),
+    };
+  }
 
-      const nextBackends = existing.backends.filter((backend) => backend.backend_id !== input.backend_id);
-      return {
-        state: storage.setModelRouterState({
-          enabled: existing.enabled,
-          strategy: existing.strategy,
-          default_backend_id:
-            existing.default_backend_id === input.backend_id ? nextBackends[0]?.backend_id ?? null : existing.default_backend_id,
-          backends: nextBackends,
-        }),
-      };
-    },
-  });
+  const nextBackends = existing.backends.filter((backend) => backend.backend_id !== input.backend_id);
+  return {
+    state: storage.setModelRouterState({
+      enabled: existing.enabled,
+      strategy: existing.strategy,
+      default_backend_id:
+        existing.default_backend_id === input.backend_id ? nextBackends[0]?.backend_id ?? null : existing.default_backend_id,
+      backends: nextBackends,
+    }),
+  };
 }

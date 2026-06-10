@@ -2754,6 +2754,15 @@ async function executeAutonomyMaintainPass(
     }
   }
 
+  try {
+    const mutationJournalPrune = storage.pruneMutationJournal();
+    if (mutationJournalPrune.deleted_count > 0) {
+      actions.push(`mutation_journal.prune:${mutationJournalPrune.deleted_count}`);
+    }
+  } catch (error) {
+    attention.push(`mutation_journal.prune.failed:${error instanceof Error ? error.message : String(error)}`);
+  }
+
   let selfDriveResult: Record<string, unknown> | null = null;
   let lastSelfDriveAt = previousState?.last_self_drive_at ?? null;
   let lastSelfDriveGoalId = previousState?.last_self_drive_goal_id ?? null;
