@@ -1956,15 +1956,7 @@ export class Storage {
           (entry) => entry.kind === "snapshot"
         );
         const minIntervalMs = this.guardOptions.backup_min_interval_seconds * 1000;
-        const dbArtifactLatestMtimeMs = databaseArtifactLatestMtimeMs(this.dbPath);
-        const databaseChangedSinceLatestSnapshot =
-          latestSnapshot && dbArtifactLatestMtimeMs > 0 ? dbArtifactLatestMtimeMs > latestSnapshot.mtime_ms : false;
-        if (
-          latestSnapshot &&
-          minIntervalMs > 0 &&
-          Date.now() - latestSnapshot.mtime_ms < minIntervalMs &&
-          !databaseChangedSinceLatestSnapshot
-        ) {
+        if (latestSnapshot && minIntervalMs > 0 && Date.now() - latestSnapshot.mtime_ms < minIntervalMs) {
           writeStorageGuardLog(
             `[storage] startup backup skipped: latest snapshot ${latestSnapshot.basename} is newer than cooldown ${this.guardOptions.backup_min_interval_seconds}s`
           );
@@ -17345,23 +17337,6 @@ function databaseArtifactBytes(dbPath: string): number {
     }
   }
   return total;
-}
-
-function databaseArtifactLatestMtimeMs(dbPath: string): number {
-  if (dbPath === ":memory:") {
-    return 0;
-  }
-  const suffixes = ["", "-wal", "-shm"];
-  let latest = 0;
-  for (const suffix of suffixes) {
-    const filePath = `${dbPath}${suffix}`;
-    try {
-      latest = Math.max(latest, fs.statSync(filePath).mtimeMs);
-    } catch {
-      continue;
-    }
-  }
-  return latest;
 }
 
 function classifyBackupArtifactKind(entry: string): StorageBackupArtifactKind {

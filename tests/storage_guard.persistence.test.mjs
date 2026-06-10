@@ -49,9 +49,12 @@ test("storage guard restores from startup backup when db header is corrupted", a
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-storage-guard-restore-"));
   const dbPath = path.join(tempDir, "hub.sqlite");
   const marker = `storage-guard-marker-${testId}`;
+  const noCooldownEnv = {
+    ANAMNESIS_HUB_BACKUP_MIN_INTERVAL_SECONDS: "0",
+  };
   let mutationCounter = 0;
 
-  const sessionOne = await openClient(dbPath, {});
+  const sessionOne = await openClient(dbPath, noCooldownEnv);
   try {
     await callTool(sessionOne.client, "memory.append", {
       mutation: nextMutation(testId, "memory.append", () => mutationCounter++),
@@ -62,8 +65,8 @@ test("storage guard restores from startup backup when db header is corrupted", a
     await sessionOne.client.close().catch(() => {});
   }
 
-  // A second clean startup creates a backup that includes the previous session write.
-  const sessionTwo = await openClient(dbPath, {});
+  // This restore-specific setup opts out of cooldown so the next startup backup includes the previous write.
+  const sessionTwo = await openClient(dbPath, noCooldownEnv);
   try {
     const health = await callTool(sessionTwo.client, "health.storage", {});
     assert.equal(health.ok, true);
@@ -96,14 +99,58 @@ test("storage guard restores from startup backup when db header is corrupted", a
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
+test("storage guard honors startup backup cooldown when the database changed after the latest snapshot", async () => {
+  const testId = `${Date.now()}-startup-backup-cooldown`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-storage-guard-backup-cooldown-"));
+  const dbPath = path.join(tempDir, "hub.sqlite");
+  const backupDir = path.join(tempDir, "backups");
+  const cooldownEnv = {
+    ANAMNESIS_HUB_BACKUP_MIN_INTERVAL_SECONDS: "604800",
+  };
+  let mutationCounter = 0;
+
+  const sessionOne = await openClient(dbPath, cooldownEnv);
+  try {
+    const health = await callTool(sessionOne.client, "health.storage", {});
+    assert.equal(health.ok, true);
+    assert.equal(listStartupBackupSnapshots(backupDir).length, 1);
+    await sleep(25);
+    await callTool(sessionOne.client, "memory.append", {
+      mutation: nextMutation(testId, "memory.append", () => mutationCounter++),
+      content: `startup backup cooldown marker ${testId}`,
+      keywords: ["storage", "guard", "startup-backup-cooldown"],
+    });
+  } finally {
+    await sessionOne.client.close().catch(() => {});
+  }
+
+  const snapshotsAfterWrite = listStartupBackupSnapshots(backupDir);
+  assert.equal(snapshotsAfterWrite.length, 1);
+
+  const sessionTwo = await openClient(dbPath, cooldownEnv);
+  try {
+    const health = await callTool(sessionTwo.client, "health.storage", {});
+    assert.equal(health.ok, true);
+  } finally {
+    await sessionTwo.client.close().catch(() => {});
+  }
+
+  assert.deepEqual(listStartupBackupSnapshots(backupDir), snapshotsAfterWrite);
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
 test("storage guard skips a corrupt latest backup and restores the newest healthy backup", async () => {
   const testId = `${Date.now()}-restore-skip-corrupt`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-storage-guard-restore-skip-corrupt-"));
   const dbPath = path.join(tempDir, "hub.sqlite");
   const marker = `storage-guard-healthy-backup-${testId}`;
+  const noCooldownEnv = {
+    ANAMNESIS_HUB_BACKUP_MIN_INTERVAL_SECONDS: "0",
+  };
   let mutationCounter = 0;
 
-  const sessionOne = await openClient(dbPath, {});
+  const sessionOne = await openClient(dbPath, noCooldownEnv);
   try {
     await callTool(sessionOne.client, "memory.append", {
       mutation: nextMutation(testId, "memory.append", () => mutationCounter++),
@@ -114,7 +161,7 @@ test("storage guard skips a corrupt latest backup and restores the newest health
     await sessionOne.client.close().catch(() => {});
   }
 
-  const sessionTwo = await openClient(dbPath, {});
+  const sessionTwo = await openClient(dbPath, noCooldownEnv);
   try {
     const health = await callTool(sessionTwo.client, "health.storage", {});
     assert.equal(health.ok, true);
@@ -449,6 +496,20 @@ function nextMutation(testId, toolName, increment) {
     idempotency_key: `test-${testId}-${safeToolName}-${index}`,
     side_effect_fingerprint: `fingerprint-${testId}-${safeToolName}-${index}`,
   };
+}
+
+function listStartupBackupSnapshots(backupDir) {
+  if (!fs.existsSync(backupDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(backupDir)
+    .filter((entry) => entry.startsWith("hub.sqlite.") && entry.endsWith(".sqlite"))
+    .sort();
+}
+
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function callTool(client, name, args) {
