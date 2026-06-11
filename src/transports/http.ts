@@ -4259,6 +4259,14 @@ function attachNetworkIdentity(req: http.IncomingMessage, networkGate: NetworkGa
   };
 }
 
+function mcpHttpMaxBodyBytes() {
+  const override = Number(process.env.MCP_HTTP_MAX_BODY_BYTES || "");
+  if (Number.isFinite(override) && override >= 65_536) {
+    return Math.round(override);
+  }
+  return 4 * 1024 * 1024;
+}
+
 async function routeRequest(
   createServer: () => Server,
   sessions: Map<string, SessionBinding>,
@@ -4271,7 +4279,21 @@ async function routeRequest(
   const sessionId = Array.isArray(sessionHeader) ? sessionHeader[0] : sessionHeader;
 
   if (method === "POST") {
-    const body = await parseJsonBody(req);
+    const maxBodyBytes = mcpHttpMaxBodyBytes();
+    let body: unknown;
+    try {
+      body = await parseJsonBody(req, maxBodyBytes);
+    } catch (error) {
+      if (error instanceof Error && error.message === "request_body_too_large") {
+        res.statusCode = 413;
+        res.setHeader("connection", "close");
+        res.end(`MCP request body exceeds ${maxBodyBytes} bytes`, () => {
+          req.destroy();
+        });
+        return;
+      }
+      throw error;
+    }
     const authorization = authorizeRemoteToolCalls(body, networkGate);
     if (!authorization.allowed) {
       res.statusCode = 403;
@@ -4353,10 +4375,16 @@ async function routeRequest(
   res.end("Method Not Allowed");
 }
 
-async function parseJsonBody(req: http.IncomingMessage): Promise<unknown> {
+async function parseJsonBody(req: http.IncomingMessage, maxBytes?: number): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (maxBytes !== undefined && total > maxBytes) {
+      throw new Error("request_body_too_large");
+    }
+    chunks.push(buffer);
   }
   if (chunks.length === 0) {
     return undefined;
