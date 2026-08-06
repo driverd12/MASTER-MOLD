@@ -422,11 +422,16 @@ storage.init();
 const startupModeArgs = process.argv.slice(2);
 const startupHttpEnabled = startupModeArgs.includes("--http") || process.env.MCP_HTTP === "1";
 const backgroundOwnerEnabled = parseBooleanEnv(process.env.MCP_BACKGROUND_OWNER, startupHttpEnabled);
-initializeAutoSquishDaemon(storage);
-initializeTaskAutoRetryDaemon(storage);
-initializeTriChatAutoRetentionDaemon(storage);
-initializeTriChatTurnWatchdogDaemon(storage);
-initializeTriChatAutopilotDaemon(storage, invokeRegisteredTool);
+// Only the authoritative background owner may resume persisted daemons.
+// Per-client stdio servers can still handle explicit tool calls, but must not
+// multiply the same durable loops every time an MCP client connects.
+if (backgroundOwnerEnabled) {
+  initializeAutoSquishDaemon(storage);
+  initializeTaskAutoRetryDaemon(storage);
+  initializeTriChatAutoRetentionDaemon(storage);
+  initializeTriChatTurnWatchdogDaemon(storage);
+  initializeTriChatAutopilotDaemon(storage, invokeRegisteredTool);
+}
 const triChatBusRuntime = new TriChatBusRuntime(storage, {
   socket_path: resolveDefaultTriChatBusSocketPath(repoRoot),
 });
@@ -3629,14 +3634,14 @@ if (domainPackRegistration.registered.length > 0) {
   console.error(`[domain-packs] enabled: ${domainPackRegistration.registered.join(", ")}`);
 }
 
-initializeImprintAutoSnapshotDaemon(storage, {
-  repo_root: repoRoot,
-  server_name: SERVER_NAME,
-  server_version: SERVER_VERSION,
-  get_tool_names: () => Array.from(toolRegistry.keys()),
-});
 initializeWarmCacheLane(storage);
 if (backgroundOwnerEnabled) {
+  initializeImprintAutoSnapshotDaemon(storage, {
+    repo_root: repoRoot,
+    server_name: SERVER_NAME,
+    server_version: SERVER_VERSION,
+    get_tool_names: () => Array.from(toolRegistry.keys()),
+  });
   initializeGoalAutorunDaemon(storage, invokeRegisteredTool);
   initializeAutonomyMaintainDaemon(storage, invokeRegisteredTool);
   initializeReactionEngineDaemon(storage, invokeRegisteredTool);

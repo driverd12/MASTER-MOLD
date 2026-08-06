@@ -80,6 +80,10 @@ async function openClient(dbPath) {
     cwd: REPO_ROOT,
     env: inheritedEnv({
       ANAMNESIS_HUB_DB_PATH: dbPath,
+      MCP_BACKGROUND_OWNER: "1",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "0",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "0",
+      TRICHAT_BUS_AUTOSTART: "0",
       TRICHAT_BUS_SOCKET_PATH: path.join(path.dirname(dbPath), "trichat.bus.sock"),
     }),
     stderr: "inherit",

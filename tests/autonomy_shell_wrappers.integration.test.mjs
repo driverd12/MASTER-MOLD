@@ -665,7 +665,7 @@ printf '{"ok":true,"ready":true}\\n'
   assert.match(keepalivePlist, /<key>AUTONOMY_KEEPALIVE_TOOL_TIMEOUT_MS<\/key>\s*<string>180000<\/string>/);
   assert.match(
     keepalivePlist,
-    /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/
+    /<key>KeepAlive<\/key>\s*<false\/>/
   );
   assert.match(keepalivePlist, /<key>ThrottleInterval<\/key>\s*<integer>10<\/integer>/);
   assert.match(

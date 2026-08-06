@@ -13,7 +13,10 @@ import {
   resolveRunnerBusSocketPath,
   waitForServerResourcesToClear,
 } from "../scripts/mcp_runner_support.mjs";
-import { runAutonomyKeepaliveOnce } from "../scripts/autonomy_keepalive_lib.mjs";
+import {
+  resolveKeepaliveTransport,
+  runAutonomyKeepaliveOnce,
+} from "../scripts/autonomy_keepalive_lib.mjs";
 import { prepareInboxWorkerStartup } from "../scripts/imprint_inbox_worker_runner_lib.mjs";
 
 function waitFor(predicate, timeoutMs, label) {
@@ -42,6 +45,18 @@ function processAlive(pid) {
     return false;
   }
 }
+
+test("resolveKeepaliveTransport keeps token-backed runners on the authoritative HTTP lane", () => {
+  assert.equal(resolveKeepaliveTransport({ MCP_HTTP_BEARER_TOKEN: "configured" }), "http");
+  assert.equal(
+    resolveKeepaliveTransport({
+      AUTONOMY_BOOTSTRAP_TRANSPORT: "stdio",
+      MCP_HTTP_BEARER_TOKEN: "configured",
+    }),
+    "stdio"
+  );
+  assert.equal(resolveKeepaliveTransport({}), "stdio");
+});
 
 test("resolveRunnerBusSocketPath shortens overly long repo-local socket paths", () => {
   const longRoot = path.join(
@@ -168,7 +183,7 @@ test("runAutonomyKeepaliveOnce skips duplicate cycles when singleton lock is alr
   assert.equal(result.singleton_lock?.acquired, false);
 });
 
-test("runAutonomyKeepaliveOnce releases singleton lock after retryable HTTP fallback", async () => {
+test("runAutonomyKeepaliveOnce releases singleton lock after a retryable HTTP failure", async () => {
   const callTransports = [];
   let released = 0;
   const result = await runAutonomyKeepaliveOnce({
@@ -186,16 +201,17 @@ test("runAutonomyKeepaliveOnce releases singleton lock after retryable HTTP fall
     waitForHttpReadyFn: async () => true,
     callToolFn: (_repoRoot, input) => {
       callTransports.push(input.transport);
-      if (input.transport === "http") {
-        throw new Error("socket hang up");
-      }
-      return { ok: true, handled_by: input.transport };
+      throw new Error("MCP error -32000: Connection closed");
     },
   });
-  assert.deepEqual(callTransports, ["http", "stdio"]);
+  assert.deepEqual(callTransports, ["http"]);
   assert.equal(released, 1);
-  assert.equal(result.transport, "stdio");
-  assert.equal(result.transport_fallback_from, "http");
+  assert.equal(result.ok, false);
+  assert.equal(result.retryable, true);
+  assert.equal(result.exit_code, 75);
+  assert.equal(result.reason, "http_call_failed");
+  assert.equal(result.transport, "http");
+  assert.equal(result.singleton_lock?.acquired, true);
 });
 
 test("runAutonomyKeepaliveOnce normalizes attention-only maintain results to successful keepalive output", async () => {
@@ -232,12 +248,15 @@ test("runAutonomyKeepaliveOnce normalizes attention-only maintain results to suc
 });
 
 test("runAutonomyKeepaliveOnce reports http readiness misses as retryable failures", async () => {
+  const env = {
+    AUTONOMY_KEEPALIVE_HTTP_READY_TIMEOUT_MS: "1000",
+    MCP_HTTP_BEARER_TOKEN: "configured",
+  };
+  let callCount = 0;
   const result = await runAutonomyKeepaliveOnce({
     repoRoot: process.cwd(),
-    transport: "http",
-    env: {
-      AUTONOMY_KEEPALIVE_HTTP_READY_TIMEOUT_MS: "1000",
-    },
+    transport: resolveKeepaliveTransport(env),
+    env,
     now: 1710000000300,
     pid: 3333,
     acquireLockFn: async () => ({
@@ -246,13 +265,15 @@ test("runAutonomyKeepaliveOnce reports http readiness misses as retryable failur
     }),
     waitForHttpReadyFn: async () => false,
     callToolFn: () => {
-      throw new Error("callToolFn should not run when http is not ready");
+      callCount += 1;
     },
   });
+  assert.equal(callCount, 0);
   assert.equal(result.ok, false);
   assert.equal(result.retryable, true);
   assert.equal(result.reason, "http_not_ready");
   assert.equal(result.exit_code, 75);
+  assert.equal(result.transport, "http");
   assert.equal(result.singleton_lock?.acquired, false);
 });
 

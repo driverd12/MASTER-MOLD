@@ -449,10 +449,7 @@ cat >"${KEEPALIVE_PLIST}" <<PLIST
     <integer>${AUTONOMY_KEEPALIVE_INTERVAL}</integer>
 
     <key>KeepAlive</key>
-    <dict>
-      <key>SuccessfulExit</key>
-      <false/>
-    </dict>
+    <false/>
 
     <key>ThrottleInterval</key>
     <integer>10</integer>

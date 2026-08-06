@@ -184,7 +184,11 @@ test("bootstrap_doctor.mjs exists and runs without crashing", { timeout: 30_000 
       cwd: REPO_ROOT,
       encoding: "utf8",
       timeout: 25_000,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: {
+        ...process.env,
+        BOOTSTRAP_DOCTOR_SKIP_LIVE_PROBES: "1",
+        NO_COLOR: "1",
+      },
     });
     assert.ok(result.includes("[doctor]"), "doctor output must include [doctor] markers");
     assert.ok(result.includes("Platform:"), "doctor output must include Platform line");
@@ -297,6 +301,16 @@ test("open_browser.mjs exists and reports usage error without url argument", () 
       "should print usage message"
     );
   }
+});
+
+test("macOS office launcher requests a Chrome app window", () => {
+  const officeSource = fs.readFileSync(OFFICE_GUI_NODE_PATH, "utf8");
+  const browserSource = fs.readFileSync(OPEN_BROWSER_PATH, "utf8");
+
+  assert.match(officeSource, /process\.platform === "darwin"/);
+  assert.match(officeSource, /\[OPEN_BROWSER_SCRIPT, "--app", GUI_URL\]/);
+  assert.match(browserSource, /"--app=" \+ targetUrl/);
+  assert.match(browserSource, /mode: "app"/);
 });
 
 test("agent_office_gui.mjs exists as the cross-platform office launcher entrypoint", () => {

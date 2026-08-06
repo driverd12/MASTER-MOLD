@@ -608,6 +608,9 @@ Launch the clickable local GUI control deck:
 npm run trichat:office:gui
 ```
 
+On macOS this opens Agent Office as a low-chrome Google Chrome app window;
+other platforms retain the normal browser fallback.
+
 Start the tmux war room with dedicated windows for the office scene, briefing board, lane monitor, and worker queue:
 
 ```bash

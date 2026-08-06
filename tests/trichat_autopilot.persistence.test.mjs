@@ -59,12 +59,24 @@ test("trichat.autopilot restores state and preserves replay/safety invariants", 
       await sessionOne.client.close().catch(() => {});
     }
 
+    const nonOwnerSession = await openClient(dbPath, { MCP_BACKGROUND_OWNER: "0" });
+    try {
+      const nonOwnerStatus = await callTool(nonOwnerSession.client, "trichat.autopilot", {
+        action: "status",
+      });
+      assert.equal(nonOwnerStatus.expected_running, true);
+      assert.equal(nonOwnerStatus.local_running, false);
+    } finally {
+      await nonOwnerSession.client.close().catch(() => {});
+    }
+
     const sessionTwo = await openClient(dbPath);
     try {
       const restoredStatus = await callTool(sessionTwo.client, "trichat.autopilot", {
         action: "status",
       });
       assert.equal(restoredStatus.running, true);
+      assert.equal(restoredStatus.local_running, true);
       assert.equal(restoredStatus.config.interval_seconds, 19);
       assert.equal(restoredStatus.config.away_mode, "normal");
       assert.equal(restoredStatus.config.lead_agent_id, "codex");
@@ -677,6 +689,10 @@ async function openClient(dbPath, extraEnv = {}) {
     cwd: REPO_ROOT,
     env: inheritedEnv({
       ANAMNESIS_HUB_DB_PATH: dbPath,
+      MCP_BACKGROUND_OWNER: "1",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "0",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "0",
+      TRICHAT_BUS_AUTOSTART: "0",
       TRICHAT_BUS_SOCKET_PATH: path.join(path.dirname(dbPath), "trichat.bus.sock"),
       ...extraEnv,
     }),

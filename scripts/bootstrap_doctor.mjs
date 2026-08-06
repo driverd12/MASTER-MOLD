@@ -546,6 +546,11 @@ function reportMacosAuthoritySection() {
     return;
   }
   write(`${c.bold}[doctor]${c.reset} macOS Authority:`);
+  if (/^(1|true|yes)$/i.test(String(process.env.BOOTSTRAP_DOCTOR_SKIP_LIVE_PROBES || ""))) {
+    recommendedMissing++;
+    write(`  ${WARN} ${c.yellow}authority audit skipped by environment${c.reset}`);
+    return;
+  }
   const payload = runJsonScript(resolve(ROOT, "scripts", "macos_authority_audit.mjs"), ["--json"]);
   if (!payload) {
     recommendedMissing++;
@@ -686,6 +691,11 @@ function reportLocalTrainingSection() {
 
 function reportProviderBridgeSection() {
   write(`${c.bold}[doctor]${c.reset} Provider Bridges:`);
+  if (/^(1|true|yes)$/i.test(String(process.env.BOOTSTRAP_DOCTOR_SKIP_LIVE_PROBES || ""))) {
+    recommendedMissing++;
+    write(`  ${WARN} ${c.yellow}provider bridge probes skipped by environment${c.reset}`);
+    return;
+  }
   const buildCommonArgs = (forceLive = false) => [
     resolve(ROOT, "scripts", "mcp_tool_call.mjs"),
     "--tool",

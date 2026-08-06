@@ -7,7 +7,7 @@
  * Reads scripts/platform_manifest.json for browser detection order.
  * Falls back to platform-native open commands if manifest is missing.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,9 +15,11 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = path.join(repoRoot, "scripts", "platform_manifest.json");
 
-const url = process.argv[2];
-if (!url) {
-  process.stderr.write("usage: open_browser.mjs <url>\n");
+const cliArgs = process.argv.slice(2);
+const appMode = cliArgs[0] === "--app";
+const url = appMode ? cliArgs[1] : cliArgs[0];
+if (!url || cliArgs.length !== (appMode ? 2 : 1)) {
+  process.stderr.write("usage: open_browser.mjs [--app] <url>\n");
   process.exit(2);
 }
 
@@ -153,11 +155,42 @@ function fallbackOpen(targetUrl) {
   }
 }
 
+function openChromeApp(candidates, targetUrl) {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  const chrome = candidates.find(
+    (entry) => /google chrome/i.test(String(entry.name || "")) && typeof entry.app_path === "string"
+  );
+  if (!chrome) {
+    return false;
+  }
+  const executable = path.join(chrome.app_path, "Contents", "MacOS", "Google Chrome");
+  if (!fs.existsSync(executable)) {
+    return false;
+  }
+  try {
+    const child = spawn(executable, ["--app=" + targetUrl], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.on("error", () => {});
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const candidates = loadManifestBrowsers();
+if (appMode && openChromeApp(candidates, url)) {
+  process.stdout.write(JSON.stringify({ browser: "Google Chrome", url, opened: true, mode: "app" }) + "\n");
+  process.exit(0);
+}
 const browser = detectBrowser(candidates);
 
 if (browser) {
-  const result = { browser: browser.name, url };
+  const result = { browser: browser.name, url, mode: appMode ? "browser-fallback" : "browser" };
   if (openUrl(browser, url)) {
     result.opened = true;
   } else {

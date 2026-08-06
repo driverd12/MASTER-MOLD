@@ -38,6 +38,16 @@ test("transcript.auto_squish persists daemon state across server restarts", asyn
       await sessionOne.client.close().catch(() => {});
     }
 
+    const nonOwnerSession = await openClient(dbPath, { MCP_BACKGROUND_OWNER: "0" });
+    try {
+      const nonOwnerStatus = await callTool(nonOwnerSession.client, "transcript.auto_squish", {
+        action: "status",
+      });
+      assert.equal(nonOwnerStatus.running, false);
+    } finally {
+      await nonOwnerSession.client.close().catch(() => {});
+    }
+
     const sessionTwo = await openClient(dbPath);
     try {
       const status = await callTool(sessionTwo.client, "transcript.auto_squish", {
@@ -77,13 +87,18 @@ test("transcript.auto_squish persists daemon state across server restarts", asyn
   }
 });
 
-async function openClient(dbPath) {
+async function openClient(dbPath, extraEnv = {}) {
   const transport = new StdioClientTransport({
     command: "node",
     args: ["dist/server.js"],
     cwd: REPO_ROOT,
     env: inheritedEnv({
       ANAMNESIS_HUB_DB_PATH: dbPath,
+      MCP_BACKGROUND_OWNER: "1",
+      MCP_AUTONOMY_BOOTSTRAP_ON_START: "0",
+      MCP_AUTONOMY_MAINTAIN_ON_START: "0",
+      TRICHAT_BUS_AUTOSTART: "0",
+      ...extraEnv,
     }),
     stderr: "inherit",
   });

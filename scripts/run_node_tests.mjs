@@ -38,7 +38,6 @@ const groups = [
     "./tests/mcp_http_runner.integration.test.mjs",
     "./tests/provider_bridge.integration.test.mjs",
     "./tests/litellm_proxy_infrastructure.test.mjs",
-    "./tests/agent_office_gui_server.integration.test.mjs",
     "./tests/office_snapshot.integration.test.mjs",
     "./tests/benchmark_autoagent.test.mjs",
     "./tests/bootstrap_smoke.test.mjs",

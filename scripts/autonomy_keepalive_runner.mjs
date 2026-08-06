@@ -4,14 +4,16 @@ import {
   loadRunnerEnv,
   parseIntValue,
   repoRootFromMeta,
-  resolveTransport,
 } from "./mcp_runner_support.mjs";
-import { runAutonomyKeepaliveOnce } from "./autonomy_keepalive_lib.mjs";
+import {
+  resolveKeepaliveTransport,
+  runAutonomyKeepaliveOnce,
+} from "./autonomy_keepalive_lib.mjs";
 
 const repoRoot = repoRootFromMeta(import.meta.url);
 loadRunnerEnv(repoRoot);
 
-const transport = resolveTransport(repoRoot);
+const transport = resolveKeepaliveTransport(process.env);
 process.env.TRICHAT_RING_LEADER_TRANSPORT = transport;
 process.env.MCP_TOOL_CALL_TIMEOUT_MS ||= String(
   parseIntValue(process.env.AUTONOMY_KEEPALIVE_TOOL_TIMEOUT_MS, transport === "http" ? 180000 : 240000, 1000, 300000)

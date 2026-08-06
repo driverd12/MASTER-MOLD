@@ -389,7 +389,10 @@ async function printStatus() {
 
 async function openBrowser() {
   try {
-    const completed = spawnSync(process.execPath, [OPEN_BROWSER_SCRIPT, GUI_URL], {
+    const browserArgs = process.platform === "darwin"
+      ? [OPEN_BROWSER_SCRIPT, "--app", GUI_URL]
+      : [OPEN_BROWSER_SCRIPT, GUI_URL];
+    const completed = spawnSync(process.execPath, browserArgs, {
       cwd: REPO_ROOT,
       stdio: "ignore",
       timeout: 15000,

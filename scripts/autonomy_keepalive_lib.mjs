@@ -21,6 +21,16 @@ function resolveKeepaliveLockName(env) {
   return `${LOCK_NAME}-${digest}`;
 }
 
+export function resolveKeepaliveTransport(env) {
+  const preferred = String(
+    env.AUTONOMY_BOOTSTRAP_TRANSPORT || env.TRICHAT_RING_LEADER_TRANSPORT || ""
+  ).trim();
+  if (preferred) {
+    return preferred;
+  }
+  return String(env.MCP_HTTP_BEARER_TOKEN || "").trim() ? "http" : "stdio";
+}
+
 export function buildKeepaliveArgs({ env, now, pid }) {
   return {
     action: "run",
@@ -65,7 +75,9 @@ function buildRetryableKeepaliveFailure({ reason, transport, singletonLock, ...r
 
 function isRetryableTransportError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /timed out|ECONNREFUSED|ECONNRESET|socket hang up|fetch failed|UND_ERR|EPIPE/i.test(message);
+  return /timed out|ECONNREFUSED|ECONNRESET|connection closed|socket hang up|fetch failed|UND_ERR|EPIPE/i.test(
+    message
+  );
 }
 
 function isMutationInProgressError(error) {
@@ -183,34 +195,17 @@ export async function runAutonomyKeepaliveOnce({
       } else if (transport !== "http" || !isRetryableTransportError(error)) {
         throw error;
       } else {
-        try {
-          result = await Promise.resolve(
-            callToolFn(repoRoot, {
-              tool: "autonomy.maintain",
-              args,
-              transport: "stdio",
-            })
-          );
-          if (result && typeof result === "object" && !Array.isArray(result)) {
-            result = {
-              ...result,
-              transport: "stdio",
-              transport_fallback_from: "http",
-            };
-          }
-        } catch (fallbackError) {
-          if (!isMutationInProgressError(fallbackError)) {
-            throw fallbackError;
-          }
-          result = {
-            ok: true,
-            skipped: true,
-            reason: "mutation_in_progress",
-            source_client: SOURCE_CLIENT,
-            transport: "stdio",
-            transport_fallback_from: "http",
-          };
-        }
+        // A second stdio server would compete with the authoritative HTTP daemon for
+        // the same SQLite state. Let launchd retry the next scheduled HTTP cycle.
+        result = buildRetryableKeepaliveFailure({
+          reason: "http_call_failed",
+          transport,
+          singletonLock: {
+            name: lockName,
+            acquired: true,
+            timeout_ms: lockTimeoutMs,
+          },
+        });
       }
     }
 
