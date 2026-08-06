@@ -3164,11 +3164,15 @@ export async function autonomyMaintain(
           last_attention: previousState.last_attention,
           last_error: previousState.last_error,
         });
+        const status =
+          input.fast === true
+            ? buildFastStatus(storage, input, persisted)
+            : await buildStatus(storage, invokeTool, input, persisted);
         return {
           ok: true,
           stopped: wasRunning,
           running: false,
-          status: await buildStatus(storage, invokeTool, input, persisted),
+          status,
         };
       }
 

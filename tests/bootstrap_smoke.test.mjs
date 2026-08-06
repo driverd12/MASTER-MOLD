@@ -20,6 +20,7 @@ const OPEN_BROWSER_PATH = path.join(REPO_ROOT, "scripts", "open_browser.mjs");
 const OFFICE_GUI_NODE_PATH = path.join(REPO_ROOT, "scripts", "agent_office_gui.mjs");
 const AGENTIC_SUITE_NODE_PATH = path.join(REPO_ROOT, "scripts", "agentic_suite_launch.mjs");
 const AUTONOMY_KEEPALIVE_RUNNER_PATH = path.join(REPO_ROOT, "scripts", "autonomy_keepalive_runner.mjs");
+const AUTONOMY_MAINTAIN_SOURCE_PATH = path.join(REPO_ROOT, "src", "tools", "autonomy_maintain.ts");
 
 test("platform_manifest.json is valid JSON with required structure", () => {
   assert.ok(fs.existsSync(MANIFEST_PATH), "scripts/platform_manifest.json must exist");
@@ -329,6 +330,14 @@ test("autonomy keepalive is fail-safe disabled unless explicitly enabled", () =>
   assert.equal(parsed.ok, true);
   assert.equal(parsed.skipped, true);
   assert.equal(parsed.reason, "disabled_by_default");
+});
+
+test("fast autonomy maintenance stop avoids heavyweight status probes", () => {
+  const source = fs.readFileSync(AUTONOMY_MAINTAIN_SOURCE_PATH, "utf8");
+  assert.match(
+    source,
+    /input\.fast === true\s*\?\s*buildFastStatus\(storage, input, persisted\)\s*:\s*await buildStatus\(storage, invokeTool, input, persisted\)/
+  );
 });
 
 test("agent_office_gui.mjs exists as the cross-platform office launcher entrypoint", () => {
