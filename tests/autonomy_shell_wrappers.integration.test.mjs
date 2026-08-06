@@ -203,6 +203,7 @@ test("autonomy keepalive defaults to bounded maintenance instead of a bare readi
       TRICHAT_RING_LEADER_INTERVAL_SECONDS: "600",
       TRICHAT_RING_LEADER_TRANSPORT: "stdio",
       MCP_HTTP_BEARER_TOKEN: "",
+      AUTONOMY_KEEPALIVE_ENABLED: "1",
       AUTONOMY_LEARNING_REVIEW_INTERVAL_SECONDS: "60",
       AUTONOMY_EVAL_INTERVAL_SECONDS: "300",
     });
@@ -226,6 +227,7 @@ test("autonomy keepalive runner exits tempfail when http is still down during re
       cwd: REPO_ROOT,
       env: inheritedEnv({
         DOTENV_CONFIG_PATH: path.join(os.tmpdir(), "master-mold-missing-autonomy-keepalive.env"),
+        AUTONOMY_KEEPALIVE_ENABLED: "1",
         AUTONOMY_BOOTSTRAP_TRANSPORT: "http",
         AUTONOMY_KEEPALIVE_HTTP_READY_TIMEOUT_MS: "1000",
         TRICHAT_MCP_URL: "http://127.0.0.1:9/",

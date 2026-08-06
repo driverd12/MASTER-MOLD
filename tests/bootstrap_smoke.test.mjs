@@ -19,6 +19,7 @@ const MVP_SMOKE_PATH = path.join(REPO_ROOT, "scripts", "mvp_smoke.mjs");
 const OPEN_BROWSER_PATH = path.join(REPO_ROOT, "scripts", "open_browser.mjs");
 const OFFICE_GUI_NODE_PATH = path.join(REPO_ROOT, "scripts", "agent_office_gui.mjs");
 const AGENTIC_SUITE_NODE_PATH = path.join(REPO_ROOT, "scripts", "agentic_suite_launch.mjs");
+const AUTONOMY_KEEPALIVE_RUNNER_PATH = path.join(REPO_ROOT, "scripts", "autonomy_keepalive_runner.mjs");
 
 test("platform_manifest.json is valid JSON with required structure", () => {
   assert.ok(fs.existsSync(MANIFEST_PATH), "scripts/platform_manifest.json must exist");
@@ -311,6 +312,23 @@ test("macOS office launcher requests a Chrome app window", () => {
   assert.match(officeSource, /\[OPEN_BROWSER_SCRIPT, "--app", GUI_URL\]/);
   assert.match(browserSource, /"--app=" \+ targetUrl/);
   assert.match(browserSource, /mode: "app"/);
+});
+
+test("autonomy keepalive is fail-safe disabled unless explicitly enabled", () => {
+  const raw = execFileSync(process.execPath, [AUTONOMY_KEEPALIVE_RUNNER_PATH], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      AUTONOMY_KEEPALIVE_ENABLED: "0",
+      DOTENV_CONFIG_PATH: path.join(os.tmpdir(), "master-mold-missing-keepalive.env"),
+    },
+    timeout: 5_000,
+  });
+  const parsed = JSON.parse(raw);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.skipped, true);
+  assert.equal(parsed.reason, "disabled_by_default");
 });
 
 test("agent_office_gui.mjs exists as the cross-platform office launcher entrypoint", () => {

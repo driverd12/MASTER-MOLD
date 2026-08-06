@@ -2,6 +2,7 @@
 import process from "node:process";
 import {
   loadRunnerEnv,
+  parseBoolean,
   parseIntValue,
   repoRootFromMeta,
 } from "./mcp_runner_support.mjs";
@@ -20,6 +21,17 @@ process.env.MCP_TOOL_CALL_TIMEOUT_MS ||= String(
 );
 
 async function main() {
+  if (!parseBoolean(process.env.AUTONOMY_KEEPALIVE_ENABLED, false)) {
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        skipped: true,
+        reason: "disabled_by_default",
+        source_client: "autonomy.keepalive.launchd",
+      }) + "\n"
+    );
+    return;
+  }
   const result = await runAutonomyKeepaliveOnce({
     repoRoot,
     transport,
